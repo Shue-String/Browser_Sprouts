@@ -1,0 +1,6 @@
+node_modules/
+dist/
+stalks/build/
+stalks/saves/master_meta.json
+stalks/saves/master_meta.json.bak*
+*.log

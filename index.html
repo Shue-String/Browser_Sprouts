@@ -1,0 +1,1174 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>Sprouts</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #f9f9f6; }
+
+      #game-canvas {
+        display: block;
+        position: fixed;
+        top: 40px;
+        left: 0;
+        touch-action: none;
+      }
+
+      /* DEBUG: collapse-function trace log, upper-left of the play field. Off by default — see "Collapse List" toggle. */
+      #collapse-trace {
+        display: none;
+        position: fixed;
+        top: 48px;
+        left: 8px;
+        z-index: 20;
+        font: 12px/1.4 monospace;
+        color: #a020f0;
+        background: rgba(255,255,255,0.85);
+        padding: 4px 8px;
+        border-radius: 4px;
+        pointer-events: none;
+        white-space: pre;
+        max-width: 320px;
+      }
+
+      /* ── Game-over flicker ───────────────────────── */
+      @keyframes game-over-flash {
+        0%, 49% { background: #cccccc; }
+        50%, 100% { background: #f9f9f6; }
+      }
+      #top-bar.game-over { animation: game-over-flash 1s linear 3 forwards; }
+
+      /* ── Top bar ──────────────────────────────────── */
+      #top-bar {
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        height: 40px;
+        background: #f9f9f6;
+        border-bottom: 1px solid #ddd;
+        display: flex;
+        align-items: center;
+        padding: 0 12px;
+        gap: 10px;
+        z-index: 10;
+      }
+
+      #new-game-btn, #recreate-btn, #guide-btn, #save-game-btn, #load-game-btn, #browser-btn {
+        padding: 4px 10px;
+        font: 12px/1 system-ui, sans-serif;
+        color: #666;
+        background: transparent;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        cursor: pointer;
+        white-space: nowrap;
+        user-select: none;
+      }
+      #new-game-btn:hover, #recreate-btn:hover, #guide-btn:hover,
+      #save-game-btn:hover:not(:disabled), #load-game-btn:hover, #browser-btn:hover { color: #333; border-color: #aaa; }
+      #save-game-btn:disabled { opacity: 0.4; cursor: default; }
+
+      #undo-btn {
+        padding: 4px 10px;
+        font: 12px/1 system-ui, sans-serif;
+        color: #666;
+        background: transparent;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        cursor: pointer;
+        white-space: nowrap;
+        user-select: none;
+      }
+      #undo-btn:hover:not(:disabled) { color: #333; border-color: #aaa; }
+      #undo-btn:disabled { opacity: 0.4; cursor: default; }
+
+      #copy-seq-btn {
+        padding: 4px 10px;
+        font: 12px/1 system-ui, sans-serif;
+        color: #666;
+        background: transparent;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        cursor: pointer;
+        white-space: nowrap;
+        user-select: none;
+      }
+      #copy-seq-btn:hover { color: #333; border-color: #aaa; }
+
+      #move-seq-panel {
+        position: fixed;
+        top: 42px;
+        left: 8px;
+        max-width: 48vw;
+        font: 10px/1.4 monospace;
+        color: #999;
+        word-break: break-all;
+        pointer-events: none;
+        z-index: 5;
+      }
+
+      #turn-indicator {
+        flex: 1;
+        text-align: center;
+        font: 600 13px/1 system-ui, sans-serif;
+        color: #555;
+      }
+
+      /* ── Inline top-bar toggle (Collapsing) ──────── */
+      .top-toggle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: 12px/1 system-ui, sans-serif;
+        color: #666;
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+        margin-right: 15px;
+      }
+      .top-toggle .switch { position: relative; width: 30px; height: 17px; flex-shrink: 0; }
+      .top-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+      .top-toggle .track { position: absolute; inset: 0; background: #ccc; border-radius: 17px; transition: background 0.2s; }
+      .top-toggle input:checked + .track { background: #4a90d9; }
+      .top-toggle .thumb { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; background: white; border-radius: 50%; transition: transform 0.2s; pointer-events: none; }
+      .top-toggle input:checked ~ .thumb { transform: translateX(13px); }
+
+      /* ── Shared dropdown styles ───────────────────── */
+      .dropdown { position: relative; }
+
+      .dropdown-btn {
+        padding: 4px 10px;
+        font: 12px/1 system-ui, sans-serif;
+        color: #666;
+        background: transparent;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        cursor: pointer;
+        white-space: nowrap;
+        user-select: none;
+      }
+      .dropdown-btn:hover { color: #333; border-color: #aaa; }
+
+      .dropdown-panel {
+        display: none;
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        background: #f9f9f6;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 4px 0;
+        min-width: 190px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.10);
+        z-index: 20;
+      }
+      .dropdown-panel.open { display: block; }
+
+      /* keep old IDs working */
+      #debug-btn { }
+      #debug-panel { }
+
+      /* ── Toggle rows ──────────────────────────────── */
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 14px;
+        gap: 12px;
+        font: 12px/1 system-ui, sans-serif;
+        color: #666;
+        cursor: pointer;
+        user-select: none;
+      }
+      .toggle-row:hover { background: rgba(0,0,0,0.04); }
+      .toggle-row .switch { position: relative; width: 30px; height: 17px; flex-shrink: 0; }
+      .toggle-row input { opacity: 0; width: 0; height: 0; position: absolute; }
+      .toggle-row .track { position: absolute; inset: 0; background: #ccc; border-radius: 17px; transition: background 0.2s; }
+      .toggle-row input:checked + .track { background: #888; }
+      .toggle-row .thumb { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; background: white; border-radius: 50%; transition: transform 0.2s; pointer-events: none; }
+      .toggle-row input:checked ~ .thumb { transform: translateX(13px); }
+
+      /* ── Bottom stack ─────────────────────────────── */
+      #bottom-stack {
+        position: fixed;
+        bottom: 0; left: 0; right: 0;
+        display: flex;
+        flex-direction: column;
+        z-index: 10;
+      }
+
+      .bottom-bar {
+        display: none;
+        height: 44px;
+        background: rgba(249,249,246,0.97);
+        border-top: 1px solid #ddd;
+        padding: 0 10px 0 14px;
+        align-items: center;
+        gap: 8px;
+      }
+      .bottom-bar.visible { display: flex; }
+
+      .bottom-bar-text {
+        flex: 1;
+        font: 13px/1 monospace;
+        color: #222;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+      }
+
+      .bottom-bar-copy {
+        flex-shrink: 0;
+        padding: 3px 9px;
+        font: 11px/1 system-ui, sans-serif;
+        color: #666;
+        background: transparent;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .bottom-bar-copy:hover { color: #333; border-color: #aaa; }
+
+      #bottom-bar-text { font-size: 16px; }
+      #bottom-bar-text span { cursor: default; }
+
+      /* ── Encoding panel (boundary listing, floating) */
+      #encoding-panel {
+        display: none;
+        position: fixed;
+        bottom: 60px;
+        left: 16px;
+        max-width: 90vw;
+        max-height: 60vh;
+        background: rgba(249,249,246,0.93);
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 8px 14px;
+        font: 13px/1.4 monospace;
+        color: #222;
+        pointer-events: none;
+        white-space: pre;
+        text-align: left;
+        overflow: auto;
+        z-index: 9;
+      }
+      #encoding-panel.visible { display: block; }
+
+      /* ── Confirm dialog ───────────────────────────── */
+      #confirm-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.18);
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+      }
+      #confirm-overlay.visible { display: flex; }
+
+      /* ── Recreate dialog ──────────────────────────── */
+      #recreate-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.18);
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+      }
+      #recreate-overlay.visible { display: flex; }
+      #recreate-input {
+        width: 100%;
+        min-width: 320px;
+        margin-bottom: 12px;
+        padding: 6px 8px;
+        font: 12px/1.4 monospace;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        resize: vertical;
+        box-sizing: border-box;
+      }
+      #recreate-dialog #recreate-error {
+        min-height: 16px;
+        margin-bottom: 12px;
+        font: 11px/1.4 system-ui, sans-serif;
+        color: #8b0000;
+        white-space: pre-wrap;
+      }
+      #recreate-dialog #recreate-error:empty { margin-bottom: 0; min-height: 0; }
+
+      /* ── Recreate manual-draw banner ──────────────── */
+      #recreate-banner {
+        display: none;
+        position: fixed;
+        top: 48px; left: 50%;
+        transform: translateX(-50%);
+        background: rgba(85,85,85,0.95);
+        color: #fff;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font: 13px/1.3 system-ui, sans-serif;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+        z-index: 60;
+        max-width: 80vw;
+        text-align: center;
+      }
+      #recreate-banner.visible { display: block; }
+
+      #recreate-pause {
+        display: none;
+        position: fixed;
+        top: 56px; left: 12px;
+        font-size: 28px;
+        line-height: 1;
+        opacity: 0.55;
+        pointer-events: none;
+        z-index: 60;
+      }
+      #recreate-pause.visible { display: block; }
+      #confirm-dialog, #recreate-dialog {
+        background: #f9f9f6;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        padding: 24px 28px;
+        font: 14px/1.6 system-ui, sans-serif;
+        color: #333;
+        text-align: center;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+        min-width: 220px;
+      }
+      #confirm-dialog p, #recreate-dialog p { margin-bottom: 14px; }
+      #confirm-dialog .spot-row {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        margin-bottom: 18px;
+        font-size: 13px;
+        color: #555;
+      }
+      #confirm-dialog .spot-row input {
+        width: 50px;
+        padding: 3px 6px;
+        font: 13px/1 system-ui, sans-serif;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        text-align: center;
+      }
+      #confirm-dialog .btn-row, #recreate-dialog .btn-row { display: flex; gap: 10px; justify-content: center; }
+      #confirm-dialog button, #recreate-dialog button {
+        padding: 6px 18px;
+        font: 13px/1 system-ui, sans-serif;
+        border-radius: 4px;
+        cursor: pointer;
+        border: 1px solid #ccc;
+        background: #fff;
+        color: #444;
+      }
+      #confirm-dialog #confirm-yes, #recreate-dialog #recreate-go { background: #555; color: #fff; border-color: #555; }
+      #confirm-dialog #confirm-yes:hover, #recreate-dialog #recreate-go:hover { background: #333; border-color: #333; }
+      #confirm-dialog button:hover, #recreate-dialog button:hover { background: #eee; }
+      #recreate-dialog #recreate-go:hover { background: #333; }
+
+      /* ── Tuning panel ──────────────────────────────── */
+      #tuning-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.18);
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+      }
+      #tuning-overlay.visible { display: flex; }
+      #tuning-dialog {
+        background: #f9f9f6;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        padding: 16px 20px;
+        font: 13px/1.4 system-ui, sans-serif;
+        color: #333;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+        width: 420px;
+        max-width: 92vw;
+      }
+      #tuning-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        font-weight: 600;
+      }
+      #tuning-header-btns { display: flex; gap: 8px; }
+      #tuning-header-btns button {
+        padding: 4px 10px;
+        font: 12px/1 system-ui, sans-serif;
+        border-radius: 4px;
+        cursor: pointer;
+        border: 1px solid #ccc;
+        background: #fff;
+        color: #444;
+      }
+      #tuning-header-btns button:hover { background: #eee; }
+      #tuning-header-btns #tuning-close { background: #555; color: #fff; border-color: #555; }
+      #tuning-header-btns #tuning-close:hover { background: #333; border-color: #333; }
+      #tuning-body {
+        max-height: 70vh;
+        overflow-y: auto;
+        padding-right: 4px;
+      }
+      #tuning-body h4 {
+        margin: 14px 0 6px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #888;
+      }
+      #tuning-body h4:first-child { margin-top: 0; }
+      .tuning-row {
+        display: grid;
+        grid-template-columns: 1fr 90px 64px;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 0;
+      }
+      .tuning-row label { color: #444; }
+      .tuning-row input[type="range"] { width: 90px; }
+      .tuning-row input[type="number"] {
+        width: 64px;
+        padding: 2px 4px;
+        font: 12px/1 monospace;
+        border: 1px solid #ccc;
+        border-radius: 3px;
+        text-align: right;
+        box-sizing: border-box;
+      }
+
+      /* ── Play gate (greyed-out field until "Play" is hit) ──── */
+      #play-gate {
+        display: none;
+        position: fixed;
+        top: 40px; left: 0; right: 0; bottom: 0;
+        background: rgba(120,120,120,0.55);
+        z-index: 8;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 18px;
+        text-align: center;
+        padding: 0 40px;
+      }
+      #play-gate.visible { display: flex; }
+      #play-gate-warning {
+        max-width: 480px;
+        font: 13px/1.5 system-ui, sans-serif;
+        color: #333;
+        background: rgba(249,249,246,0.95);
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        padding: 14px 18px;
+      }
+      #play-gate-btn {
+        padding: 10px 28px;
+        font: 600 15px/1 system-ui, sans-serif;
+        color: #fff;
+        background: #555;
+        border: 1px solid #555;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      #play-gate-btn:hover { background: #333; }
+
+      /* ── Position Browser / Guide overlays ─────────── */
+      #position-browser-overlay, #guide-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.18);
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+      }
+      #position-browser-overlay.visible, #guide-overlay.visible { display: flex; }
+
+      #position-browser-dialog, #guide-dialog {
+        background: #f9f9f6;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        padding: 14px 18px;
+        font: 13px/1.5 system-ui, sans-serif;
+        color: #333;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+        width: 580px;
+        max-width: 94vw;
+      }
+
+      /* Guide dialog: wider than the plain modals above (needs room for the topic list) and a
+         fixed height so the two-pane layout doesn't jump around as content changes. */
+      #guide-dialog {
+        width: 760px;
+        max-width: 94vw;
+        height: 72vh;
+        max-height: 640px;
+        display: flex;
+        flex-direction: column;
+      }
+      .guide-layout { display: flex; flex: 1; min-height: 0; gap: 14px; }
+      .guide-topics {
+        flex: none;
+        width: 170px;
+        overflow-y: auto;
+        border-right: 1px solid #ddd;
+        padding-right: 10px;
+      }
+      .guide-topic-btn {
+        display: block;
+        width: 100%;
+        text-align: left;
+        padding: 7px 8px;
+        margin-bottom: 2px;
+        font: 12px/1.3 system-ui, sans-serif;
+        color: #555;
+        background: none;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .guide-topic-btn:hover { background: #eee; color: #333; }
+      .guide-topic-btn.active { background: #4a90d9; color: #fff; }
+      .guide-content {
+        flex: 1;
+        min-width: 0;
+        overflow-y: auto;
+        padding: 0 4px 4px 0;
+        color: #444;
+      }
+      .guide-content h3 { margin: 0 0 8px; font-size: 15px; color: #333; }
+      .guide-content p { margin: 0 0 10px; }
+      .guide-content ul, .guide-content table { margin: 0 0 10px; }
+      .guide-content table { border-collapse: collapse; font-size: 12px; }
+      .guide-content th, .guide-content td { border: 1px solid #ddd; padding: 3px 8px; text-align: left; }
+      .guide-content code { background: #eee; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+
+      /* browser-style chrome row: back / forward / address / close */
+      #pb-chrome { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
+      #pb-chrome button {
+        padding: 4px 9px;
+        font: 12px/1 system-ui, sans-serif;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #fff;
+        color: #444;
+        cursor: pointer;
+      }
+      #pb-chrome button:hover:not(:disabled) { background: #eee; }
+      #pb-chrome button:disabled { opacity: 0.4; cursor: default; }
+      #pb-back, #pb-forward { min-width: 30px; }
+      #pb-address {
+        flex: 1;
+        min-width: 0;
+        padding: 5px 8px;
+        font: 12px/1.3 monospace;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      #pb-close { margin-left: 4px; background: #555; color: #fff; border-color: #555; }
+      #pb-close:hover { background: #333; }
+
+      /* toggle switches (Quick-Canon / Highlight Winning / Nimbers), right-aligned just above the
+         lists they control (positioned into #pb-body at render time, below the divider) */
+      #pb-toggles { display: flex; justify-content: flex-end; gap: 16px; margin: 0 0 8px; }
+      /* "Sync to game" sits at the far left; the display toggles cluster on the right. */
+      #pb-toggles .sync-toggle { margin-right: auto; }
+      .pb-toggle {
+        display: flex; align-items: center; gap: 6px;
+        font: 12px/1 system-ui, sans-serif; color: #555;
+        cursor: pointer; user-select: none;
+      }
+      .pb-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+      .pb-switch {
+        position: relative; flex: none;
+        width: 30px; height: 16px; border-radius: 8px;
+        background: #ccc; transition: background 0.15s;
+      }
+      .pb-switch::after {
+        content: ''; position: absolute; top: 2px; left: 2px;
+        width: 12px; height: 12px; border-radius: 50%;
+        background: #fff; transition: transform 0.15s;
+      }
+      .pb-toggle input:checked + .pb-switch { background: #4a90d9; }
+      .pb-toggle input:checked + .pb-switch::after { transform: translateX(14px); }
+      .pb-toggle.disabled { opacity: 0.4; cursor: default; }
+
+      /* fields */
+      #pb-body { max-height: 72vh; overflow-y: auto; padding-right: 4px; }
+      .pb-field {
+        display: grid;
+        grid-template-columns: 130px 1fr;
+        gap: 8px;
+        padding: 4px 0;
+        align-items: start;
+      }
+      /* dark-grey divider: whole-position info above, list-controlling toggles + lists below */
+      .pb-divider { height: 3px; background: #555; border-radius: 2px; margin: 12px 0 10px; }
+      /* two-column upper split: nimber/breakdown on the left, move-length bounds across on the right */
+      .pb-split { display: flex; gap: 16px; }
+      .pb-col { flex: 1; min-width: 0; }
+      /* right column: narrower label column so the move counts sit the same gap from the label as
+         the (longer) Quick-canon Encoding label sits from its value, rather than the big gap a full
+         150px column leaves for these short labels. Extra left padding nudges the whole label+value
+         block a bit rightward (keeping their internal gap). */
+      .pb-split .pb-col:last-child { padding-left: 40px; }
+      .pb-split .pb-col:last-child .pb-field { grid-template-columns: 88px 1fr; }
+
+      .pb-field > .pb-label { color: #888; font-size: 12px; }
+      .pb-field > .pb-value { font: 12px/1.5 monospace; color: #222; word-break: break-all; }
+      .pb-value.placeholder { color: #aaa; font-style: italic; font-family: system-ui, sans-serif; }
+
+      .pb-list {
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        max-height: 132px; /* ~5 rows */
+        overflow-y: auto;
+        background: #fff;
+      }
+      .pb-list.empty {
+        max-height: none;
+        padding: 5px 8px;
+        color: #aaa;
+        font-style: italic;
+        font-family: system-ui, sans-serif;
+      }
+      .pb-list-row {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        padding: 4px 8px;
+        font: 12px/1.4 monospace;
+        color: #222;
+        cursor: pointer;
+        border-bottom: 1px solid #f0f0f0;
+        user-select: none;
+      }
+      .pb-list-row:last-child { border-bottom: none; }
+      .pb-list-row:hover { background: rgba(0,0,0,0.05); }
+      .pb-list-row.winning { background: #e4f3e2; }
+      .pb-list-row.winning:hover { background: #d6ecd3; }
+      .pb-list-row.locked { outline: 2px solid rgba(190, 60, 230, 0.8); outline-offset: -2px; background: rgba(190, 60, 230, 0.10); }
+      .pb-list-row.locked:hover { background: rgba(190, 60, 230, 0.10); }
+      .pb-row-main { flex: 1; min-width: 0; word-break: break-all; }
+      .pb-row-nim { flex: none; text-align: right; color: #666; white-space: nowrap; }
+      /* full-width list block: header row (title + optional nimber) above the list */
+      .pb-list-field { width: 100%; }
+      /* substantial gap separating the Known Parents block from the Children block above it */
+      .pb-list-field.pb-gap-above { margin-top: 32px; }
+      /* column header row: list title on the left, right-aligned Nimber slot on the right.
+         The nimber slot's text is filled only when the Nimbers toggle is on, so enabling it
+         fills the existing header instead of inserting a new one (nothing shifts). */
+      .pb-list-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding: 0 8px 3px 2px;
+        font: 12px/1 system-ui, sans-serif;
+      }
+      .pb-head-main { color: #666; font-weight: 600; }
+      .pb-head-nim { color: #999; font-size: 11px; }
+      /* full-width info banner (e.g. the quick-canon "can't draw moves" notice) */
+      .pb-note {
+        padding: 6px 8px;
+        margin-bottom: 4px;
+        font: 11.5px/1.4 system-ui, sans-serif;
+        color: #7a5b00;
+        background: #fff6dd;
+        border: 1px solid #f0e3b0;
+        border-radius: 4px;
+      }
+
+      .pb-error { padding: 8px 0; color: #8b0000; font-size: 12px; line-height: 1.5; }
+
+      /* Notification area: transient notes/errors justified to the top, "Calculating…" centered
+         in whatever room is left below them. In the modal this is just a normal block below the
+         body; in the wide panel it flex-grows to absorb the leftover space below #pb-body. */
+      #pb-notify-area { display: flex; flex-direction: column; }
+      #pb-notify-messages:empty { display: none; }
+      #pb-notify-messages .pb-note,
+      #pb-notify-messages .pb-error { margin: 4px 0; }
+      #pb-calculating {
+        display: none;
+        color: #8b0000;
+        font: 700 17px/1.3 system-ui, sans-serif;
+        text-align: center;
+      }
+      #pb-calculating.visible { display: block; }
+
+      /* On-demand Calculate buttons (large positions). The label carries a literal newline, so
+         white-space: pre-line renders the two-line "Calculate / Game Tree" text. */
+      .pb-calc-buttons { display: flex; gap: 12px; margin: 4px 0 10px; }
+      .pb-calc-btn {
+        flex: 1;
+        padding: 8px 10px;
+        white-space: pre-line;
+        text-align: center;
+        font: 600 12.5px/1.3 system-ui, sans-serif;
+        color: #234;
+        background: #eef3fb;
+        border: 1px solid #c3d3ea;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      .pb-calc-btn:hover { background: #e0e9f7; }
+      .pb-calc-btn:active { background: #d3e0f2; }
+
+      /* shared header (Guide dialog + section titles) */
+      .pb-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        font-weight: 600;
+      }
+      .pb-header button {
+        padding: 4px 10px;
+        font: 12px/1 system-ui, sans-serif;
+        border: 1px solid #555;
+        border-radius: 4px;
+        background: #555;
+        color: #fff;
+        cursor: pointer;
+      }
+      .pb-header button:hover { background: #333; }
+      .guide-body { padding: 8px 0 4px; color: #666; }
+
+      /* ── Position Browser side panel (wide-window layout) ─────────── */
+      #position-browser-panel {
+        display: none;
+        position: fixed;
+        top: 0; right: 0; bottom: 0;
+        width: 440px;
+        background: #f9f9f6;
+        border-left: 1px solid #ddd;
+        padding: 10px 14px 14px;
+        z-index: 15;
+        font: 13px/1.5 system-ui, sans-serif;
+        color: #333;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      /* flex column so #pb-panel-extra pins to the bottom instead of just trailing the content */
+      #position-browser-panel.wide { display: flex; }
+
+      #pb-chrome.in-panel #pb-close { display: none; }
+
+      /* the app's live position encoding (shown in canon form, matching the rest of the panel) —
+         plain text on the panel's own background, no boxed/textbox look */
+      #pb-live-encoding {
+        display: block;
+        flex: 0 0 auto;
+        margin: 10px 0 12px;
+        font: 16px/1.4 monospace;
+        color: #222;
+        text-align: center;
+        word-break: break-all;
+      }
+
+      /* Debug: boundary listing with invisible (pseudo/Dead) vertices shown as lowercase letters */
+      #pb-invisible-boundary-listing {
+        display: none;
+        flex: 0 0 auto;
+        margin: 0 0 12px;
+        font: 12px/1.4 monospace;
+        color: #444;
+        text-align: left;
+        white-space: pre;
+        overflow-x: auto;
+      }
+      #pb-invisible-boundary-listing.visible { display: block; }
+
+      /* Tracked-encoding (shadow-check) panel. Hidden unless the tracked check has something to say. */
+      #pb-tracked-panel { display: none; flex: 0 0 auto; margin: 0 0 12px; }
+      #pb-tracked-panel.visible { display: block; }
+      #pb-tracked-panel .pb-tracked-label {
+        font: 11px/1.4 sans-serif; text-transform: uppercase; letter-spacing: 0.05em;
+        color: #888; text-align: center; margin-bottom: 3px;
+      }
+      #pb-tracked-panel .pb-tracked-enc {
+        font: 15px/1.4 monospace; text-align: center; word-break: break-all;
+      }
+      #pb-tracked-panel .pb-tracked-enc span:hover { color: #b00000; cursor: default; }
+      /* Mismatch styling: maroon believed encoding + a diagnostic key comparison. */
+      #pb-tracked-panel.mismatch .pb-tracked-label { color: #b00000; }
+      #pb-tracked-panel.mismatch .pb-tracked-enc { color: #b00000; }
+      #pb-tracked-panel .pb-tracked-keys {
+        font: 11px/1.5 monospace; color: #a33; margin-top: 6px; word-break: break-all;
+        border-top: 1px solid #eecccc; padding-top: 5px;
+      }
+      #pb-tracked-panel .pb-tracked-keys .k { color: #777; }
+
+      /* #pb-body sizes to its own content (shrinking + scrolling if the panel is too short for
+         it), instead of flex-growing to fill the panel — that used to leave dead space below
+         short content. #pb-notify-area (below it) grows to absorb whatever room is left, so
+         #pb-panel-extra (toggles + move sequence) still stays pinned to the bottom of the panel. */
+      #pb-body { flex: 0 1 auto; overflow-y: auto; min-height: 0; }
+      #pb-notify-area { flex: 1 1 auto; min-height: 0; }
+      #pb-calculating.visible {
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 0;
+      }
+
+      #pb-panel-extra { flex: 0 0 auto; margin-top: 8px; }
+      /* grid (not flex-wrap) so a lone item on the last row keeps its column width instead of
+         stretching to fill the row — which is what pushed its switch to the far right */
+      #pb-panel-toggle-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0 12px;
+        margin-bottom: 4px;
+      }
+      /* Tighten label-to-switch spacing here (the base .toggle-row rule spreads them apart with
+         justify-content: space-between, which reads fine in a full-width dropdown row but leaves
+         an ugly gap in this narrower 2-column grid). */
+      #pb-panel-toggle-row .toggle-row { width: auto; padding: 4px 0; justify-content: flex-start; gap: 8px; }
+
+      /* Same 2-column tight layout as the wide panel's toggle row, for the modal (narrow-window) case. */
+      #pb-modal-toggle-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0 12px;
+        margin: 8px 0 2px;
+      }
+      #pb-modal-toggle-row .toggle-row { width: auto; padding: 4px 0; justify-content: flex-start; gap: 8px; }
+
+    </style>
+  </head>
+  <body>
+    <canvas id="game-canvas"></canvas>
+    <div id="collapse-trace"></div>
+    <button id="ai-mode-btn" style="position:fixed;top:-60px;left:-60px;width:40px;height:20px;opacity:0.001;">AI Mode</button>
+    <div id="play-gate">
+      <div id="play-gate-warning"></div>
+      <button id="play-gate-btn">Play</button>
+    </div>
+
+    <div id="top-bar">
+      <button id="new-game-btn">New Game</button>
+      <button id="save-game-btn" title="Save the current board, camera, and any paused move to a file" disabled>Save</button>
+      <button id="load-game-btn" title="Load a board saved with Save Game State">Load</button>
+      <input type="file" id="load-game-input" accept="application/json,.json" style="display:none;" />
+      <button id="undo-btn" title="Undo the last move" disabled>Undo</button>
+      <button id="recreate-btn" title="Recreate a game from a Move Sequence string" style="display:none;">Recreate</button>
+
+      <span id="turn-indicator"></span>
+
+      <label class="top-toggle" title="Collapse dead regions">
+        <span>Collapsing</span>
+        <span class="switch">
+          <input type="checkbox" id="shrink-checkbox" checked />
+          <span class="track"></span>
+          <span class="thumb"></span>
+        </span>
+      </label>
+
+      <button id="browser-btn" title="Open the Position Browser" style="display:none;">Browser</button>
+
+      <div class="dropdown" id="debug-menu-wrap" style="display:none;">
+        <button class="dropdown-btn" id="debug-btn">Debug ▾</button>
+        <div class="dropdown-panel" id="debug-panel">
+
+          <label class="toggle-row" title="Shadow the encoding via the Stalks engine (M2–M4): apply each move through the engine and face-check the result against geometry. Maroons the board on a mismatch (only while Shrink is on).">
+            <span>Tracked Encoding</span>
+            <span class="switch">
+              <input type="checkbox" id="tracked-check-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Show position encoding">
+            <span>Position encoding</span>
+            <span class="switch">
+              <input type="checkbox" id="pos-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Show each point's compact presentation label on the canvas">
+            <span>Point labels</span>
+            <span class="switch">
+              <input type="checkbox" id="spot-label-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Show vertex ids">
+            <span>Vertex IDs</span>
+            <span class="switch">
+              <input type="checkbox" id="label-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Use raw vertex IDs in the move sequence instead of compact spot labels">
+            <span>ID-based Sequencing</span>
+            <span class="switch">
+              <input type="checkbox" id="raw-id-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="In the Position Browser panel, show a boundary listing with invisible (pseudo/Dead) vertices as lowercase letters instead of their raw id">
+            <span>Hidden letters</span>
+            <span class="switch">
+              <input type="checkbox" id="invisible-letters-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Show boundary listing">
+            <span>Boundary listing</span>
+            <span class="switch">
+              <input type="checkbox" id="enc-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Show midpoint vertices">
+            <span>Show midpoints</span>
+            <span class="switch">
+              <input type="checkbox" id="mid-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Insert each move's resulting position encoding in {} before the / in the move sequence">
+            <span>Sequence verifier</span>
+            <span class="switch">
+              <input type="checkbox" id="move-check-checkbox" checked />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Color regions">
+            <span>Color Regions</span>
+            <span class="switch">
+              <input type="checkbox" id="rgn-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Show the region adjacency (dual) graph">
+            <span>Region Network</span>
+            <span class="switch">
+              <input type="checkbox" id="net-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="While drawing into/out of a degree-2 vertex, show the new stroke's live departure angle (blue) and its clockwise (green) / counterclockwise (red) ring neighbors">
+            <span>Splice Angles</span>
+            <span class="switch">
+              <input type="checkbox" id="splice-angle-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="After a split move, ring the vertices on each new region in red or blue">
+            <span>Enclosure Sides</span>
+            <span class="switch">
+              <input type="checkbox" id="enclosure-sides-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Pause on each automated Recreate move to show candidates">
+            <span>Pause Recreations</span>
+            <span class="switch">
+              <input type="checkbox" id="pause-recreate-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Position Browser: when hovering/locking a child whose connecting move couldn't be synthesized, ring the two vertices it should connect in red">
+            <span>Show Broken</span>
+            <span class="switch">
+              <input type="checkbox" id="show-broken-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Show a list of which dead-region collapse function fired, upper-left of the play field. Cleared on each new move.">
+            <span>Collapse List</span>
+            <span class="switch">
+              <input type="checkbox" id="collapse-list-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Switch between sphere and grid projection">
+            <span>Grid Projection</span>
+            <span class="switch">
+              <input type="checkbox" id="proj-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <button id="tuning-btn" class="toggle-row" style="cursor:pointer;background:none;border:none;text-align:left;width:100%;padding:6px 14px;">Tuning…</button>
+
+        </div>
+      </div>
+
+      <button id="guide-btn" title="Open the guide">Guide</button>
+    </div>
+
+    <div id="bottom-stack">
+      <div id="voronoi-path-bar" class="bottom-bar">
+        <span id="voronoi-path-text" class="bottom-bar-text"></span>
+        <button id="voronoi-path-copy" class="bottom-bar-copy">Copy</button>
+      </div>
+      <div id="bottom-bar" class="bottom-bar">
+        <span id="bottom-bar-text" class="bottom-bar-text"></span>
+        <button id="bottom-bar-copy" class="bottom-bar-copy">Copy</button>
+      </div>
+      <div id="move-seq-bar" class="bottom-bar">
+        <span id="move-seq-text" class="bottom-bar-text"></span>
+        <button id="move-seq-copy" class="bottom-bar-copy">Copy</button>
+      </div>
+    </div>
+    <div id="encoding-panel"></div>
+
+    <div id="recreate-banner"></div>
+    <div id="recreate-pause">⏸</div>
+
+    <div id="recreate-overlay">
+      <div id="recreate-dialog">
+        <p>Recreate a game from a Move Sequence string</p>
+        <textarea id="recreate-input" rows="4" placeholder="3:0X-1/..."></textarea>
+        <p id="recreate-error"></p>
+        <div class="btn-row">
+          <button id="recreate-go">Recreate</button>
+          <button id="recreate-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirm-overlay">
+      <div id="confirm-dialog">
+        <p>Start a new game?</p>
+        <div class="spot-row">
+          <label for="spot-count">Starting spots:</label>
+          <input type="number" id="spot-count" min="1" max="20" value="6" />
+        </div>
+        <div class="btn-row">
+          <button id="confirm-yes">New Game</button>
+          <button id="confirm-no">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="guide-overlay">
+      <div id="guide-dialog">
+        <div class="pb-header">
+          <span>Guide</span>
+          <button id="guide-close">Close</button>
+        </div>
+        <div class="guide-layout">
+          <div class="guide-topics" id="guide-topics"></div>
+          <div class="guide-content" id="guide-content"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="position-browser-overlay">
+      <div id="position-browser-dialog">
+        <div id="pb-chrome">
+          <button id="pb-back" title="Back" disabled>◀</button>
+          <button id="pb-forward" title="Forward" disabled>▶</button>
+          <input id="pb-address" type="text" spellcheck="false" placeholder="Enter a position encoding, e.g. [0,0,0]" />
+          <button id="pb-close">Close</button>
+        </div>
+        <div id="pb-toggles">
+          <label class="pb-toggle sync-toggle" title="On: the panel is locked to the live game — back/forward undo/redo the game, double-clicking a child plays that move, and manual entry / parent navigation are off. Off: free-browse the position tree by hand."><input type="checkbox" id="pb-tog-sync" /><span class="pb-switch"></span>Sync to game</label>
+          <label class="pb-toggle" title="On: group positions that are equivalent under known nimber-preserving collections, shrinking the tree (each grouped position carries a ⊕0/⊕1 offset). Off: exact structural canonical form, no grouping."><input type="checkbox" id="pb-tog-quick" /><span class="pb-switch"></span>Quick-Canon</label>
+          <label class="pb-toggle" title="Highlight the child move(s) that win (leave the opponent with a losing position) in green."><input type="checkbox" id="pb-tog-winning" checked /><span class="pb-switch"></span>Highlight Winning</label>
+          <label class="pb-toggle" title="Show each position's Grundy value (nimber)."><input type="checkbox" id="pb-tog-nimbers" checked /><span class="pb-switch"></span>Nimbers</label>
+        </div>
+        <div id="pb-body"></div>
+        <div id="pb-notify-area">
+          <div id="pb-notify-messages"></div>
+          <div id="pb-calculating">Calculating…</div>
+        </div>
+        <div class="pb-divider"></div>
+        <div id="pb-modal-toggle-row">
+          <label class="toggle-row" title="Show boundary traversal arrows">
+            <span>Boundary arrows</span>
+            <span class="switch">
+              <input type="checkbox" id="arrow-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
+          <label class="toggle-row" title="Show each point's encoding character on the canvas">
+            <span>Point encodings</span>
+            <span class="switch">
+              <input type="checkbox" id="point-enc-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div id="position-browser-panel">
+      <div id="pb-live-encoding"></div>
+      <div id="pb-invisible-boundary-listing"></div>
+      <div id="pb-tracked-panel"></div>
+      <div id="pb-panel-extra">
+        <div class="pb-divider"></div>
+        <div id="pb-panel-toggle-row"></div>
+        <div id="pb-move-seq-bar" class="bottom-bar">
+          <span id="pb-move-seq-text" class="bottom-bar-text"></span>
+          <button id="pb-move-seq-copy" class="bottom-bar-copy">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="tuning-overlay">
+      <div id="tuning-dialog">
+        <div id="tuning-header">
+          <span>Tuning</span>
+          <div id="tuning-header-btns">
+            <button id="tuning-reset">Reset defaults</button>
+            <button id="tuning-close">Close</button>
+          </div>
+        </div>
+        <div id="tuning-body"></div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

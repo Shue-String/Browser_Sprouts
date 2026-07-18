@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>voronoiTest — Sprouts Voronoi cell viewer</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #f9f9f6; }
+
+      #vt-canvas {
+        display: block;
+        position: fixed;
+        top: 40px;
+        left: 0;
+        touch-action: none;
+      }
+
+      #top-bar {
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        height: 40px;
+        background: #f9f9f6;
+        border-bottom: 1px solid #ddd;
+        display: flex;
+        align-items: center;
+        padding: 0 12px;
+        gap: 10px;
+        z-index: 10;
+        font: 12px/1 system-ui, sans-serif;
+      }
+
+      #load-btn {
+        padding: 4px 10px;
+        font: 12px/1 system-ui, sans-serif;
+        color: #666;
+        background: transparent;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      #load-btn:hover { color: #333; border-color: #aaa; }
+
+      #status-text {
+        color: #888;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      #path-bar {
+        position: fixed;
+        left: 0; right: 0; bottom: 0;
+        background: #fffbe6;
+        border-top: 1px solid #e6dca0;
+        display: none;
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: center;
+        padding: 6px 12px;
+        gap: 4px;
+        font: 12px/1.4 system-ui, sans-serif;
+        z-index: 10;
+      }
+      #path-bar.visible { display: flex; }
+      #path-text, #path-text-2, #path-text-3, #path-text-4, #path-text-5 {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="vt-canvas"></canvas>
+
+    <div id="top-bar">
+      <button id="load-btn">Load Save File</button>
+      <input type="file" id="load-input" accept="application/json,.json" style="display:none;" />
+      <span id="status-text">No save loaded — click "Load Save File" to pick a .json save.</span>
+    </div>
+
+    <div id="path-bar">
+      <span id="path-text"></span>
+      <span id="path-text-2"></span>
+      <span id="path-text-3"></span>
+      <span id="path-text-4"></span>
+      <span id="path-text-5"></span>
+    </div>
+
+    <script type="module" src="/src/voronoiTest.ts"></script>
+  </body>
+</html>
