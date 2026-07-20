@@ -1,6 +1,6 @@
 ### How to use
 1)  Download repo
-2)  Double-click "Play"
+2)  Double-click "Sprouts"
 3)  Enjoy!  (Optional)
 
 ### Purpose
