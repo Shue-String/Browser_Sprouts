@@ -34,6 +34,7 @@ import { openPositionBrowser, ensureWired as ensureBrowserWired, notifyLivePosit
 import { TrackedGame } from './engine/trackedGame';
 import type { MovePreviewTarget } from './ui/positionBrowser';
 import { initGuide } from './ui/guide';
+import { initCollect } from './ui/collect';
 import { canon as canonEncoding, preloadModule, canonicalizeTrackedProvenanceSync, canonSync } from './engine/stalks';
 import { recordEdge, loadMasterSeed } from './model/positionCache';
 
@@ -1046,6 +1047,7 @@ function unlockDebugMode(): void {
   debugUnlocked = true;
   debugMenuWrap.style.display = '';
   recreateBtn.style.display = '';
+  collectBtn.style.display = '';
   updateMoveSeq();
 }
 
@@ -1066,6 +1068,21 @@ guideBtn.addEventListener('click', e => {
 guideClose.addEventListener('click', () => guideOverlay.classList.remove('visible'));
 guideOverlay.addEventListener('click', e => {
   if (e.target === guideOverlay) guideOverlay.classList.remove('visible');
+});
+
+// Collect (top bar).
+const collectBtn     = document.getElementById('collect-btn')     as HTMLButtonElement;
+const collectOverlay = document.getElementById('collect-overlay') as HTMLDivElement;
+const collectClose   = document.getElementById('collect-close')   as HTMLButtonElement;
+
+collectBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  initCollect();
+  collectOverlay.classList.add('visible');
+});
+collectClose.addEventListener('click', () => collectOverlay.classList.remove('visible'));
+collectOverlay.addEventListener('click', e => {
+  if (e.target === collectOverlay) collectOverlay.classList.remove('visible');
 });
 
 // Only shown (below the wide-panel breakpoint) as a way to open the same Position Browser

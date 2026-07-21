@@ -4,3 +4,7 @@ stalks/build/
 stalks/saves/master_meta.json
 stalks/saves/master_meta.json.bak*
 *.log
+/011.txt
+/100.txt
+stalks/011.txt
+stalks/100.txt
