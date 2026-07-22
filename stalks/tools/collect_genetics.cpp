@@ -1,16 +1,25 @@
 // Offline tool: scan every minimal node stored in the given master save files, find positions
 // whose "life" (compressed token count, counting each DisaPoint as one life -- see
-// src/model/collectGenetics.ts's countLives for the TS-side definition of the same concept) is
-// 5, 6, or 7, and for every DisaPoint in such a position compute its genetic code (L, R, D nimber
-// sets/values). Positions whose only DisaPoint has code ({0},1,1) go to one output file;
-// ({1},0,0) to another.
+// src/model/collectGenetics.ts's countLives for the TS-side definition of the same concept) is 7
+// or fewer, and for every DisaPoint in such a position compute its genetic code (L, R, D nimber
+// set/values). Groups every DisaPoint by its exact genome (a string key "({l1,l2,...},R,D)", L
+// sorted ascending and deduped) and writes one JSON object mapping genome -> array of
+// {enc, dp, nimber} entries, where `enc` is the position's decompressed canonical encoding (the
+// same text collect.ts's analyze().canon produces), `dp` is the 0-based index of the matching
+// DisaPoint within findDisaPoints(enc)'s deterministic order, and `nimber` is the WHOLE position's
+// own value (shared by every DisaPoint of that enc).
+//
+// T/T' move listings and the Grandparent Bypass Theorem are intentionally NOT computed here --
+// collect.ts computes those lazily, on demand, the moment a genome-loaded entry is actually opened
+// (see collect.ts's fillDetail) -- so this scan only needs to cover every DisaPoint of every
+// <=7-life position, not every position's full move tree.
 //
 // This operates purely on the text form of the decompressed canonical encoding (the same
 // '2'+letter "detached pair" convention collectGenetics.ts's parseEncoding/findDisaPoints use),
-// converting to/from stalks::Position only at the engine boundary (move enumeration/application
-// and nimber lookup) -- see collectGenetics.ts's header comment for why this convention exists.
+// converting to/from stalks::Position only at the engine boundary (nimber lookup) -- see
+// collectGenetics.ts's header comment for why this convention exists.
 //
-// Usage: collect_genetics <out011.txt> <out100.txt> <save1.sprout> [save2.sprout ...]
+// Usage: collect_genetics <out.json> <save1.sprout> [save2.sprout ...]
 
 #include "canon.hpp"
 #include "encoding.hpp"
@@ -20,12 +29,9 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdio>
-#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <map>
-#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -107,8 +113,6 @@ struct DisaRef {
 // not a DisaPoint) which the original TS never needed to handle explicitly because it always
 // operated on the LAST-write-wins Map -- ported here as an explicit exclusion for correctness.
 std::vector<DisaRef> findDisaPoints(const ParsedPosition& p) {
-    // (component, letter) -> region, but detect the mutual/dumbbell case (two lone 2X regions
-    // whose single letter is exactly the pairing partner) which we must NOT treat as a DisaPoint.
     std::map<std::pair<std::size_t, char>, std::size_t> detachedByLetter;
     for (std::size_t c = 0; c < p.size(); ++c) {
         for (std::size_t r = 0; r < p[c].size(); ++r) {
@@ -158,8 +162,19 @@ void pruneEmpty(ParsedPosition& p) {
             p.end());
 }
 
+// Mirrors collectGenetics.ts's buildRemoveEncoding exactly, including the 7/DisaPoint/8 ->
+// single-scab collapse: a DisaPoint that's the sole content between one joint's two visits can't
+// just be deleted, or the joint is left with zero-length content between its visits, which the
+// engine can't parse as text.
 std::string buildRemoveEncoding(ParsedPosition p, const DisaRef& t) {
-    p[t.component][t.region][t.boundary].erase(t.token, 1);
+    auto& boundary = p[t.component][t.region][t.boundary];
+    const bool straddlesJoint = t.token > 0 && t.token + 1 < boundary.size() &&
+                                 boundary[t.token - 1] == '7' && boundary[t.token + 1] == '8';
+    if (straddlesJoint) {
+        boundary.replace(t.token - 1, 3, "2");
+    } else {
+        boundary.erase(t.token, 1);
+    }
     p[t.component].erase(p[t.component].begin() + static_cast<long>(t.detRegion));
     pruneEmpty(p);
     return serializeParsed(p);
@@ -231,205 +246,57 @@ std::set<int> computeL(const Position& pos, std::size_t comp, const DisaRef& tar
     return out;
 }
 
-// Same enumeration as computeL, but collecting the reachable positions' BASE canonical
-// serializations (matching childrenAllWithMoveTag's own canonicalize()) instead of nimbers --
-// used to exclude L-reachable children from the T candidate list by string identity, sidestepping
-// childrenAllWithMoveTag's own dedup-of-isomorphic-outcomes ambiguity (see collectGenetics.ts's
-// lMoveNimbers doc for why raw MoveTag matching alone is unsound here).
-std::set<std::string> computeLCanonSet(const Position& pos, std::size_t comp, const DisaRef& target) {
-    std::set<std::string> out;
-    const Component& c = pos.components[comp];
-    for (const Enclosure& mv : enclosureMoves(c)) {
-        if (mv.region != target.region || mv.boundary != target.boundary) continue;
-        if (mv.i != static_cast<int>(target.token) && mv.j != static_cast<int>(target.token)) continue;
-        try {
-            out.insert(serialize(canonicalize(applyEnclosure(pos, comp, mv))));
-        } catch (const EncodingError&) {
-        }
-    }
-    for (const Join& mv : joinMoves(c)) {
-        if (mv.region != target.region) continue;
-        bool touches = (mv.b1 == target.boundary && mv.i == static_cast<int>(target.token)) ||
-                       (mv.b2 == target.boundary && mv.j == static_cast<int>(target.token));
-        if (!touches) continue;
-        try {
-            out.insert(serialize(canonicalize(applyJoin(pos, comp, mv))));
-        } catch (const EncodingError&) {
-        }
-    }
-    return out;
-}
-
 struct GeneticCode {
     std::set<int> L;
     int R = -1, D = -1;
-    bool hasR = false, hasD = false;
 };
 
-bool codesEqual(const GeneticCode& a, const GeneticCode& b) {
-    if (a.hasR != b.hasR || (a.hasR && a.R != b.R)) return false;
-    if (a.hasD != b.hasD || (a.hasD && a.D != b.D)) return false;
-    return a.L == b.L;
-}
-
 GeneticCode computeCode(const Position& pos, const ParsedPosition& parsed, const DisaRef& dp,
-                         const Lookup& lookup) {
+                         const Lookup& lookup, bool& hasR, bool& hasD) {
     GeneticCode code;
     code.L = computeL(pos, dp.component, dp, lookup);
-    code.hasR = lookup.valueForEnc(buildRemoveEncoding(parsed, dp), code.R);
-    code.hasD = lookup.valueForEnc(buildReplaceEncoding(parsed, dp), code.D);
+    hasR = lookup.valueForEnc(buildRemoveEncoding(parsed, dp), code.R);
+    hasD = lookup.valueForEnc(buildReplaceEncoding(parsed, dp), code.D);
     return code;
 }
 
-// ---- T moves + Grandparent Bypass Theorem (native mirror of collectGenetics.ts's
-// classifyChildrenByDisaPoint / checkGrandparentBypass -- see that file's doc comments for the
-// full rationale) -----------------------------------------------------------------------------
-
-// Caller-assigned provenance id used only to trace one specific DisaPoint's token through a chain
-// of tracked move applications. Distinct from GEN_SRC (-2) / untracked (-1).
-constexpr int kTrackId = 1;
-
-std::vector<CompSrc> untrackedPosSrc(const Position& pos) {
-    std::vector<CompSrc> src(pos.components.size());
-    for (std::size_t c = 0; c < pos.components.size(); ++c) {
-        const auto& regions = pos.components[c].regions;
-        src[c].resize(regions.size());
-        for (std::size_t r = 0; r < regions.size(); ++r) {
-            src[c][r].resize(regions[r].size());
-            for (std::size_t b = 0; b < regions[r].size(); ++b) {
-                src[c][r][b].assign(regions[r][b].size(), -1);
-            }
-        }
+// "({l1,l2,...},R,D)" -- L sorted ascending (std::set already iterates that way) and deduped.
+// collect.ts's genomeKey must produce byte-identical strings for the same (L,R,D).
+std::string genomeKey(const GeneticCode& code) {
+    std::string out = "({";
+    bool first = true;
+    for (int v : code.L) {
+        if (!first) out += ',';
+        first = false;
+        out += std::to_string(v);
     }
-    return src;
-}
-
-struct SrcLoc {
-    std::size_t component, region, boundary, token;
-};
-
-std::optional<SrcLoc> locateTrackId(const std::vector<CompSrc>& src, int trackId) {
-    for (std::size_t c = 0; c < src.size(); ++c)
-        for (std::size_t r = 0; r < src[c].size(); ++r)
-            for (std::size_t b = 0; b < src[c][r].size(); ++b)
-                for (std::size_t t = 0; t < src[c][r][b].size(); ++t)
-                    if (src[c][r][b][t] == trackId) return SrcLoc{c, r, b, t};
-    return std::nullopt;
-}
-
-std::optional<TrackedCanon> applyTracked(const Position& p, const std::vector<CompSrc>& psrc,
-                                          const MoveTag& tag) {
-    try {
-        if (tag.kind == MoveKind::Enclosure) {
-            Enclosure m;
-            m.region = tag.region;
-            m.boundary = tag.boundary;
-            m.i = tag.i;
-            m.j = tag.j;
-            m.mask = tag.mask;
-            return enclosureChildTracked(p, psrc, tag.component, m);
-        }
-        if (tag.kind == MoveKind::Join) {
-            Join m;
-            m.region = tag.region;
-            m.b1 = tag.b1;
-            m.b2 = tag.b2;
-            m.i = tag.i;
-            m.j = tag.j;
-            return joinChildTracked(p, psrc, tag.component, m);
-        }
-    } catch (const EncodingError&) {
-    }
-    return std::nullopt;  // InteriorPseudo, or an engine-rejected move.
-}
-
-// Does `target` survive one T move and have some grandchild-level descendant (tracked by
-// provenance, not just any DisaPoint the descendant happens to contain) whose own (L,R,D) genetic
-// code exactly matches `rootCode`?
-bool traceBypass(const Position& pos, const DisaRef& target, const MoveTag& tMoveTag,
-                  const GeneticCode& rootCode, const Lookup& lookup) {
-    std::vector<CompSrc> rootSrc = untrackedPosSrc(pos);
-    rootSrc[target.component][target.region][target.boundary][target.token] = kTrackId;
-
-    const auto step1 = applyTracked(pos, rootSrc, tMoveTag);
-    if (!step1 || !locateTrackId(step1->src, kTrackId)) return false;
-
-    for (const auto& [gcPos, gcTag] : childrenAllWithMoveTag(step1->pos)) {
-        (void)gcPos;
-        const auto step2 = applyTracked(step1->pos, step1->src, gcTag);
-        if (!step2) continue;
-        const auto loc2 = locateTrackId(step2->src, kTrackId);
-        if (!loc2) continue;
-
-        ParsedPosition parsed2 = parseText(serialize(step2->pos));
-        auto disaPoints2 = findDisaPoints(parsed2);
-        auto it = std::find_if(disaPoints2.begin(), disaPoints2.end(), [&](const DisaRef& d) {
-            return d.component == loc2->component && d.region == loc2->region &&
-                   d.boundary == loc2->boundary && d.token == loc2->token;
-        });
-        if (it == disaPoints2.end()) continue;  // survived, but isn't (currently) a DisaPoint here.
-
-        if (codesEqual(computeCode(step2->pos, parsed2, *it, lookup), rootCode)) return true;
-    }
-    return false;
-}
-
-// True iff any T move (a real child of `pos` that isn't L- or R-reachable for `target`) triggers
-// the Grandparent Bypass Theorem.
-bool anyTMoveBypasses(const Position& pos, const ParsedPosition& parsed, const DisaRef& target,
-                       const GeneticCode& rootCode, const Lookup& lookup) {
-    const std::set<std::string> lCanon = computeLCanonSet(pos, target.component, target);
-    std::string rCanon;
-    try {
-        rCanon = serialize(canonicalize(parsePosition(buildRemoveEncoding(parsed, target))));
-    } catch (const EncodingError&) {
-    }
-
-    for (const auto& [kid, tag] : childrenAllWithMoveTag(pos)) {
-        const std::string kidEnc = serialize(kid);
-        if (lCanon.count(kidEnc)) continue;
-        if (!rCanon.empty() && kidEnc == rCanon) continue;
-        if (traceBypass(pos, target, tag, rootCode, lookup)) return true;
-    }
-    return false;
+    out += "},";
+    out += std::to_string(code.R);
+    out += ',';
+    out += std::to_string(code.D);
+    out += ')';
+    return out;
 }
 
 struct Entry {
     std::string enc;
-    std::string display;
-    std::set<int> L;
-    int R = -1, D = -1;
-    bool hasR = false, hasD = false;
-    bool bypass = false;  // true iff some T move satisfies the Grandparent Bypass Theorem.
+    std::size_t dp;
+    int nimber;
 };
-
-std::string fmtSet(const std::set<int>& s) {
-    if (s.empty()) return "{}";
-    std::string out = "{";
-    bool first = true;
-    for (int v : s) {
-        if (!first) out += ", ";
-        first = false;
-        out += std::to_string(v);
-    }
-    out += "}";
-    return out;
-}
 
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 4) {
-        std::cerr << "usage: collect_genetics <out011.txt> <out100.txt> <save1.sprout> [save2.sprout ...]\n";
+    if (argc < 3) {
+        std::cerr << "usage: collect_genetics <out.json> <save1.sprout> [save2.sprout ...]\n";
         return 1;
     }
-    const std::string out011Path = argv[1];
-    const std::string out100Path = argv[2];
+    const std::string outPath = argv[1];
 
     Lookup lookup;
     std::vector<std::string> allEncs;
     std::set<std::string> seen;
-    for (int i = 3; i < argc; ++i) {
+    for (int i = 2; i < argc; ++i) {
         const std::string path = argv[i];
         SolvedDB db = loadGraphFromFile(path);
         if (db.mode() != GameGraph::Mode::Exact) {
@@ -444,22 +311,16 @@ int main(int argc, char** argv) {
     }
     std::cerr << allEncs.size() << " distinct encodings total\n";
 
-    std::vector<Entry> matches011, matches100;
-    std::size_t scanned = 0, withDisa = 0, life567 = 0;
+    std::map<std::string, std::vector<Entry>> byGenome;
+    std::size_t scanned = 0, withDisa = 0, life7 = 0, genomeHits = 0;
 
-    const bool trace = std::getenv("COLLECT_GENETICS_TRACE") != nullptr;
     for (const std::string& enc : allEncs) {
         ++scanned;
-        if (trace) { std::cerr << "SCAN " << scanned << ": " << enc << "\n"; std::cerr.flush(); }
         if (scanned % 20000 == 0) { std::cerr << "  ..." << scanned << "/" << allEncs.size() << "\n"; std::cerr.flush(); }
 
-        // Master files store the compressed canonical form (HOLL/SPLIT/TRIP pseudo-points
-        // collapsed) -- DisaPoints alone are deliberately left decompressed by canonicalize()
-        // (see canon.cpp's "DisaPoints are left decompressed" comment), but enclosureMoves/
-        // joinMoves require a FULLY decompressed component (calling them on a still-compressed
-        // one is undefined behavior -- crashes on positions with a lone HOLL/SPLIT/TRIP token).
-        // So: decompress first, then do every bit of text analysis against the decompressed
-        // serialization, exactly matching what collect.ts's analyze().canon actually is.
+        // Master files store the compressed canonical form -- decompress first, then do every bit
+        // of text analysis against the decompressed serialization, exactly matching what
+        // collect.ts's analyze().canon actually is (see that file's header for why).
         Position pos;
         try {
             pos = parsePosition(enc).decompressed();
@@ -474,55 +335,46 @@ int main(int argc, char** argv) {
         ++withDisa;
 
         int life = countTokens(parsed) - 2 * static_cast<int>(disaPoints.size());
-        if (life != 5 && life != 6 && life != 7) continue;
-        ++life567;
+        if (life > 7) continue;
+        ++life7;
 
-        for (const auto& dp : disaPoints) {
-            std::set<int> L = computeL(pos, dp.component, dp, lookup);
+        int rootNimber = 0;
+        if (!lookup.valueForEnc(decText, rootNimber)) continue;
 
-            int R = 0, D = 0;
-            bool hasR = lookup.valueForEnc(buildRemoveEncoding(parsed, dp), R);
-            bool hasD = lookup.valueForEnc(buildReplaceEncoding(parsed, dp), D);
-
-            Entry e;
-            e.enc = decText;
-            e.L = L;
-            e.R = R;
-            e.D = D;
-            e.hasR = hasR;
-            e.hasD = hasD;
-
-            if (hasR && hasD) {
-                const bool matchLow = L.size() == 1 && *L.begin() == 0 && R == 1 && D == 1;
-                const bool matchHigh = L.size() == 1 && *L.begin() == 1 && R == 0 && D == 0;
-                if (matchLow || matchHigh) {
-                    const GeneticCode rootCode{L, R, D, hasR, hasD};
-                    e.bypass = anyTMoveBypasses(pos, parsed, dp, rootCode, lookup);
-                    if (matchLow) matches011.push_back(e);
-                    if (matchHigh) matches100.push_back(e);
-                }
-            }
+        for (std::size_t i = 0; i < disaPoints.size(); ++i) {
+            const auto& dp = disaPoints[i];
+            bool hasR = false, hasD = false;
+            GeneticCode code = computeCode(pos, parsed, dp, lookup, hasR, hasD);
+            if (!hasR || !hasD) continue;
+            ++genomeHits;
+            byGenome[genomeKey(code)].push_back({decText, i, rootNimber});
         }
     }
 
-    std::cerr << "scanned " << scanned << ", with DisaPoints " << withDisa << ", life 5/6/7 "
-              << life567 << "\n";
-    std::cerr << "matches ({0},1,1): " << matches011.size() << "\n";
-    std::cerr << "matches ({1},0,0): " << matches100.size() << "\n";
+    std::cerr << "scanned " << scanned << ", with DisaPoints " << withDisa << ", life<=7 " << life7
+              << ", genome hits " << genomeHits << ", distinct genomes " << byGenome.size() << "\n";
 
-    auto write = [](const std::string& path, const std::vector<Entry>& entries) {
-        std::ofstream f(path, std::ios::binary);
-        if (!f) {
-            std::cerr << "cannot open output file: " << path << "\n";
-            return;
+    std::ofstream f(outPath, std::ios::binary);
+    if (!f) {
+        std::cerr << "cannot open output file: " << outPath << "\n";
+        return 1;
+    }
+    // The Stalks encoding alphabet (letters/digits/'|'/','/'+' ) never contains a quote or
+    // backslash, so the enc strings need no JSON escaping.
+    f << "{";
+    bool firstGenome = true;
+    for (const auto& [key, entries] : byGenome) {
+        if (!firstGenome) f << ",";
+        firstGenome = false;
+        f << "\"" << key << "\":[";
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            if (i) f << ",";
+            f << "{\"enc\":\"" << entries[i].enc << "\",\"dp\":" << entries[i].dp
+              << ",\"nimber\":" << entries[i].nimber << "}";
         }
-        for (const auto& e : entries) {
-            f << e.enc << "  L=" << fmtSet(e.L) << " R=" << e.R << " D=" << e.D
-              << (e.bypass ? "  ?" : "") << "\n";
-        }
-    };
-    write(out011Path, matches011);
-    write(out100Path, matches100);
+        f << "]";
+    }
+    f << "}";
 
     return 0;
 }

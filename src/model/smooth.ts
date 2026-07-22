@@ -662,37 +662,6 @@ export function resampleEdge(e: Edge): void {
   e.points = newPts;
 }
 
-/**
- * Resample an edge to an exact point count (including endpoints).
- * Use this to force multiple edges to share the same number of points so their
- * interior points can be animated as matched pairs.
- */
-export function resampleEdgeToCount(e: Edge, targetCount: number): void {
-  if (e.points.length === targetCount || targetCount < 2) return;
-  const pts = e.points;
-  if (pts.length < 2) return;
-
-  const cumLen = [0];
-  for (let i = 1; i < pts.length; i++) {
-    const dot = Math.max(-1, Math.min(1, pts[i-1].x*pts[i].x + pts[i-1].y*pts[i].y + pts[i-1].z*pts[i].z));
-    cumLen.push(cumLen[i-1] + Math.acos(dot));
-  }
-  const arcLen = cumLen[cumLen.length - 1];
-
-  const newPts: SpherePoint[] = [{ ...pts[0] }];
-  let seg = 0;
-  for (let i = 1; i < targetCount - 1; i++) {
-    const target = (i / (targetCount - 1)) * arcLen;
-    while (seg < pts.length - 2 && cumLen[seg + 1] < target) seg++;
-    const segLen = cumLen[seg + 1] - cumLen[seg];
-    const t = segLen < 1e-12 ? 0 : (target - cumLen[seg]) / segLen;
-    newPts.push(slerp(pts[seg], pts[seg + 1], t));
-  }
-  newPts.push({ ...pts[pts.length - 1] });
-
-  e.points = newPts;
-}
-
 // ---------------------------------------------------------------------------
 // Arc-length redistribution
 // ---------------------------------------------------------------------------

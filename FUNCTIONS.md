@@ -161,7 +161,6 @@ resolved to concrete vertex IDs), `ParsedSequence`.
 | `edgeRepellers(state)` | Returns invisible repeller points for parallel edges (one midpoint each) and self-loop edges (1/3 and 2/3 points). Used by both the repulsion step and the renderer's debug overlay |
 | `smoothStepDrag(state, drag)` | Smoothing step during vertex drag; rolls back if the drag would create a crossing |
 | `resampleEdge(e)` | Resample edge to a point count proportional to arc length |
-| `resampleEdgeToCount(e, targetCount)` | Force edge to an exact point count |
 
 Tuning constants live in `src/model/tunables.ts` (see below), not inline in this file anymore.
 
@@ -209,6 +208,14 @@ Each `Collapse` type above (`LouseCollapse`, `ParallelDeadCollapse`, `TriplePara
 `TriangleDeadCollapse`, `QuadDeadCollapse`, `BigonTipCollapse`, `EnclosedTriangleCollapse`,
 `SelfConnectedDeadCollapse`) is also exported as an interface describing the detected shape
 passed from `detectX` into `xStep`.
+
+Key internal helpers: `occupiedCentroidAntipode` (steering waypoint away from the occupied side
+of the sphere, used by both `quadDeadStep` and `enclosedTriangleStep`), and a shared path-
+deformation group used by `quadDeadStep`/`enclosedTriangleStep` to retrace real (frozen-at-
+detection) edges instead of slerping toward a fresh target each frame: `pointAlongPath` (point at
+a fractional position along a frozen path), `pathPrefix`/`pathSlice` (sub-ranges of a frozen path,
+for the still-unreeled portion), `deformPreservingOffset` (re-anchor a frozen path's shape to a
+live, possibly-waypoint-bent chord — see memory `project_dead_region_elimination.md`).
 
 ---
 
@@ -297,6 +304,32 @@ Key types: `CellType`, `VoronoiNodeData`, `VoronoiEdgeData`, `VoronoiGraph`, `Vo
 Key types: `JunctionPathStep`, `JunctionPathResult`, `V1SequenceResult`, `V2SequenceResult`,
 `LastSegmentResult`, `LastToExitResult`, `FullPathResult`, `UnusedCycle`,
 `JunctionVoronoiPathResult`.
+
+---
+
+## `src/model/collectGenetics.ts` — Collect feature: DisaPoint genetic-code computation
+
+Pure structural helpers operating on the text form of a decompressed canonical encoding (the
+engine's `'2'+letter` "detached pair" convention for a DisaPoint), plus the tracked-provenance
+logic for classifying T/T' moves. See the file's header comment for the full convention writeup.
+
+| Function | Description |
+|---|---|
+| `parseEncoding(text)` / `serializeComponents(components)` | Parse/serialize the `+`/`\|`/`,`-delimited component/region/boundary/token text into `ParsedComponent[]` and back |
+| `countTokens(components)` | Total raw token count |
+| `findDisaPoints(components)` | Locate every DisaPoint (a non-detached occurrence of a "detached pair" letter), in deterministic component/region/boundary/token order |
+| `countLives(components, disaPoints)` | Compressed "life" count: raw tokens minus 2 per DisaPoint |
+| `buildDisplayEncoding(components, disaPoints)` | Compressed display string: detached-pair regions omitted, DisaPoint tokens shown as `'3'` |
+| `buildRemoveEncoding(components, target)` | R: position with the DisaPoint's dead branch deleted (joint-straddle case collapses to a single scab) |
+| `buildReplaceEncoding(components, target)` | D: position with the DisaPoint capped as a scab in place |
+| `lMoveNimbers(children, target)` | L via raw MoveInfo index matching — unsound when the position has structurally-duplicate regions; superseded by `lMoveNimbersRobust` |
+| `lMoveNimbersRobust(canonText, children, target)` | L: robust version verified by transplanting each candidate move onto target's own region and applying it |
+| `classifyChildrenByDisaPoint(canonText, children, target, rCanon)` | Classify every child of the position as L / R / T relative to one DisaPoint |
+| `computeGeneticCode(canonText, children, target)` | Full (L, R, D) genetic code of one DisaPoint |
+| `analyzeTEntry(rootEnc, target, tChild, rootCode)` | Per-T-move analysis: where the tracked DisaPoint ends up (`TPositionMark`: still a DisaPoint / decayed to an isolated `[22]` pair / neither) plus whether the Grandparent Bypass Theorem applies |
+
+Key types: `DisaPointRef`, `ParsedBoundary`/`ParsedRegion`/`ParsedComponent`, `ClassifiedChildren`,
+`DisaGeneticCode`, `TPositionMark`, `TEntryResult`.
 
 ---
 
@@ -472,6 +505,24 @@ Key type: `MovePreviewTarget`, `SyncCallbacks`.
 | `initGuide()` | Wire up the Guide window (topic list + content pane) into the existing modal shell |
 
 Topic content lives inline in this file (6 first-draft topics as of 2026-07-15).
+
+---
+
+## `src/ui/collect.ts` — Collect window: DisaPoint "genetic code" browser
+
+| Function | Description |
+|---|---|
+| `initCollect()` | Wire the search input once; safe to call multiple times (each open just re-renders) |
+
+Everything else is internal. Search flow: `runSearch(raw)` analyzes a typed position encoding
+and builds one `Entry` per DisaPoint (via `computeEntry` → `lMoveNimbersRobust`/`computeTAndTPrime`
+from `collectGenetics.ts`); `loadGenome(raw)` instead parses a `"({...},R,D)"` genome query and
+bulk-loads every matching hit from `GENOME_DB` (`src/data/collectGenomes.json`, generated offline
+by `stalks/tools/collect_genetics.cpp` — regenerate that JSON by re-running the tool against the
+master `.sprout` saves) via `buildGenomeEntry`, deferring T/T' computation to `fillDetail` the
+first time an entry is actually opened. `history` (persisted to `localStorage` under
+`sprouts-collect-variations-v3`, seeded by `seedDefaultHistory` on first load) backs the
+persistent variation list rendered by `render()`/`renderDetail()`.
 
 ---
 

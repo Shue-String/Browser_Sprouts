@@ -1232,6 +1232,99 @@ export function scabAloneCollapse(state: GameState, skipVertices?: Set<VertexId>
 }
 
 // ===========================================================================
+// Shared path-deformation helpers (quad-dead, enclosed-triangle)
+// ===========================================================================
+//
+// Both collapses below move vertices toward each other by retracing the
+// REAL, already-valid edges between them (frozen at detection time) rather
+// than slerping toward a freshly-computed target each frame. A raw slerp
+// toward an artificial target ignores whatever route the real edge actually
+// takes and can sweep straight across unrelated content, or — worse — end up
+// on the wrong side of the sphere entirely when the true dead region is the
+// majority of the sphere and the naive short-arc path cuts through the small
+// live side instead (see project_dead_region_elimination for both bugs).
+
+/** Point at normalized position `frac` (0 = path[0], 1 = path[last]) along a frozen
+ * polyline, index-parametrized like the rest of this file's edge interpolation. */
+function pointAlongPath(path: SpherePoint[], frac: number): SpherePoint {
+  const n = path.length - 1;
+  if (n <= 0) return { ...path[0] };
+  const pos = Math.max(0, Math.min(n, frac * n));
+  const i0 = Math.floor(pos);
+  const i1 = Math.min(i0 + 1, n);
+  const localT = pos - i0;
+  return i0 === i1 ? { ...path[i0] } : slerp(path[i0], path[i1], localT);
+}
+
+/** path[0] up through (and including) the point at fractional position `frac` —
+ * the portion of a frozen path still "unreeled". */
+function pathPrefix(path: SpherePoint[], frac: number): SpherePoint[] {
+  const n = path.length - 1;
+  const pos = Math.max(0, Math.min(n, frac * n));
+  const i0 = Math.floor(pos);
+  const pts = path.slice(0, i0 + 1).map(p => ({ ...p }));
+  const localT = pos - i0;
+  if (localT > 1e-9 && i0 < n) pts.push(slerp(path[i0], path[i0 + 1], localT));
+  return pts;
+}
+
+/** The portion of a frozen path between fractional positions `fracLo` and `fracHi`
+ * (fracLo <= fracHi), inclusive of interpolated tips at both ends — used when BOTH
+ * ends of an edge are reeling inward toward a shared meeting point. */
+function pathSlice(path: SpherePoint[], fracLo: number, fracHi: number): SpherePoint[] {
+  const n = path.length - 1;
+  if (n <= 0) return [{ ...path[0] }];
+  const posLo = Math.max(0, Math.min(n, fracLo * n));
+  const posHi = Math.max(0, Math.min(n, fracHi * n));
+  const iLo = Math.floor(posLo), tLo = posLo - iLo;
+  const iHi = Math.floor(posHi), tHi = posHi - iHi;
+  const startPt = tLo > 1e-9 && iLo < n ? slerp(path[iLo], path[iLo + 1], tLo) : { ...path[iLo] };
+  const pts: SpherePoint[] = [startPt];
+  for (let i = iLo + 1; i <= iHi; i++) pts.push({ ...path[i] });
+  if (tHi > 1e-9) pts.push(slerp(path[iHi], path[iHi + 1], tHi));
+  return pts;
+}
+
+/** Deform a frozen path so every point keeps its original offset from the path's
+ * OWN original chord (its first↔last point), re-anchored to the LIVE chord
+ * `p1`↔`p2` and scaled down by `remaining`. This is a closed-form function of the
+ * current frame rather than an incremental relax toward a moving target, so it
+ * can't lag: at the path's own endpoints the offset is exactly zero, so the
+ * result always matches p1/p2 exactly, however fast they're moving — no visible
+ * kink between an exactly-snapped endpoint and a catching-up neighbour.
+ *
+ * If `waypoint` is given, the "chord" is bent through it (two half-arcs meeting
+ * at the waypoint) instead of taking the direct short arc — used when p1/p2 are
+ * two independently-moving points (not converging to a shared point), where the
+ * live chord can rotate far enough from its original orientation that
+ * re-attaching the original offset directly would swing it outside the safe
+ * region. See quadDeadStep, which routes it through occupiedCentroidAntipode. */
+function deformPreservingOffset(
+  frozenPath: SpherePoint[], p1: SpherePoint, p2: SpherePoint, remaining: number,
+  waypoint?: SpherePoint | null,
+): SpherePoint[] {
+  const n = frozenPath.length - 1;
+  if (n <= 0) return [{ ...frozenPath[0] }];
+  const orig1 = frozenPath[0], orig2 = frozenPath[n];
+  const chord = (a: SpherePoint, b: SpherePoint, u: number): SpherePoint =>
+    !waypoint ? slerp(a, b, u)
+    : u <= 0.5 ? slerp(a, waypoint, u * 2) : slerp(waypoint, b, (u - 0.5) * 2);
+  const pts: SpherePoint[] = new Array(frozenPath.length);
+  for (let i = 0; i <= n; i++) {
+    const u = i / n;
+    const baselineOrig = chord(orig1, orig2, u);
+    const baselineNew  = chord(p1, p2, u);
+    const orig = frozenPath[i];
+    pts[i] = normalize({
+      x: baselineNew.x + remaining * (orig.x - baselineOrig.x),
+      y: baselineNew.y + remaining * (orig.y - baselineOrig.y),
+      z: baselineNew.z + remaining * (orig.z - baselineOrig.z),
+    });
+  }
+  return pts;
+}
+
+// ===========================================================================
 // Quad-dead collapse (case 4)
 // ===========================================================================
 //
@@ -1272,10 +1365,34 @@ export interface QuadDeadCollapse {
   nbrB: VertexId;
   nbrC: VertexId;
   nbrD: VertexId;
+  // Snapshots of AB/BC/CD/DA's geometry taken at detection time. A and B reel
+  // toward each other along abPath (meeting at its own original midpoint);
+  // C and D likewise along cdPath. BC and DA deform in place, preserving their
+  // shape relative to their own original chord, rather than being replaced by
+  // a fresh straight line each frame — the dead quad face can be the sphere's
+  // MAJORITY region (see project_dead_region_elimination), in which case a
+  // naive short-arc line between the merge points cuts through the small live
+  // side instead of through the actual (large) dead face. Retracing the real
+  // edges — which are already known to correctly bound the dead face, however
+  // it wraps around the sphere — is safe by construction. See quadDeadStep.
+  abPath: SpherePoint[];  // oriented A-first
+  cdPath: SpherePoint[];  // oriented C-first
+  bcPath: SpherePoint[];  // oriented B-first
+  daPath: SpherePoint[];  // oriented D-first
+  // BC and DA connect two independently-moving points (B→P, C→Q for one; D→Q,
+  // A→P for the other) rather than converging to a shared point, so their
+  // live chord can rotate far from its original orientation as the animation
+  // runs. Steer their deformation through the antipode of whatever living
+  // content sits just outside them (same technique as tripleParallelDeadStep's
+  // occupiedCentroidAntipode) rather than a direct line that can swing back
+  // across that content. Null when nothing nearby needs steering around.
+  bcWaypoint: SpherePoint | null;
+  daWaypoint: SpherePoint | null;
+  t: number;               // animation progress: 0 at detection, 1 once merged
 }
 
-const QUAD_DEAD_SHRINK_STEP = 0.09;
-const QUAD_DEAD_POP_RADIUS  = 0.04;
+const QUAD_DEAD_STEP_DELTA   = 0.035; // per-frame progress along abPath/cdPath
+const QUAD_DEAD_POP_FRACTION = 0.06;  // pop once this much of the path remains
 
 /**
  * Scan for a dead quadrilateral region (4 boundary entries, all degree-3,
@@ -1362,12 +1479,27 @@ export function detectQuadDead(state: GameState): QuadDeadCollapse | null {
     if (extA.nbr === extB.nbr) continue; // P would have a self-loop via its two external edges
     if (extC.nbr === extD.nbr) continue; // Q would have a self-loop
 
+    // Snapshot the 4 boundary edges now, oriented as documented on the
+    // interface, for A/B/C/D to reel along during the animation.
+    const eAB = state.edges.get(edgeAB)!;
+    const abPath = (eAB.v1 === a ? eAB.points : [...eAB.points].reverse()).map(p => ({ ...p }));
+    const eCD = state.edges.get(edgeCD)!;
+    const cdPath = (eCD.v1 === c ? eCD.points : [...eCD.points].reverse()).map(p => ({ ...p }));
+    const eBC = state.edges.get(edgeBC)!;
+    const bcPath = (eBC.v1 === b_ ? eBC.points : [...eBC.points].reverse()).map(p => ({ ...p }));
+    const eDA = state.edges.get(edgeDA)!;
+    const daPath = (eDA.v1 === d ? eDA.points : [...eDA.points].reverse()).map(p => ({ ...p }));
+
+    const bcWaypoint = occupiedCentroidAntipode(state, new Set([b_, c]));
+    const daWaypoint = occupiedCentroidAntipode(state, new Set([d, a]));
+
     return {
       kind: 'quad-dead',
       a, b: b_, c, d,
       edgeAB, edgeBC, edgeCD, edgeDA,
       extA: extA.eid, extB: extB.eid, extC: extC.eid, extD: extD.eid,
       nbrA: extA.nbr, nbrB: extB.nbr, nbrC: extC.nbr, nbrD: extD.nbr,
+      abPath, cdPath, bcPath, daPath, bcWaypoint, daWaypoint, t: 0,
     };
   }
   return null;
@@ -1376,7 +1508,10 @@ export function detectQuadDead(state: GameState): QuadDeadCollapse | null {
 
 /**
  * One frame of quad-dead collapse.
- * A and B slerp toward midAB; C and D slerp toward midCD.
+ * A and B reel toward each other along edgeAB's own frozen geometry, meeting
+ * exactly at its original midpoint (P); C and D likewise along edgeCD (Q).
+ * BC and DA deform in place rather than being replaced by a fresh straight
+ * line — see the interface doc comment and deformPreservingOffset.
  * On pop: merge A+B → P = min(A,B), C+D → Q = min(C,D), surgery fires.
  */
 export function quadDeadStep(
@@ -1389,29 +1524,21 @@ export function quadDeadStep(
   const vd = state.vertices.get(collapse.d);
   if (!va || !vb || !vc || !vd) return { done: true, popAt: null };
 
-  const midAB = slerp(va.pos, vb.pos, 0.5);
-  const midCD = slerp(vc.pos, vd.pos, 0.5);
+  const midAB = pointAlongPath(collapse.abPath, 0.5); // abPath's own frozen midpoint
+  const midCD = pointAlongPath(collapse.cdPath, 0.5);
+  const remaining = 1 - collapse.t;
 
-  const dA = Math.acos(Math.max(-1, Math.min(1, va.pos.x*midAB.x + va.pos.y*midAB.y + va.pos.z*midAB.z)));
-  const dB = Math.acos(Math.max(-1, Math.min(1, vb.pos.x*midAB.x + vb.pos.y*midAB.y + vb.pos.z*midAB.z)));
-  const dC = Math.acos(Math.max(-1, Math.min(1, vc.pos.x*midCD.x + vc.pos.y*midCD.y + vc.pos.z*midCD.z)));
-  const dD = Math.acos(Math.max(-1, Math.min(1, vd.pos.x*midCD.x + vd.pos.y*midCD.y + vd.pos.z*midCD.z)));
-
-  if (dA < QUAD_DEAD_POP_RADIUS && dB < QUAD_DEAD_POP_RADIUS &&
-      dC < QUAD_DEAD_POP_RADIUS && dD < QUAD_DEAD_POP_RADIUS) {
+  if (remaining < QUAD_DEAD_POP_FRACTION) {
     const popAt = slerp(midAB, midCD, 0.5); // burst between the two merge points
 
     // Guard: required edges must still exist (eliminateIsolatedVertex may have
     // removed a neighbouring vertex while the animation was in progress).
-    const eAB = state.edges.get(collapse.edgeAB);
     const eBC = state.edges.get(collapse.edgeBC);
-    const eCD = state.edges.get(collapse.edgeCD);
-    const eDA = state.edges.get(collapse.edgeDA);
     const eExtA = state.edges.get(collapse.extA);
     const eExtB = state.edges.get(collapse.extB);
     const eExtC = state.edges.get(collapse.extC);
     const eExtD = state.edges.get(collapse.extD);
-    if (!eAB || !eBC || !eCD || !eDA || !eExtA || !eExtB || !eExtC || !eExtD) {
+    if (!eBC || !eExtA || !eExtB || !eExtC || !eExtD) {
       return { done: true, popAt: null };
     }
 
@@ -1430,7 +1557,7 @@ export function quadDeadStep(
     const qToNbrC = buildExt(eExtC, collapse.c, midCD);
     const qToNbrD = buildExt(eExtD, collapse.d, midCD);
 
-    // P→Q from the former B→C edge (re-anchored at both ends).
+    // P→Q from the (now nearly-collapsed) live BC edge, re-anchored at both ends.
     const pToQ = eBC.v1 === collapse.b ? [...eBC.points] : [...eBC.points].reverse();
     pToQ[0] = { ...midAB };
     pToQ[pToQ.length - 1] = { ...midCD };
@@ -1474,49 +1601,49 @@ export function quadDeadStep(
     return { done: true, popAt: ok ? popAt : null };
   }
 
-  // Slerp A and B toward midAB, C and D toward midCD.
-  va.pos = slerp(va.pos, midAB, QUAD_DEAD_SHRINK_STEP);
-  vb.pos = slerp(vb.pos, midAB, QUAD_DEAD_SHRINK_STEP);
-  vc.pos = slerp(vc.pos, midCD, QUAD_DEAD_SHRINK_STEP);
-  vd.pos = slerp(vd.pos, midCD, QUAD_DEAD_SHRINK_STEP);
+  collapse.t = Math.min(1, collapse.t + QUAD_DEAD_STEP_DELTA);
+  const newRemaining = 1 - collapse.t;
+  const half = collapse.t / 2;
 
-  // Pull AB and CD edge interiors toward their merge targets (these edges collapse).
-  // BC and DA: re-anchor endpoints AND reparametrize interiors proportionally so
-  // the full curve follows the moving endpoints (not just the tips).
+  // A and B reel toward each other along their own frozen edge, meeting
+  // exactly at abPath's own original midpoint; C and D likewise along cdPath.
+  va.pos = pointAlongPath(collapse.abPath, half);
+  vb.pos = pointAlongPath(collapse.abPath, 1 - half);
+  vc.pos = pointAlongPath(collapse.cdPath, half);
+  vd.pos = pointAlongPath(collapse.cdPath, 1 - half);
+
+  const eAB = state.edges.get(collapse.edgeAB);
+  if (eAB) {
+    const slice = pathSlice(collapse.abPath, half, 1 - half);
+    eAB.points = eAB.v1 === collapse.a ? slice : [...slice].reverse();
+  }
+  const eCD = state.edges.get(collapse.edgeCD);
+  if (eCD) {
+    const slice = pathSlice(collapse.cdPath, half, 1 - half);
+    eCD.points = eCD.v1 === collapse.c ? slice : [...slice].reverse();
+  }
+
+  // BC and DA deform in place instead of being replaced by a fresh straight
+  // line each frame — safe regardless of which side of the sphere the dead
+  // quad face actually wraps around (it can be the sphere's MAJORITY region).
+  const eBC = state.edges.get(collapse.edgeBC);
+  if (eBC) {
+    const newPts = deformPreservingOffset(collapse.bcPath, vb.pos, vc.pos, newRemaining, collapse.bcWaypoint);
+    eBC.points = eBC.v1 === collapse.b ? newPts : [...newPts].reverse();
+  }
+  const eDA = state.edges.get(collapse.edgeDA);
+  if (eDA) {
+    const newPts = deformPreservingOffset(collapse.daPath, vd.pos, va.pos, newRemaining, collapse.daWaypoint);
+    eDA.points = eDA.v1 === collapse.d ? newPts : [...newPts].reverse();
+  }
+
   // External edges: re-anchor the quad-vertex endpoint only.
-  const shrinkEdge = (eid: EdgeId, target: SpherePoint) => {
-    const e = state.edges.get(eid);
-    if (!e) return;
-    for (let i = 1; i < e.points.length - 1; i++) {
-      e.points[i] = slerp(e.points[i], target, QUAD_DEAD_SHRINK_STEP);
-    }
-    const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
-    const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
-  };
-  // Re-anchor endpoints and linearly reparametrize interiors between them.
-  const reparametrizeEdge = (eid: EdgeId) => {
-    const e = state.edges.get(eid);
-    if (!e) return;
-    const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
-    const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
-    const n = e.points.length;
-    if (n < 3) return;
-    const p0 = e.points[0], p1 = e.points[n - 1];
-    for (let i = 1; i < n - 1; i++) {
-      e.points[i] = slerp(p0, p1, i / (n - 1));
-    }
-  };
   const reanchorEdge = (eid: EdgeId) => {
     const e = state.edges.get(eid);
     if (!e) return;
     const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
     const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
   };
-
-  shrinkEdge(collapse.edgeAB, midAB);
-  shrinkEdge(collapse.edgeCD, midCD);
-  reparametrizeEdge(collapse.edgeBC);
-  reparametrizeEdge(collapse.edgeDA);
   reanchorEdge(collapse.extA);
   reanchorEdge(collapse.extB);
   reanchorEdge(collapse.extC);
@@ -1545,18 +1672,33 @@ export function quadDeadStep(
 export interface EnclosedTriangleCollapse {
   kind: 'enclosed-triangle';
   a: VertexId;         // anchor — has the true external edge; stays put
-  b: VertexId;         // enclosed vertex 1 — slerps to A
-  c: VertexId;         // enclosed vertex 2 — slerps to A
+  b: VertexId;         // enclosed vertex 1 — reels in along abPath to A
+  c: VertexId;         // enclosed vertex 2 — reels in along acPath to A
   triEdgeAB: EdgeId;   // triangle boundary edge A↔B
   triEdgeAC: EdgeId;   // triangle boundary edge A↔C
   triEdgeBC1: EdgeId;  // triangle boundary edge B↔C (bounding the face)
   triEdgeBC2: EdgeId;  // the parallel B↔C edge (becomes the self-loop on A)
   extA: EdgeId;        // A's external edge (A→X)
   x: VertexId;         // external neighbour of A
+  // Snapshots of edge AB/AC's geometry taken at detection time, A-end first.
+  // B and C retrace these (already-valid, non-crossing) paths back to A instead
+  // of slerping toward A along a fresh great circle, which would ignore
+  // whatever detour the real edges took and could sweep across unrelated
+  // content elsewhere on the sphere. See enclosedTriangleStep.
+  abPath: SpherePoint[];
+  acPath: SpherePoint[];
+  // Snapshots of BC1/BC2's geometry taken at detection time, B-end first —
+  // each point's fixed offset from B1/C1's *original* chord is what gets
+  // preserved (scaled down) as B and C move, so the curve's shape decays in
+  // step with B/C's own motion instead of lagging behind it. See
+  // enclosedTriangleStep.
+  bc1Path: SpherePoint[];
+  bc2Path: SpherePoint[];
+  t: number;            // animation progress: 0 at detection, 1 once B/C reach A
 }
 
-const ENCLOSED_TRIANGLE_SHRINK_STEP = 0.09;
-const ENCLOSED_TRIANGLE_POP_RADIUS  = 0.04;
+const ENCLOSED_TRIANGLE_STEP_DELTA     = 0.035; // per-frame progress along abPath/acPath
+const ENCLOSED_TRIANGLE_POP_FRACTION   = 0.06;  // pop once this much of the path remains
 
 export function detectEnclosedTriangle(state: GameState): EnclosedTriangleCollapse | null {
   for (const r of state.regions.values()) {
@@ -1624,19 +1766,52 @@ export function detectEnclosedTriangle(state: GameState): EnclosedTriangleCollap
     // Edge ids can be 0 (falsy), so check for undefined explicitly rather than truthiness.
     if (edgeAB === undefined || edgeAC === undefined || edgeBC1 === undefined) continue;
 
+    // The triangle (r) is only one of the two faces the BC bigon (BC1/BC2)
+    // bounds — the other, F1, sits on BC1's far side from the triangle and
+    // never touches A. Nothing here has confirmed F1 is actually empty: a
+    // separate disconnected component (still alive) can be nested inside it
+    // (e.g. a spot enclosed by an earlier self-loop move), in which case
+    // collapsing B/C into A would drag that live content along with them.
+    // Require F1 dead too, mirroring the check already done on the triangle.
+    const eBC1 = state.edges.get(edgeBC1)!;
+    const f1Id = eBC1.leftRegion === r.id ? eBC1.rightRegion : eBC1.leftRegion;
+    const f1 = state.regions.get(f1Id);
+    if (!f1 || !f1.isDead) continue;
+
+    // Snapshot A→B and A→C now, oriented A-first, for B/C to reel themselves
+    // in along during the animation (see enclosedTriangleStep).
+    const eAB = state.edges.get(edgeAB)!;
+    const abPath = (eAB.v1 === aId ? eAB.points : [...eAB.points].reverse()).map(p => ({ ...p }));
+    const eAC = state.edges.get(edgeAC)!;
+    const acPath = (eAC.v1 === aId ? eAC.points : [...eAC.points].reverse()).map(p => ({ ...p }));
+
+    // Snapshot BC1/BC2 too, oriented B-first, so their shape can decay relative
+    // to their OWN original chord rather than the live (already-mutated) edge.
+    const eBC2 = state.edges.get(triEdgeBC2)!;
+    const bc1Path = (eBC1.v1 === bId ? eBC1.points : [...eBC1.points].reverse()).map(p => ({ ...p }));
+    const bc2Path = (eBC2.v1 === bId ? eBC2.points : [...eBC2.points].reverse()).map(p => ({ ...p }));
+
     return {
       kind: 'enclosed-triangle',
       a: aId, b: bId, c: cId,
       triEdgeAB: edgeAB, triEdgeAC: edgeAC, triEdgeBC1: edgeBC1,
       triEdgeBC2, extA, x,
+      abPath, acPath, bc1Path, bc2Path, t: 0,
     };
   }
   return null;
 }
 
 /**
- * One frame of enclosed-triangle collapse. B and C slerp toward A; on pop,
- * B and C are deleted and the parallel BC2 edge becomes a self-loop on A.
+ * One frame of enclosed-triangle collapse. B and C reel themselves in along
+ * A→B and A→C's own (already-valid, non-crossing) geometry, frozen at
+ * detection time, rather than slerping toward A along a fresh great circle —
+ * that would ignore whatever detour those edges took and could sweep across
+ * unrelated content elsewhere on the sphere. BC1/BC2 are tugged toward the
+ * live B–C chord as B and C converge, so they stay local and shrink to
+ * nothing exactly when B and C both reach A, instead of sweeping toward A
+ * themselves. On pop, B and C are deleted and BC2 is replaced by a synthetic
+ * self-loop on A.
  */
 export function enclosedTriangleStep(
   state: GameState,
@@ -1648,22 +1823,20 @@ export function enclosedTriangleStep(
   if (!va || !vb || !vc) return { done: true, popAt: null };
 
   const target = va.pos;
-  const db = Math.acos(Math.max(-1, Math.min(1, vb.pos.x*target.x + vb.pos.y*target.y + vb.pos.z*target.z)));
-  const dc = Math.acos(Math.max(-1, Math.min(1, vc.pos.x*target.x + vc.pos.y*target.y + vc.pos.z*target.z)));
+  const remaining = 1 - collapse.t; // fraction of abPath/acPath still left to reel in
 
-  if (db < ENCLOSED_TRIANGLE_POP_RADIUS && dc < ENCLOSED_TRIANGLE_POP_RADIUS) {
+  if (remaining < ENCLOSED_TRIANGLE_POP_FRACTION) {
     const popAt = { ...target };
 
     const eBC2 = state.edges.get(collapse.triEdgeBC2);
     if (!eBC2) return { done: true, popAt: null };
 
-    // BC2's endpoints (B, C) were both shrunk toward A during the collapse animation, and BC2
-    // itself is typically close to a geodesic — squeezing a near-straight edge's two ends
-    // together yields a near-collinear "loop" with no lateral area, which edgeRepellers() can
-    // never bow open into a circle (pushing points apart along an already-straight path just
-    // redistributes them). Synthesize a genuine small circle instead of reusing BC2's squeezed
-    // geometry; oriented toward B's pre-deletion position so it bulges the same direction BC2
-    // used to run.
+    // BC2's endpoints (B, C) are both nearly at A by now, and BC2 itself is typically close to
+    // a geodesic — squeezing a near-straight edge's two ends together yields a near-collinear
+    // "loop" with no lateral area, which edgeRepellers() can never bow open into a circle
+    // (pushing points apart along an already-straight path just redistributes them). Synthesize
+    // a genuine small circle instead of reusing BC2's squeezed geometry; oriented toward B's
+    // pre-deletion position so it bulges the same direction BC2 used to run.
     const loopPts = smallCircleSelfLoop(target, vb.pos, SELF_LOOP_SYNTH_RADIUS);
 
     const ok = commitIfEncodingPreserved(state, () => {
@@ -1689,24 +1862,43 @@ export function enclosedTriangleStep(
     return { done: true, popAt: ok ? popAt : null };
   }
 
-  // Slerp B and C toward A; A stays fixed.
-  vb.pos = slerp(vb.pos, target, ENCLOSED_TRIANGLE_SHRINK_STEP);
-  vc.pos = slerp(vc.pos, target, ENCLOSED_TRIANGLE_SHRINK_STEP);
+  collapse.t = Math.min(1, collapse.t + ENCLOSED_TRIANGLE_STEP_DELTA);
+  const newRemaining = 1 - collapse.t;
 
-  // Shrink all triangle edges (including BC2) toward A; re-anchor external edge.
-  for (const eid of [collapse.triEdgeAB, collapse.triEdgeAC, collapse.triEdgeBC1, collapse.triEdgeBC2]) {
+  // Reel B and C back along their own frozen A→B/A→C paths.
+  vb.pos = pointAlongPath(collapse.abPath, newRemaining);
+  vc.pos = pointAlongPath(collapse.acPath, newRemaining);
+
+  const eAB = state.edges.get(collapse.triEdgeAB);
+  if (eAB) {
+    const prefix = pathPrefix(collapse.abPath, newRemaining); // A -> current B
+    eAB.points = eAB.v1 === collapse.a ? prefix : [...prefix].reverse();
+  }
+  const eAC = state.edges.get(collapse.triEdgeAC);
+  if (eAC) {
+    const prefix = pathPrefix(collapse.acPath, newRemaining); // A -> current C
+    eAC.points = eAC.v1 === collapse.a ? prefix : [...prefix].reverse();
+  }
+
+  // BC1/BC2: each point keeps its original (frozen) offset from BC1/BC2's own
+  // original B–C chord, re-anchored to the live B–C chord and scaled down by
+  // newRemaining. This is a closed-form function of the current frame, not an
+  // incremental relax toward a moving target — the previous version slerped
+  // interior points a fixed fraction toward the chord each frame while
+  // endpoints were hard-snapped to B/C's exact (fast-moving) position, so the
+  // endpoint would race ahead of its nearest interior neighbour and leave a
+  // visible kink. Here every point, including the endpoints (whose original
+  // offset is exactly zero by construction), tracks B/C with no lag: at u=0
+  // baselineOrig cancels the offset exactly, so the point equals the live B
+  // position outright, and matching-ly for C at u=1.
+  for (const [eid, frozenPath] of [
+    [collapse.triEdgeBC1, collapse.bc1Path],
+    [collapse.triEdgeBC2, collapse.bc2Path],
+  ] as const) {
     const e = state.edges.get(eid);
     if (!e) continue;
-    for (let i = 1; i < e.points.length - 1; i++) {
-      e.points[i] = slerp(e.points[i], target, ENCLOSED_TRIANGLE_SHRINK_STEP);
-    }
-    const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
-    const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
-  }
-  const eExt = state.edges.get(collapse.extA);
-  if (eExt) {
-    const v1 = state.vertices.get(eExt.v1); if (v1) eExt.points[0] = { ...v1.pos };
-    const v2 = state.vertices.get(eExt.v2); if (v2) eExt.points[eExt.points.length - 1] = { ...v2.pos };
+    const newPts = deformPreservingOffset(frozenPath, vb.pos, vc.pos, newRemaining);
+    e.points = e.v1 === collapse.b ? newPts : [...newPts].reverse();
   }
 
   return { done: false, popAt: null };

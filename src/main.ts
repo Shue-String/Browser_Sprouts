@@ -13,7 +13,7 @@ import { resolveBracketEntry, resolveMoveEndpoints, resolveParensEntry } from '.
 import { strokeCrossesEdges, candidateStrokes, candidateSelfLoopArcsWithSeeds } from './model/strokeSynthesis';
 import { moveLog } from './debug/moveLog';
 import { DEBUG } from './debug/flags';
-import { smoothStep, smoothStepDrag, resampleEdge, resampleEdgeToCount, lastMaxMovement, resetActivityTimer } from './model/smooth';
+import { smoothStep, smoothStepDrag, resampleEdge, lastMaxMovement, resetActivityTimer } from './model/smooth';
 import { tunables, TUNABLE_SPECS, loadTunables, saveTunables, resetTunables } from './model/tunables';
 import { deadRegionStep, eliminateIsolatedVertex, detectLouse, louseCollapseStep, detectParallelDead, parallelDeadStep, detectTripleParallelDead, tripleParallelDeadStep, detectTriangleDead, triangleDeadStep, detectQuadDead, quadDeadStep, scabAloneCollapse, detectBigonTip, bigonTipStep, detectEnclosedTriangle, enclosedTriangleStep, detectSelfConnectedDead, selfConnectedDeadStep } from './model/deadRegions';
 import type { LouseCollapse, ParallelDeadCollapse, TripleParallelDeadCollapse, TriangleDeadCollapse, QuadDeadCollapse, BigonTipCollapse, EnclosedTriangleCollapse, SelfConnectedDeadCollapse } from './model/deadRegions';
@@ -724,16 +724,6 @@ function checkForCollapses(): void {
   if (pendingCollapse) return;
   if (collapseCountThisMove >= MAX_COLLAPSES_PER_MOVE) return;
   pendingCollapse = detectLouse(state) ?? detectParallelDead(state) ?? detectTripleParallelDead(state) ?? detectTriangleDead(state) ?? detectEnclosedTriangle(state) ?? detectQuadDead(state) ?? detectBigonTip(state) ?? detectSelfConnectedDead(state);
-  if (pendingCollapse?.kind === 'quad-dead') {
-    // Resample all 4 boundary edges to the same point count so interior points
-    // are matched pairs and the animation advances uniformly.
-    const pc = pendingCollapse;
-    const ids = [pc.edgeAB, pc.edgeBC, pc.edgeCD, pc.edgeDA];
-    const edges = ids.map(id => state.edges.get(id)).filter((e): e is NonNullable<typeof e> => !!e);
-    for (const e of edges) resampleEdge(e);
-    const maxCount = Math.max(...edges.map(e => e.points.length));
-    for (const e of edges) resampleEdgeToCount(e, maxCount);
-  }
 }
 
 /** Vertex IDs that the active special collapse owns (excluded from deadRegionStep). */

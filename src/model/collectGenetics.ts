@@ -148,10 +148,26 @@ function pruneEmpty(components: ParsedComponent[]): ParsedComponent[] {
     .filter(regions => regions.length > 0);
 }
 
-/** R: the position with the DisaPoint's dead branch (and its own token) deleted outright. */
+/**
+ * R: the position with the DisaPoint's dead branch (and its own token) deleted outright. If the
+ * DisaPoint is the sole content between one joint's two visits (an adjacent '7'...'8' pair -- see
+ * canon.cpp's joint-tagging, first visit '7', second visit '8'), just deleting it would leave the
+ * joint with zero-length content between its visits, which the engine can't parse as text -- so
+ * collapse the whole 7/DisaPoint/8 triple into a single scab ('2') instead. e.g. R([11738]) = [112].
+ */
 export function buildRemoveEncoding(components: ParsedComponent[], target: DisaPointRef): string {
   const work = cloneComponents(components);
-  work[target.component][target.region][target.boundary].splice(target.token, 1);
+  const boundary = work[target.component][target.region][target.boundary];
+  const straddlesJoint =
+    target.token > 0 &&
+    target.token + 1 < boundary.length &&
+    boundary[target.token - 1] === '7' &&
+    boundary[target.token + 1] === '8';
+  if (straddlesJoint) {
+    boundary.splice(target.token - 1, 3, '2');
+  } else {
+    boundary.splice(target.token, 1);
+  }
   work[target.detached.component].splice(target.detached.region, 1);
   return serializeComponents(pruneEmpty(work));
 }
