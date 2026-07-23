@@ -1,5 +1,6 @@
 .claude/
 node_modules/
+/paper/
 stalks/build/
 stalks/saves/master_meta.json
 stalks/saves/master_meta.json.bak*

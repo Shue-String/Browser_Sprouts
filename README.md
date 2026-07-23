@@ -1,6 +1,6 @@
 ### How to use
 1)  Download repo
-2)  Double-click "Sprouts"
+2)  Double-click "Sprouts" (dist/index.html if the shortcut doesn't work)
 3)  Enjoy!  (Optional)
 
 ### Purpose
