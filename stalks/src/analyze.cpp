@@ -447,7 +447,19 @@ std::string regionMovesTrackedJson(const std::string& enc, int component, int re
         }
         exactGraph().ensure(p);  // see childrenTrackedJson -- same valuing rationale
         const GameGraph& g = exactGraph();
-        const Component& c = p.components[static_cast<std::size_t>(component)];
+        // enclosureMoves/joinMoves refuse to run at all if ANY boundary of the component still holds
+        // a compressed pseudo-point (3/4/5/6) ANYWHERE in it -- not just in the target's own boundary
+        // -- so a Hollow/Split/Triplet organ elsewhere in the SAME component as the DisaPoint (`enc`
+        // is `analyze().canon`, which can legitimately still contain one -- see collectGenetics.ts's
+        // corrected note on this) silently made this whole function throw "decompress pseudo-points
+        // before generating moves", which computeLReachable's caller then swallowed into an empty L
+        // set. Mirror childrenAllWithMoveTag's own fix for the exact same class of bug: decompress
+        // before enumerating/applying moves. Component count and (for any region/boundary that isn't
+        // itself the one being expanded) region/boundary/token indices are unchanged by decompression
+        // (interior regions are only ever APPENDED after existing ones) -- ensure()/valuing above
+        // intentionally still uses the original `p`, matching every sibling function's pattern.
+        const Position d = p.decompressed();
+        const Component& c = d.components[static_cast<std::size_t>(component)];
 
         std::string out = "{\"ok\":true,\"children\":[";
         bool first = true;
@@ -478,7 +490,7 @@ std::string regionMovesTrackedJson(const std::string& enc, int component, int re
                 continue;
             if (mv.i != token && mv.j != token)
                 continue;
-            emit(applyEnclosure(p, static_cast<std::size_t>(component), mv),
+            emit(applyEnclosure(d, static_cast<std::size_t>(component), mv),
                  MoveTag{MoveKind::Enclosure, static_cast<std::size_t>(component), mv.region, mv.boundary,
                          mv.mask, 0, 0, mv.i, mv.j});
         }
@@ -489,7 +501,7 @@ std::string regionMovesTrackedJson(const std::string& enc, int component, int re
                                   (static_cast<int>(mv.b2) == boundary && mv.j == token);
             if (!touches)
                 continue;
-            emit(applyJoin(p, static_cast<std::size_t>(component), mv),
+            emit(applyJoin(d, static_cast<std::size_t>(component), mv),
                  MoveTag{MoveKind::Join, static_cast<std::size_t>(component), mv.region, 0, 0, mv.b1, mv.b2,
                          mv.i, mv.j});
         }
@@ -537,15 +549,22 @@ std::string allMovesTrackedJson(const std::string& enc) {
         // (deduped-away) move would have preserved it and, by the same symmetry, matches just as well.
         // See collectGenetics.ts's analyzeTEntry, the caller this exists for (the Grandparent Bypass
         // grandchild retrace).
-        for (std::size_t k = 0; k < p.components.size(); ++k) {
-            if (p.components[k].dead)
+        //
+        // Decompress before enumerating, same fix and same reason as regionMovesTrackedJson just
+        // above: enclosureMoves/joinMoves throw outright if ANY boundary of the component still holds
+        // a compressed pseudo-point. The caller (analyzeTEntry) is documented to always pass an
+        // already-decompressed `enc`, so this is normally a no-op, but doing it unconditionally here
+        // too costs nothing and removes the same latent failure mode for good.
+        const Position d = p.decompressed();
+        for (std::size_t k = 0; k < d.components.size(); ++k) {
+            if (d.components[k].dead)
                 continue;
-            const Component& c = p.components[k];
+            const Component& c = d.components[k];
             for (const auto& mv : enclosureMoves(c))
-                emit(applyEnclosure(p, k, mv),
+                emit(applyEnclosure(d, k, mv),
                      MoveTag{MoveKind::Enclosure, k, mv.region, mv.boundary, mv.mask, 0, 0, mv.i, mv.j});
             for (const auto& mv : joinMoves(c))
-                emit(applyJoin(p, k, mv),
+                emit(applyJoin(d, k, mv),
                      MoveTag{MoveKind::Join, k, mv.region, 0, 0, mv.b1, mv.b2, mv.i, mv.j});
         }
 

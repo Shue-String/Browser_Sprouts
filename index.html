@@ -562,6 +562,7 @@
         max-height: 640px;
         display: flex;
         flex-direction: column;
+        position: relative;
       }
       #collect-search-input {
         flex: none;
@@ -629,12 +630,28 @@
       .collect-code-table td.nimset { font: 13px/1.4 monospace; }
       .collect-code-table tr.pending td { color: #aaa; font-style: italic; }
       .collect-t-cell { font: 12px/1.4 monospace; }
-      .collect-t-row { display: flex; align-items: baseline; gap: 8px; padding: 1px 0; }
+      .collect-t-row { display: flex; align-items: baseline; gap: 8px; padding: 1px 3px; border-radius: 3px; }
       .collect-t-label { flex: 1; min-width: 0; word-break: break-all; }
       .collect-t-nimber { flex: none; text-align: right; opacity: 0.65; }
       .collect-bypass { color: #c0392b; font-weight: bold; }
       .collect-t-pending { color: #888; font-style: italic; }
       .collect-empty { color: #888; font: 13px/1.5 system-ui, sans-serif; padding: 20px 4px; }
+      .collect-t-row.collect-t-clickable { cursor: pointer; }
+      .collect-t-row.collect-t-clickable:hover { background: #eee; }
+      #collect-t-tooltip {
+        position: absolute;
+        display: none;
+        background: #333;
+        color: #fff;
+        padding: 5px 9px;
+        border-radius: 4px;
+        font: 11px/1.4 monospace;
+        white-space: nowrap;
+        pointer-events: none;
+        z-index: 200;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      }
+      #collect-t-tooltip.visible { display: block; }
 
       /* browser-style chrome row: back / forward / address / close */
       #pb-chrome { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
@@ -1196,6 +1213,7 @@
           <div class="collect-list" id="collect-list"></div>
           <div class="collect-detail" id="collect-detail"></div>
         </div>
+        <div id="collect-t-tooltip"></div>
       </div>
     </div>
 

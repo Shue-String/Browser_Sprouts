@@ -43,6 +43,7 @@ import {
   classifyChildrenByDisaPoint,
   analyzeTEntry,
   toDisplayForm,
+  computeGeneticCode,
   type DisaPointRef,
   type DisaGeneticCode,
   type TPositionMark,
@@ -61,6 +62,14 @@ interface TEntry {
   label: string;
   nimber: number;
   bypass: boolean;
+  /** Set only when this T-move child is itself a genuine DisaPoint (mark.kind === 'disapoint',
+   * the "T" -- not "T'" -- case): `enc` (compressed, matching toDisplayForm's coordinate space)
+   * and `dpIndex` (its ordinal in findDisaPoints(parseEncoding(enc))) are what hovering/clicking
+   * need to compute its own (L,R,D) genome on demand -- see computeTEntryGenome. */
+  enc?: string;
+  dpIndex?: number;
+  /** Cached result of computeTEntryGenome, so repeat hovers/clicks don't recompute it. */
+  genome?: DisaGeneticCode;
 }
 
 /** Render one T/T'-move child in canon form (brackets + ⊕), with the surviving DisaPoint (or, in
@@ -119,7 +128,7 @@ let history: Entry[] = [];
 let activeLabel: string | null = null;
 let searchGen = 0;
 
-const HISTORY_STORAGE_KEY = 'sprouts-collect-variations-v6';
+const HISTORY_STORAGE_KEY = 'sprouts-collect-variations-v7';
 
 function saveHistory(): void {
   try {
@@ -227,7 +236,12 @@ async function computeTAndTPrime(
     tChildren.map(async tChild => {
       const { enc, mark, bypass } = await analyzeTEntry(canonText, dp, tChild, rootCode);
       const display = await toDisplayForm(enc, mark);
-      const entry: TEntry = { label: formatTPosition(display.enc, display.mark), nimber: tChild.nimber, bypass };
+      const entry: TEntry = {
+        label: formatTPosition(display.enc, display.mark),
+        nimber: tChild.nimber,
+        bypass,
+        ...(display.mark.kind === 'disapoint' ? { enc: display.enc, dpIndex: display.mark.index } : {}),
+      };
       return { mark, entry };
     }),
   );
@@ -235,6 +249,54 @@ async function computeTAndTPrime(
     T: classified.filter(c => c.mark.kind !== 'isolated').map(c => c.entry),
     Tprime: classified.filter(c => c.mark.kind === 'isolated').map(c => c.entry),
   };
+}
+
+/** (L,R,D) genome of a "T" entry's own surviving DisaPoint, computed on first hover/click and
+ * cached on the TEntry itself. Returns null for entries that aren't a genuine DisaPoint (T' rows,
+ * and T rows where the tracked point didn't survive at all -- see TEntry's enc/dpIndex doc). */
+async function computeTEntryGenome(t: TEntry): Promise<DisaGeneticCode | null> {
+  if (t.genome) return t.genome;
+  if (t.enc === undefined || t.dpIndex === undefined) return null;
+  const dp = findDisaPoints(parseEncoding(t.enc))[t.dpIndex];
+  if (!dp) return null;
+  const genome = await computeGeneticCode(t.enc, dp);
+  t.genome = genome;
+  return genome;
+}
+
+/** Build a (T/T'-pending) Entry from a T-row's own genome, mirroring buildGenomeEntry -- same
+ * lazy-T/T' shape, just sourced from a T-move child instead of a GENOME_DB hit. */
+function buildEntryFromTEntry(t: TEntry, genome: DisaGeneticCode): Entry {
+  return {
+    label: t.label,
+    nimber: t.nimber,
+    L: genome.L,
+    R: genome.R,
+    D: genome.D,
+    T: [],
+    Tprime: [],
+    tComputed: false,
+    sourceEnc: t.enc,
+    sourceDpIndex: t.dpIndex,
+  };
+}
+
+/** Clicking a "T" row: reuse the existing history entry if this position's already in the list
+ * (keeping any T/T' it already computed), otherwise add a fresh lazy entry for it. Either way it
+ * becomes the active (open) entry so its full genome is visible. */
+async function selectTEntry(t: TEntry): Promise<void> {
+  const existing = history.find(h => h.label === t.label);
+  if (existing) {
+    addToHistory(existing);
+    activeLabel = existing.label;
+    render();
+    return;
+  }
+  const genome = await computeTEntryGenome(t);
+  if (!genome) return;
+  addToHistory(buildEntryFromTEntry(t, genome));
+  activeLabel = t.label;
+  render();
 }
 
 /** Full genetic-code entry for one DisaPoint of an already-analyzed position (the manual-search path). */
@@ -353,6 +415,9 @@ function loadGenome(raw: string): void {
     return;
   }
 
+  // A genome search replaces the list rather than appending to it, so it's always clear that
+  // every entry on screen shares this exact genome (anything looked at afterward re-appends normally).
+  history = [];
   const entries = hits.map(hit => buildGenomeEntry(hit, parsedGenome.L, parsedGenome.R, parsedGenome.D));
   for (let i = entries.length - 1; i >= 0; i--) addToHistory(entries[i]);
   activeLabel = entries[0].label;
@@ -416,6 +481,76 @@ async function runSearch(raw: string): Promise<void> {
   render();
 }
 
+function fmtGenome(g: DisaGeneticCode): string {
+  return `L=${fmtSet(g.L)}  R=${fmtNimber(g.R)}  D=${fmtNimber(g.D)}`;
+}
+
+/** Bumped on every hide/re-show so a genome fetch that resolves after the pointer has moved on
+ * doesn't overwrite a newer (or absent) tooltip. */
+let tooltipGen = 0;
+
+function hideTTooltip(): void {
+  tooltipGen++;
+  const tip = document.getElementById('collect-t-tooltip');
+  if (tip) tip.classList.remove('visible');
+}
+
+function showTTooltip(row: HTMLElement, t: TEntry): void {
+  const myGen = ++tooltipGen;
+  const tip = document.getElementById('collect-t-tooltip');
+  const dialog = document.getElementById('collect-dialog');
+  if (!tip || !dialog) return;
+
+  const rowRect = row.getBoundingClientRect();
+  const dialogRect = dialog.getBoundingClientRect();
+  tip.style.left = `${rowRect.left - dialogRect.left}px`;
+  tip.style.top = `${rowRect.bottom - dialogRect.top + 4}px`;
+  tip.textContent = t.genome ? fmtGenome(t.genome) : 'computing…';
+  tip.classList.add('visible');
+
+  if (!t.genome) {
+    void computeTEntryGenome(t).then(genome => {
+      if (myGen !== tooltipGen || !genome) return;
+      tip.textContent = fmtGenome(genome);
+    });
+  }
+}
+
+/** Render one T/T' cell's rows as real DOM nodes (not an HTML string) so entries whose tracked
+ * point is still a genuine DisaPoint (enc/dpIndex set -- see TEntry) can be hovered for their own
+ * (L,R,D) genome and clicked to open/add them as a variation in their own right. */
+function renderTCell(container: HTMLElement, list: TEntry[]): void {
+  container.innerHTML = '';
+  if (list.length === 0) {
+    container.textContent = '(none)';
+    return;
+  }
+  for (const t of list) {
+    const row = document.createElement('div');
+    row.className = 'collect-t-row';
+
+    const label = document.createElement('span');
+    label.className = 'collect-t-label';
+    label.innerHTML = t.label + (t.bypass ? ' <span class="collect-bypass">?</span>' : '');
+
+    const nimber = document.createElement('span');
+    nimber.className = 'collect-t-nimber';
+    nimber.textContent = String(t.nimber);
+
+    row.appendChild(label);
+    row.appendChild(nimber);
+
+    if (t.enc !== undefined && t.dpIndex !== undefined) {
+      row.classList.add('collect-t-clickable');
+      row.addEventListener('mouseenter', () => showTTooltip(row, t));
+      row.addEventListener('mouseleave', hideTTooltip);
+      row.addEventListener('click', () => void selectTEntry(t));
+    }
+
+    container.appendChild(row);
+  }
+}
+
 function renderDetail(): void {
   const detailEl = document.getElementById('collect-detail') as HTMLDivElement;
   const entry = history.find(h => h.label === activeLabel) ?? null;
@@ -431,18 +566,8 @@ function renderDetail(): void {
     });
   }
 
-  const tRows = (list: TEntry[]): string =>
-    list.length === 0
-      ? '(none)'
-      : list
-          .map(
-            t =>
-              `<div class="collect-t-row"><span class="collect-t-label">${t.label}${t.bypass ? ' <span class="collect-bypass">?</span>' : ''}</span><span class="collect-t-nimber">${t.nimber}</span></div>`,
-          )
-          .join('');
-
-  const tCell = entry.tComputed ? tRows(entry.T) : '<span class="collect-t-pending">computing…</span>';
-  const tpCell = entry.tComputed ? tRows(entry.Tprime) : '<span class="collect-t-pending">computing…</span>';
+  const tCell = entry.tComputed ? '' : '<span class="collect-t-pending">computing…</span>';
+  const tpCell = entry.tComputed ? '' : '<span class="collect-t-pending">computing…</span>';
 
   detailEl.innerHTML = `
     <div class="collect-detail-enc">${entry.label}</div>
@@ -451,15 +576,25 @@ function renderDetail(): void {
       <tr><td>L</td><td class="nimset">${fmtSet(entry.L)}</td></tr>
       <tr><td>R</td><td class="nimset">${fmtNimber(entry.R)}</td></tr>
       <tr><td>D</td><td class="nimset">${fmtNimber(entry.D)}</td></tr>
-      <tr><td>T</td><td class="collect-t-cell">${tCell}</td></tr>
-      <tr><td>T'</td><td class="collect-t-cell">${tpCell}</td></tr>
+      <tr><td>T</td><td class="collect-t-cell" id="collect-t-cell">${tCell}</td></tr>
+      <tr><td>T'</td><td class="collect-t-cell" id="collect-tprime-cell">${tpCell}</td></tr>
     </table>
   `;
+
+  if (entry.tComputed) {
+    const tEl = document.getElementById('collect-t-cell');
+    const tpEl = document.getElementById('collect-tprime-cell');
+    if (tEl) renderTCell(tEl, entry.T);
+    if (tpEl) renderTCell(tpEl, entry.Tprime);
+  }
 }
 
 function render(): void {
   const listEl = document.getElementById('collect-list') as HTMLDivElement;
   const statusEl = document.getElementById('collect-status') as HTMLDivElement;
+
+  // Any full re-render invalidates the row a shown tooltip is anchored to.
+  hideTTooltip();
 
   statusEl.textContent = status;
   statusEl.classList.toggle('error', statusIsError);
