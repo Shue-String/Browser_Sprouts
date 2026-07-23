@@ -366,15 +366,14 @@ async function analyzeCached(inputText: string): Promise<{ result: View; canonEn
 // --- rendering ------------------------------------------------------------------------------
 
 /**
- * Whether the Canon Encoding field would just duplicate the panel's own "live position
- * encoding" row (see main.ts) directly above #pb-body. That row always tracks the live game
- * position — not necessarily whatever's browsed — so this is only true in the wide panel
- * while showing the live position; navigating away (or the narrow modal) still needs the
- * field since nothing else displays the browsed position's canon there.
+ * Whether the Canon Encoding field would just duplicate the panel's own live-encoding row (see
+ * main.ts, directly above #pb-body). That row tracks whatever's currently browsed — the live
+ * game position while synced/showing live, the browsed position's own canon otherwise — so it's
+ * always redundant with this field while in the wide panel. The narrow modal has no such row,
+ * so it still needs the field.
  */
 function canonFieldRedundant(): boolean {
-  const inPanel = document.getElementById('position-browser-panel')?.classList.contains('wide') ?? false;
-  return inPanel && isShowingLive();
+  return document.getElementById('position-browser-panel')?.classList.contains('wide') ?? false;
 }
 
 /** Clear the notification area (called at the start of every render). */
@@ -1092,4 +1091,11 @@ export function notifyLivePosition(inputText: string): Promise<void> {
 /** Whether the currently-browsed position is the one notifyLivePosition last reported. */
 export function isShowingLive(): boolean {
   return lastLiveInput !== null && history[index]?.inputText === lastLiveInput;
+}
+
+/** The currently-browsed history entry's canonical encoding (''  if unparseable/unavailable, or
+ *  before any navigation has happened). Lets the wide panel's live-encoding row (main.ts) show
+ *  whatever's actually on screen instead of always the live game, once free-browsing away from it. */
+export function currentBrowsedCanon(): string {
+  return history[index]?.canonEnc ?? '';
 }

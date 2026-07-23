@@ -30,7 +30,7 @@ import { computeJunctionVoronoiPath } from './model/voronoiJunctionPath';
 import { buildSubregionHighlight } from './model/subregionHighlight';
 import { serializeGameState, deserializeGameState } from './model/saveState';
 import type { SaveFileV1 } from './model/saveState';
-import { openPositionBrowser, ensureWired as ensureBrowserWired, notifyLivePosition, isShowingLive, onNavigated, setMoveCallbacks, setSyncCallbacks, onSyncModeChange, isSyncMode, setSyncMode, setSyncToggleEnabled, updateNavButtons } from './ui/positionBrowser';
+import { openPositionBrowser, ensureWired as ensureBrowserWired, notifyLivePosition, isShowingLive, currentBrowsedCanon, onNavigated, setMoveCallbacks, setSyncCallbacks, onSyncModeChange, isSyncMode, setSyncMode, setSyncToggleEnabled, updateNavButtons } from './ui/positionBrowser';
 import { TrackedGame } from './engine/trackedGame';
 import type { MovePreviewTarget } from './ui/positionBrowser';
 import { initGuide } from './ui/guide';
@@ -2238,6 +2238,58 @@ function wrapCanonDisplay(text: string, charInfo: EncodingResult['charInfo']): {
   return { text: outChars.join(''), charInfo: outInfo };
 }
 
+/**
+ * Compute the display text + per-character hover provenance for a live-position canon-encoding
+ * view (the bottom bar's #bottom-bar-text and the wide Position Browser's #pb-live-encoding both
+ * want this). Prefers the WASM engine's true COMPACT canonical form (canonSync -> canon.cpp's
+ * canonicalize(), with Hollow/Split/Triplet pseudo-point compression applied) so e.g. a hollow
+ * point "AB" collapses to a single numbered token instead of showing as two membrane letters. We
+ * separately compute the *decompressed* canonical form with per-character vertex provenance
+ * (canonicalizeTrackedProvenanceSync) so mouseover can highlight the corresponding board point —
+ * provenance only survives when the compact form happens to equal the decompressed form (no
+ * compression fired this frame); when compression collapses/reorders characters there's no clean
+ * 1:1 mapping back to individual vertices any more, so hover is dropped for that render. Falls
+ * back to the raw (non-canonical, but always-available) encodePosition() text when the module
+ * isn't loaded yet (see canonSync's "load timing isn't guaranteed" note) or canonicalization
+ * fails entirely.
+ */
+function computeLiveEncodingDisplay(state: GameState, enc: EncodingResult): { text: string; charInfo: EncodingResult['charInfo'] } {
+  const decomposed = encodePositionDecompressed(state);
+  const tracked = canonicalizeTrackedProvenanceSync(decomposed.text);
+  // tracked.src indexes are TOKEN-sequential (one per real token, in the same
+  // component/region/boundary/token walk order the engine parses `decomposed.text` into) —
+  // both ends skip punctuation ('[',']','|',',',' ','⊕' on the input side; ','/'|'/'+' on the
+  // output side), unlike decomposed.charInfo/tracked.enc which have one slot per character
+  // including punctuation. Build a punctuation-free view of decomposed's tokens to index by
+  // src, then re-expand per output character, inserting an empty entry for each separator.
+  const decompLiveText = tracked ? tracked.enc : enc.text;
+  const decompLiveCharInfo: EncodingResult['charInfo'] = tracked
+    ? (() => {
+        const decomposedTokens = decomposed.text
+          .split('')
+          .map((ch, i) => ({ ch, info: decomposed.charInfo[i] }))
+          .filter(({ ch }) => !'[]|, ⊕'.includes(ch))
+          .map(({ info }) => info);
+        let next = 0;
+        return decompLiveText.split('').map(ch =>
+          ',|+'.includes(ch) ? { vertexIds: [] } : decomposedTokens[tracked.src[next++]],
+        );
+      })()
+    : enc.charInfo;
+  const compact = canonSync(enc.text);
+  const rawLiveText = compact ?? decompLiveText;
+  const rawLiveCharInfo: EncodingResult['charInfo'] = compact
+    ? (compact === decompLiveText
+        ? decompLiveCharInfo
+        : compact.split('').map(() => ({ vertexIds: [] })))
+    : decompLiveCharInfo;
+  // rawLiveText only needs bracket-wrapping when it came from the WASM engine (compact or
+  // tracked.enc), which emits brackets/⊕ neither for — the encodePosition() fallback already
+  // has them (see the ⊕/[] delimiter key in encoding.ts).
+  const needsWrap = compact !== null || tracked !== null;
+  return needsWrap ? wrapCanonDisplay(rawLiveText, rawLiveCharInfo) : { text: rawLiveText, charInfo: rawLiveCharInfo };
+}
+
 function boundaryListing(state: { regions: Map<number, { id: number; isDead: boolean; isOuter: boolean; boundaries: { entries: { vertexId: number; side: string }[] }[] }> }): string {
   const lines: string[] = [];
   for (const r of state.regions.values()) {
@@ -2662,53 +2714,17 @@ function frameBody(now: number): void {
       const enc = encodePosition(state);
       if (showPointEncodings) vertexLabels = enc.vertexSymbols;
       if (isWide) {
-        // The panel's live-encoding row should show the WASM engine's true COMPACT canonical form
-        // (canonSync -> canon.cpp's canonicalize(), with Hollow/Split/Triplet pseudo-point
-        // compression applied), so e.g. a hollow point "AB" collapses to a single numbered token
-        // instead of showing as two membrane letters. We separately compute the *decompressed*
-        // canonical form with per-character vertex provenance (canonicalizeTrackedProvenanceSync)
-        // so mouseover can highlight the corresponding board point — provenance only survives when
-        // the compact form happens to equal the decompressed form (no compression fired this frame);
-        // when compression collapses/reorders characters there's no clean 1:1 mapping back to
-        // individual vertices any more, so hover is dropped for that render. Falls back to the raw
-        // (non-canonical, but always-available) encodePosition() text when the module isn't loaded
-        // yet or canonicalization fails entirely.
-        const decomposed = encodePositionDecompressed(state);
-        const tracked = canonicalizeTrackedProvenanceSync(decomposed.text);
-        // tracked.src indexes are TOKEN-sequential (one per real token, in the same
-        // component/region/boundary/token walk order the engine parses `decomposed.text` into) —
-        // both ends skip punctuation ('[',']','|',',',' ','⊕' on the input side; ','/'|'/'+' on the
-        // output side), unlike decomposed.charInfo/tracked.enc which have one slot per character
-        // including punctuation. Build a punctuation-free view of decomposed's tokens to index by
-        // src, then re-expand per output character, inserting an empty entry for each separator.
-        const decompLiveText = tracked ? tracked.enc : enc.text;
-        const decompLiveCharInfo: EncodingResult['charInfo'] = tracked
-          ? (() => {
-              const decomposedTokens = decomposed.text
-                .split('')
-                .map((ch, i) => ({ ch, info: decomposed.charInfo[i] }))
-                .filter(({ ch }) => !'[]|, ⊕'.includes(ch))
-                .map(({ info }) => info);
-              let next = 0;
-              return decompLiveText.split('').map(ch =>
-                ',|+'.includes(ch) ? { vertexIds: [] } : decomposedTokens[tracked.src[next++]],
-              );
-            })()
-          : enc.charInfo;
-        const compact = canonSync(enc.text);
-        const rawLiveText = compact ?? decompLiveText;
-        const rawLiveCharInfo: EncodingResult['charInfo'] = compact
-          ? (compact === decompLiveText
-              ? decompLiveCharInfo
-              : compact.split('').map(() => ({ vertexIds: [] })))
-          : decompLiveCharInfo;
-        // rawLiveText only needs bracket-wrapping when it came from the WASM engine (compact or
-        // tracked.enc), which emits brackets/⊕ neither for — the encodePosition() fallback already
-        // has them (see the ⊕/[] delimiter key in encoding.ts).
-        const needsWrap = compact !== null || tracked !== null;
-        const { text: liveText, charInfo: liveCharInfo } = needsWrap
-          ? wrapCanonDisplay(rawLiveText, rawLiveCharInfo)
-          : { text: rawLiveText, charInfo: rawLiveCharInfo };
+        // This row tracks whatever's actually on screen in the panel: the live game position
+        // while synced/showing live (full hover-to-canvas provenance, via computeLiveEncodingDisplay),
+        // or — once free-browsing away from it — the browsed position's own canon encoding. The
+        // browsed position is a bare encoding string with no backing GameState, so there's no
+        // geometry to hover-highlight against; it renders as plain (unhoverable) text instead.
+        const browsedCanon = isShowingLive() ? null : currentBrowsedCanon();
+        const { text: liveText, charInfo: liveCharInfo } = browsedCanon === null
+          ? computeLiveEncodingDisplay(state, enc)
+          : browsedCanon
+            ? wrapCanonDisplay(browsedCanon, browsedCanon.split('').map(() => ({ vertexIds: [] })))
+            : { text: '(none)', charInfo: [] };
         lastLiveCharInfo = liveCharInfo;
         pbLiveEncoding.innerHTML = '';
         liveText.split('').forEach((ch, idx) => {
@@ -2726,23 +2742,7 @@ function frameBody(now: number): void {
         // Keep the back/forward arrows' enabled state in step with the game's undo/redo stacks.
         updateNavButtons();
       } else if (showPosition) {
-        // The bottom-bar position display shows the WASM engine's true COMPACT canonical form
-        // (canonSync -> canon.cpp's canonicalize(), with Hollow/Split/Triplet pseudo-point
-        // compression applied) rather than the raw per-vertex encodePosition() text, so e.g. a
-        // hollow point "AB" collapses to a single numbered token instead of showing as two
-        // membrane letters. Compression merges/reorders characters, so there's no 1:1 mapping back
-        // to individual vertices any more — mouseover highlighting is dropped unconditionally for
-        // this view (the wide panel above bothers to preserve it when compact happens to equal
-        // decompressed; this simpler view doesn't). Falls back to the raw text when the module
-        // isn't loaded yet or canonicalization fails.
-        const canon = canonSync(enc.text);
-        const rawLiveText = canon ?? enc.text;
-        const rawCharInfo = canon ? rawLiveText.split('').map(() => ({ vertexIds: [] })) : enc.charInfo;
-        // Only the WASM-engine canon() text is bracket/⊕-less; the encodePosition() fallback
-        // already carries them (see the ⊕/[] delimiter key in encoding.ts).
-        const { text: liveText, charInfo: liveCharInfo } = canon
-          ? wrapCanonDisplay(rawLiveText, rawCharInfo)
-          : { text: rawLiveText, charInfo: rawCharInfo };
+        const { text: liveText, charInfo: liveCharInfo } = computeLiveEncodingDisplay(state, enc);
         lastCharInfo = liveCharInfo;
         bottomBarText.innerHTML = '';
         liveText.split('').forEach((ch, idx) => {
