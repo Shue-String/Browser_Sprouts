@@ -208,6 +208,108 @@ export async function analyze(enc: string): Promise<AnalysisResult> {
   }
 }
 
+/** Result of childrenTracked: same per-child shape (and real values) as analyze(). */
+export type ChildrenTrackedResult =
+  | { ok: true; children: ChildInfo[] }
+  | { ok: false; reason: 'parse-error' | 'too-large' | 'engine-unavailable'; message?: string };
+
+/**
+ * Children of `enc`'s LITERAL parsed structure, with move (region/boundary/i/j) indices guaranteed
+ * to match that same literal structure -- unlike analyze(), which canonicalizes `enc` first and can
+ * silently recompress a Hollow/Split/Triplet organ, shifting region/boundary numbering out from
+ * under a caller retracing moves against the original decompressed text (see applyMoveTracked and
+ * collectGenetics.ts's analyzeTEntry, the reason this exists: analyzeTEntry must enumerate a tracked
+ * T-child's own children in the SAME coordinate space as its decompressed enc + parallel provenance,
+ * which analyze() cannot guarantee once a compressible organ is present). `enc` must already be
+ * decompressed (no pseudo-points). Children are fully valued (real nimbers), same as analyze()'s.
+ * Never rejects (an oversized `enc` comes back as an ordinary 'too-large' ok:false, not a throw).
+ */
+export async function childrenTracked(enc: string): Promise<ChildrenTrackedResult> {
+  let mod: StalksModule;
+  try {
+    mod = await getModule();
+  } catch {
+    return { ok: false, reason: 'engine-unavailable', message: 'Stalks engine not built yet.' };
+  }
+  try {
+    return JSON.parse(mod.childrenTracked(enc)) as ChildrenTrackedResult;
+  } catch (e) {
+    return { ok: false, reason: 'parse-error', message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Result of regionMovesTracked: same per-child shape (and real values) as childrenTracked. */
+export type RegionMovesResult =
+  | { ok: true; children: ChildInfo[] }
+  | { ok: false; reason: 'bad-move' | 'engine-error' | 'too-large' | 'parse-error' | 'engine-unavailable'; message?: string };
+
+/**
+ * Every legal move of `enc`'s component `component` touching the token at (region, boundary,
+ * token) -- e.g. a DisaPoint's own occurrence -- valued the same way childrenTracked's children
+ * are. `enc` must already be decompressed (no pseudo-points), same convention as childrenTracked.
+ *
+ * This is the ground-truth replacement for collectGenetics.ts's old "L-move" detection, which
+ * guessed by transplanting a MoveTag analyze()'s own (deduped) children list happened to keep onto
+ * the target's region and hoping the boundary indices lined up -- unsound whenever a real L-move's
+ * result coincided with a differently-shaped-but-isomorphic move elsewhere in the position (only
+ * one MoveTag survives analyze()'s dedup-by-result either way, so the transplant had nothing to
+ * find). Enumerating the target's own legal moves directly here needs no such correspondence.
+ * Never rejects.
+ */
+export async function regionMovesTracked(
+  enc: string,
+  component: number,
+  region: number,
+  boundary: number,
+  token: number,
+): Promise<RegionMovesResult> {
+  let mod: StalksModule;
+  try {
+    mod = await getModule();
+  } catch {
+    return { ok: false, reason: 'engine-unavailable', message: 'Stalks engine not built yet.' };
+  }
+  try {
+    return JSON.parse(mod.regionMovesTracked(enc, component, region, boundary, token)) as RegionMovesResult;
+  } catch (e) {
+    return { ok: false, reason: 'parse-error', message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Result of allMovesTracked: same per-child shape (and real values) as childrenTracked. */
+export type AllMovesResult =
+  | { ok: true; children: ChildInfo[] }
+  | { ok: false; reason: 'engine-error' | 'too-large' | 'parse-error' | 'engine-unavailable'; message?: string };
+
+/**
+ * Every legal move of `enc`'s ENTIRE position, across every component, valued the same way
+ * childrenTracked's children are -- but, unlike childrenTracked, NOT deduped by canonical result.
+ * `enc` must already be decompressed (no pseudo-points), same convention as childrenTracked.
+ *
+ * childrenTracked/analyze() dedupe children by canonical-result (`seen.insert(serialize(child))`
+ * in childrenAllWithMoveTag), keeping only the first move reaching any given canonical outcome.
+ * That's correct for "list this position's children" but wrong for a Grandparent Bypass grandchild
+ * retrace: when two moves are canonically identical because of a genuine structural symmetry (e.g.
+ * two isomorphic detached-pair regions, each self-enclosable to the same canonical result), only
+ * one survives dedup, and if that one doesn't happen to be the move preserving the caller's tracked
+ * token, the retrace wrongly concludes "target didn't survive" -- even though the OTHER
+ * (deduped-away) move preserves it and, by the same symmetry, matches just as well. See
+ * collectGenetics.ts's analyzeTEntry, the caller this exists for. Never rejects.
+ */
+export async function allMovesTracked(enc: string): Promise<AllMovesResult> {
+  let mod: StalksModule;
+  try {
+    mod = await getModule();
+  } catch {
+    return { ok: false, reason: 'engine-unavailable', message: 'Stalks engine not built yet.' };
+  }
+  try {
+    return JSON.parse(mod.allMovesTracked(enc)) as AllMovesResult;
+  } catch (e) {
+    return { ok: false, reason: 'parse-error', message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** Engine-unavailable error, shared by the on-demand entry points. */
 function unavailable(): AnalysisErr {
   return {

@@ -28,10 +28,6 @@
  * Limited to positions with 8 or fewer lives (counting each DisaPoint as one life) for now — see
  * the user's spec: beyond that the engine falls back to on-demand quick-canon nimber lookups,
  * which this feature doesn't attempt to handle yet.
- *
- * Known gap: when a search position has multiple structurally-identical components, the engine's
- * children list dedupes isomorphic results, which can make one DisaPoint's L-set look emptier
- * than a symmetric sibling DisaPoint's — see collectGenetics.ts's lMoveNimbers doc.
  */
 
 import { analyze, type ChildInfo } from '../engine/stalks';
@@ -46,6 +42,7 @@ import {
   lMoveNimbersRobust,
   classifyChildrenByDisaPoint,
   analyzeTEntry,
+  toDisplayForm,
   type DisaPointRef,
   type DisaGeneticCode,
   type TPositionMark,
@@ -122,7 +119,7 @@ let history: Entry[] = [];
 let activeLabel: string | null = null;
 let searchGen = 0;
 
-const HISTORY_STORAGE_KEY = 'sprouts-collect-variations-v3';
+const HISTORY_STORAGE_KEY = 'sprouts-collect-variations-v6';
 
 function saveHistory(): void {
   try {
@@ -229,7 +226,8 @@ async function computeTAndTPrime(
   const classified = await Promise.all(
     tChildren.map(async tChild => {
       const { enc, mark, bypass } = await analyzeTEntry(canonText, dp, tChild, rootCode);
-      const entry: TEntry = { label: formatTPosition(enc, mark), nimber: tChild.nimber, bypass };
+      const display = await toDisplayForm(enc, mark);
+      const entry: TEntry = { label: formatTPosition(display.enc, display.mark), nimber: tChild.nimber, bypass };
       return { mark, entry };
     }),
   );
@@ -249,7 +247,7 @@ async function computeEntry(
   display: string,
 ): Promise<Entry> {
   const parsed = parseEncoding(canonText);
-  const L = await lMoveNimbersRobust(canonText, children, dp);
+  const L = await lMoveNimbersRobust(canonText, dp);
   const rEnc = buildRemoveEncoding(parsed, dp);
   const dEnc = buildReplaceEncoding(parsed, dp);
   const [rRes, dRes] = await Promise.all([analyze(rEnc), analyze(dEnc)]);

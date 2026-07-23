@@ -403,6 +403,162 @@ std::string canonOnly(const std::string& enc) {
     return serialize(canonicalize(parsePosition(enc)));
 }
 
+std::string childrenTrackedJson(const std::string& enc) {
+    try {
+        const Position p = parsePosition(enc);
+        if (maxSubLives2(p) > kMaxLives2) {
+            std::string err = "{\"ok\":false,\"reason\":\"too-large\"}";
+            return err;
+        }
+        // ensure() builds (and values) the full subtree rooted at p's canonical form -- cheap at
+        // this size (see the kMaxLives2 gate above) and exactly what real nimbers here need, since
+        // valueOf only finds a position that's already a built node. Matches fullAnalysis's own
+        // pattern; the persistent exactGraph means a position reached from multiple callers (e.g.
+        // the same T-child explored by more than one DisaPoint) is only ever built once.
+        exactGraph().ensure(p);
+        const GameGraph& g = exactGraph();
+        std::string out = "{\"ok\":true,\"children\":[";
+        bool first = true;
+        for (const auto& [kid, tag] : childrenAllWithMoveTag(p)) {
+            if (!first)
+                out += ',';
+            first = false;
+            const Val v = valueOf(g, kid);
+            writeChild(out, serialize(kid), v, subposCount(kid), &tag);
+        }
+        out += "]}";
+        return out;
+    } catch (const EncodingError& e) {
+        std::string err = "{\"ok\":false,\"reason\":\"parse-error\",\"message\":";
+        jsonStr(err, e.what());
+        err += "}";
+        return err;
+    }
+}
+
+std::string regionMovesTrackedJson(const std::string& enc, int component, int region, int boundary, int token) {
+    try {
+        const Position p = parsePosition(enc);
+        if (component < 0 || static_cast<std::size_t>(component) >= p.components.size()) {
+            return "{\"ok\":false,\"reason\":\"bad-move\",\"message\":\"component index out of range\"}";
+        }
+        if (maxSubLives2(p) > kMaxLives2) {
+            return "{\"ok\":false,\"reason\":\"too-large\"}";
+        }
+        exactGraph().ensure(p);  // see childrenTrackedJson -- same valuing rationale
+        const GameGraph& g = exactGraph();
+        const Component& c = p.components[static_cast<std::size_t>(component)];
+
+        std::string out = "{\"ok\":true,\"children\":[";
+        bool first = true;
+        auto emit = [&](Position&& raw, const MoveTag& tag) {
+            Position child = canonicalize(raw);
+            child.validate();
+            const Val v = valueOf(g, child);
+            if (!first)
+                out += ',';
+            first = false;
+            writeChild(out, serialize(child), v, subposCount(child), &tag);
+        };
+
+        // enclosureMoves/joinMoves enumerate every legal move of the WHOLE component; filter down to
+        // the ones that touch (region, boundary, token) -- i.e. target's own DisaPoint occurrence.
+        // This is the ground-truth counterpart to the TS side's old "transplant a move the engine's
+        // own (deduped) children list happened to keep, and hope the boundary indices line up"
+        // approach, which silently missed an L-move whenever its result coincided with a
+        // differently-shaped-but-isomorphic move elsewhere in the position (the engine's children
+        // dedup keeps only the first-generated MoveTag for a given canonical result) -- e.g. joining
+        // a DisaPoint straight to a scab in its own region can land on the exact same position as
+        // self-enclosing its detached-pair region, and only one of those two MoveTags survives dedup.
+        // Enumerating directly here needs no such correspondence: every move that structurally
+        // touches the target token is included, however its resulting position happens to compare to
+        // anything else.
+        for (const auto& mv : enclosureMoves(c)) {
+            if (static_cast<int>(mv.region) != region || static_cast<int>(mv.boundary) != boundary)
+                continue;
+            if (mv.i != token && mv.j != token)
+                continue;
+            emit(applyEnclosure(p, static_cast<std::size_t>(component), mv),
+                 MoveTag{MoveKind::Enclosure, static_cast<std::size_t>(component), mv.region, mv.boundary,
+                         mv.mask, 0, 0, mv.i, mv.j});
+        }
+        for (const auto& mv : joinMoves(c)) {
+            if (static_cast<int>(mv.region) != region)
+                continue;
+            const bool touches = (static_cast<int>(mv.b1) == boundary && mv.i == token) ||
+                                  (static_cast<int>(mv.b2) == boundary && mv.j == token);
+            if (!touches)
+                continue;
+            emit(applyJoin(p, static_cast<std::size_t>(component), mv),
+                 MoveTag{MoveKind::Join, static_cast<std::size_t>(component), mv.region, 0, 0, mv.b1, mv.b2,
+                         mv.i, mv.j});
+        }
+
+        out += "]}";
+        return out;
+    } catch (const EncodingError& e) {
+        std::string err = "{\"ok\":false,\"reason\":\"engine-error\",\"message\":";
+        jsonStr(err, e.what());
+        err += "}";
+        return err;
+    }
+}
+
+std::string allMovesTrackedJson(const std::string& enc) {
+    try {
+        const Position p = parsePosition(enc);
+        if (maxSubLives2(p) > kMaxLives2) {
+            return "{\"ok\":false,\"reason\":\"too-large\"}";
+        }
+        exactGraph().ensure(p);
+        const GameGraph& g = exactGraph();
+
+        std::string out = "{\"ok\":true,\"children\":[";
+        bool first = true;
+        auto emit = [&](Position&& raw, const MoveTag& tag) {
+            Position child = canonicalize(raw);
+            child.validate();
+            const Val v = valueOf(g, child);
+            if (!first)
+                out += ',';
+            first = false;
+            writeChild(out, serialize(child), v, subposCount(child), &tag);
+        };
+
+        // Every legal Enclosure/Join move of every (non-dead) component, with NO dedup by canonical
+        // result -- unlike childrenTrackedJson/childrenAllWithMoveTag's `seen.insert(serialize(child))`,
+        // which keeps only the first MoveTag reaching any given canonical child. That dedup is correct
+        // for "list the children of this position" but wrong for retracing a SPECIFIC tracked token's
+        // provenance through a grandchild move: when two moves are canonically identical because of a
+        // genuine structural symmetry (e.g. two isomorphic detached-pair regions, each self-enclosable
+        // to the same canonical result), only one of the two keeps a MoveTag, and if that one doesn't
+        // happen to be the move that preserves the caller's tracked token, provenance-based bypass
+        // detection sees "target not found" and wrongly reports no match -- even though the OTHER
+        // (deduped-away) move would have preserved it and, by the same symmetry, matches just as well.
+        // See collectGenetics.ts's analyzeTEntry, the caller this exists for (the Grandparent Bypass
+        // grandchild retrace).
+        for (std::size_t k = 0; k < p.components.size(); ++k) {
+            if (p.components[k].dead)
+                continue;
+            const Component& c = p.components[k];
+            for (const auto& mv : enclosureMoves(c))
+                emit(applyEnclosure(p, k, mv),
+                     MoveTag{MoveKind::Enclosure, k, mv.region, mv.boundary, mv.mask, 0, 0, mv.i, mv.j});
+            for (const auto& mv : joinMoves(c))
+                emit(applyJoin(p, k, mv),
+                     MoveTag{MoveKind::Join, k, mv.region, 0, 0, mv.b1, mv.b2, mv.i, mv.j});
+        }
+
+        out += "]}";
+        return out;
+    } catch (const EncodingError& e) {
+        std::string err = "{\"ok\":false,\"reason\":\"engine-error\",\"message\":";
+        jsonStr(err, e.what());
+        err += "}";
+        return err;
+    }
+}
+
 namespace {
 
 // Parse + canonicalize, capturing a parse error as the shared JSON error string. On success returns

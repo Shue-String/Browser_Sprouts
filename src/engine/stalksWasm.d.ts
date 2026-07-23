@@ -12,6 +12,23 @@ export interface StalksModule {
   analyzeFull(enc: string): string;
   /** On-demand quick-canon nimber up to 16 lives; returns a QuickAnalysis JSON (see stalks.ts). */
   analyzeNimber(enc: string): string;
+  /**
+   * Children of `enc`'s LITERAL parsed structure (no canonicalize() pre-step, unlike analyze) --
+   * see childrenTrackedJson in analyze.cpp / stalks.ts. `enc` must already be decompressed.
+   */
+  childrenTracked(enc: string): string;
+  /**
+   * Every legal move of `enc`'s component `component` touching the token at (region, boundary,
+   * token), valued the same way -- see regionMovesTrackedJson in analyze.cpp / stalks.ts. `enc`
+   * must already be decompressed.
+   */
+  regionMovesTracked(enc: string, component: number, region: number, boundary: number, token: number): string;
+  /**
+   * Every legal move of `enc`'s ENTIRE position, across every component, valued the same way --
+   * unlike childrenTracked, NOT deduped by canonical result. See allMovesTrackedJson in
+   * analyze.cpp / stalks.ts. `enc` must already be decompressed.
+   */
+  allMovesTracked(enc: string): string;
   /** Canonicalize an encoding; returns the bracketless canonical serialization ("" on parse error). */
   canon(enc: string): string;
   /**

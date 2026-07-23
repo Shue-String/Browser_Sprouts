@@ -16,9 +16,11 @@ import {
   type MoveDescriptor,
   type MoveInfo,
   type PosSrc,
+  allMovesTracked,
   analyze,
   applyMoveTracked,
   canon,
+  regionMovesTracked,
 } from '../engine/stalks';
 
 export type ParsedBoundary = string[];
@@ -182,7 +184,8 @@ export function buildRemoveEncoding(components: ParsedComponent[], target: DisaP
  * (e.g. two isomorphic branches sharing a bridge) — the engine's children list dedupes isomorphic
  * outcomes and keeps only ONE representative MoveInfo, so a DisaPoint sitting in the "other" copy
  * never matches by index even though the same move genuinely applies to it. Use lMoveNimbersRobust
- * instead, which verifies via actual move application rather than trusting indices alone.
+ * instead, which enumerates target's own legal moves directly rather than matching against
+ * analyze()'s already-deduped children list at all.
  */
 export function lMoveNimbers(children: ChildInfo[], target: DisaPointRef): number[] {
   const out: number[] = [];
@@ -206,70 +209,29 @@ function untrackedSrc(components: ParsedComponent[]): PosSrc {
 }
 
 /**
- * Robust L: for each listed child, "transplant" its move onto `target`'s own region — same kind/
- * boundary(-ies)/mask, but re-rooted at target.region — and actually apply it via applyMoveTracked.
- * If the transplanted move touches target's own token AND its real result canonicalizes to the same
- * position as the listed child, that child's nimber genuinely is reachable from target, regardless
- * of whether the engine's dedup happened to keep a different (but isomorphic) region's MoveInfo.
- * `canonText` must be the SAME decompressed-canonical text `target` and `children` came from.
+ * Ground-truth L: every legal move (Enclosure or Join) of `target`'s own component that touches
+ * its own token, directly enumerated by the engine (regionMovesTracked) rather than guessed by
+ * transplanting a MoveTag analyze()'s children list happened to keep. `canonSet` (each result's own
+ * canon() text) lets a caller classify an ARBITRARY child as an L-move by membership, independent
+ * of which specific move reached it -- see classifyChildrenByDisaPoint, which needs exactly that.
+ * `nimbers` is deduped (L is a SET of reachable nimbers, per the genetic-code spec -- distinct legal
+ * moves landing on the same nimber, or even the same exact position, are common and shouldn't inflate
+ * it into a multiset). `canonText` must be decompressed, matching `target`'s (component,region,
+ * boundary,token) coordinates.
  */
-export async function lMoveNimbersRobust(
+export async function computeLReachable(
   canonText: string,
-  children: ChildInfo[],
   target: DisaPointRef,
-): Promise<number[]> {
-  const parsed = parseEncoding(canonText);
-  const src = untrackedSrc(parsed);
-  const regionData = parsed[target.component]?.[target.region];
-  if (!regionData) return [];
+): Promise<{ nimbers: number[]; canonSet: Set<string> }> {
+  const res = await regionMovesTracked(canonText, target.component, target.region, target.boundary, target.token);
+  if (!res.ok) return { nimbers: [], canonSet: new Set() };
+  const canons = await Promise.all(res.children.map(c => canon(c.enc)));
+  return { nimbers: [...new Set(res.children.map(c => c.nimber))], canonSet: new Set(canons) };
+}
 
-  const out: number[] = [];
-  for (const child of children) {
-    const move = child.move;
-    if (!move || move.kind === MoveKind.InteriorPseudo) continue;
-
-    let moveDesc: MoveDescriptor;
-    let touchesTarget: boolean;
-    if (move.kind === MoveKind.Enclosure) {
-      const bd = regionData[move.boundary];
-      if (!bd || move.i >= bd.length || move.j >= bd.length) continue;
-      touchesTarget =
-        move.boundary === target.boundary && (move.i === target.token || move.j === target.token);
-      if (!touchesTarget) continue;
-      moveDesc = {
-        kind: MoveKind.Enclosure,
-        component: target.component,
-        region: target.region,
-        boundary: move.boundary,
-        i: move.i,
-        j: move.j,
-        mask: move.mask,
-      };
-    } else {
-      const b1 = regionData[move.b1];
-      const b2 = regionData[move.b2];
-      if (!b1 || !b2 || move.i >= b1.length || move.j >= b2.length) continue;
-      touchesTarget =
-        (move.b1 === target.boundary && move.i === target.token) ||
-        (move.b2 === target.boundary && move.j === target.token);
-      if (!touchesTarget) continue;
-      moveDesc = {
-        kind: MoveKind.Join,
-        component: target.component,
-        region: target.region,
-        b1: move.b1,
-        b2: move.b2,
-        i: move.i,
-        j: move.j,
-      };
-    }
-
-    const res = await applyMoveTracked(canonText, src, moveDesc);
-    if (!res.ok) continue;
-    const [gotCanon, wantCanon] = await Promise.all([canon(res.child.enc), canon(child.enc)]);
-    if (gotCanon === wantCanon) out.push(child.nimber);
-  }
-  return out;
+/** L nimbers only -- see computeLReachable for the ground-truth enumeration this wraps. */
+export async function lMoveNimbersRobust(canonText: string, target: DisaPointRef): Promise<number[]> {
+  return (await computeLReachable(canonText, target)).nimbers;
 }
 
 /** D: the position with the DisaPoint capped off as a scab in place, dead branch deleted. */
@@ -284,9 +246,9 @@ export function buildReplaceEncoding(components: ParsedComponent[], target: Disa
 //
 // L (region-internal moves touching the DisaPoint) and R (the self-connect that makes its branch
 // disappear) are the DisaPoint's own move types; every other legal move of the position is a T
-// move (T' is treated as an ordinary T move here, per the user's spec). Classification reuses the
-// same transplant-and-apply technique as lMoveNimbersRobust (matching by canon equality, not raw
-// indices, for the same dedup-safety reason -- see lMoveNimbersRobust's doc comment).
+// move (T' is treated as an ordinary T move here, per the user's spec). Classification reuses
+// computeLReachable's ground-truth canon set (matching by canon equality, not raw indices or a
+// per-move guess -- see computeLReachable's doc comment).
 
 export interface ClassifiedChildren {
   lChildren: ChildInfo[];
@@ -294,38 +256,10 @@ export interface ClassifiedChildren {
   tChildren: ChildInfo[];
 }
 
-/** Transplant `move` onto target's own region, iff it actually touches target's token. */
-function transplantMove(regionData: ParsedRegion, target: DisaPointRef, move: MoveInfo): MoveDescriptor | null {
-  if (move.kind === MoveKind.Enclosure) {
-    const bd = regionData[move.boundary];
-    if (!bd || move.i >= bd.length || move.j >= bd.length) return null;
-    const touches = move.boundary === target.boundary && (move.i === target.token || move.j === target.token);
-    if (!touches) return null;
-    return {
-      kind: MoveKind.Enclosure,
-      component: target.component,
-      region: target.region,
-      boundary: move.boundary,
-      i: move.i,
-      j: move.j,
-      mask: move.mask,
-    };
-  }
-  if (move.kind === MoveKind.Join) {
-    const b1 = regionData[move.b1];
-    const b2 = regionData[move.b2];
-    if (!b1 || !b2 || move.i >= b1.length || move.j >= b2.length) return null;
-    const touches =
-      (move.b1 === target.boundary && move.i === target.token) || (move.b2 === target.boundary && move.j === target.token);
-    if (!touches) return null;
-    return { kind: MoveKind.Join, component: target.component, region: target.region, b1: move.b1, b2: move.b2, i: move.i, j: move.j };
-  }
-  return null; // InteriorPseudo: not region/boundary-addressable the same way, never an L move.
-}
-
 /**
- * Classify every child of the position relative to one DisaPoint: L (region-internal, verified via
- * transplant+apply, same as lMoveNimbersRobust), R (matches `rCanon` if given), T (everything else).
+ * Classify every child of the position relative to one DisaPoint: L (membership in
+ * computeLReachable's canon set -- ground truth, not a per-move guess), R (matches `rCanon` if
+ * given), T (everything else).
  */
 export async function classifyChildrenByDisaPoint(
   canonText: string,
@@ -333,31 +267,19 @@ export async function classifyChildrenByDisaPoint(
   target: DisaPointRef,
   rCanon: string | null,
 ): Promise<ClassifiedChildren> {
-  const parsed = parseEncoding(canonText);
-  const src = untrackedSrc(parsed);
-  const regionData = parsed[target.component]?.[target.region];
+  const { canonSet: lCanonSet } = await computeLReachable(canonText, target);
 
   const lChildren: ChildInfo[] = [];
   let rChild: ChildInfo | null = null;
   const tChildren: ChildInfo[] = [];
 
   for (const child of children) {
-    const move = child.move;
-    let isL = false;
-    const moveDesc = move && regionData ? transplantMove(regionData, target, move) : null;
-    if (moveDesc) {
-      const res = await applyMoveTracked(canonText, src, moveDesc);
-      if (res.ok) {
-        const [gotCanon, wantCanon] = await Promise.all([canon(res.child.enc), canon(child.enc)]);
-        isL = gotCanon === wantCanon;
-      }
-    }
-
-    if (isL) {
+    const childCanon = await canon(child.enc);
+    if (lCanonSet.has(childCanon)) {
       lChildren.push(child);
       continue;
     }
-    if (rCanon !== null && rChild === null && (await canon(child.enc)) === rCanon) {
+    if (rCanon !== null && rChild === null && childCanon === rCanon) {
       rChild = child;
       continue;
     }
@@ -380,15 +302,11 @@ function codesEqual(a: DisaGeneticCode, b: DisaGeneticCode): boolean {
   return as.every((v, i) => v === bs[i]);
 }
 
-/** Full (L,R,D) genetic code of one DisaPoint, given the position's own children. */
-export async function computeGeneticCode(
-  canonText: string,
-  children: ChildInfo[],
-  target: DisaPointRef,
-): Promise<DisaGeneticCode> {
+/** Full (L,R,D) genetic code of one DisaPoint. */
+export async function computeGeneticCode(canonText: string, target: DisaPointRef): Promise<DisaGeneticCode> {
   const parsed = parseEncoding(canonText);
   const [L, rRes, dRes] = await Promise.all([
-    lMoveNimbersRobust(canonText, children, target),
+    lMoveNimbersRobust(canonText, target),
     analyze(buildRemoveEncoding(parsed, target)),
     analyze(buildReplaceEncoding(parsed, target)),
   ]);
@@ -418,14 +336,56 @@ function locateTrackId(src: PosSrc, trackId: number): { component: number; regio
   return null;
 }
 
+/**
+ * If `comp[region]` is one half of a "trivial isolated 2-life dumbbell" -- two lone `2X`-shaped
+ * regions paired only to each other, nothing else referencing that letter -- returns the OTHER
+ * region's index (its dumbbell partner); otherwise null. Both halves are structurally identical, so
+ * findDisaPoints necessarily treats one arbitrarily as "the DisaPoint" and the other as "detached"
+ * (there's no principled way to tell them apart). By symmetry this doesn't change the resulting
+ * genetic code -- connecting either copy to the other reaches the same dead end -- so a
+ * tracked-provenance token landing on the copy findDisaPoints DIDN'T pick as its representative
+ * would otherwise be wrongly reported as "not a DisaPoint here", purely from an index mismatch, not
+ * a real one. See findTrackedDisaPoint and analyzeTEntry's mark computation, the two places this
+ * matters: T (and Grandparent Bypass) can land a tracked DisaPoint's token on exactly this shape.
+ */
+function dumbbellPartnerRegion(comp: ParsedComponent, region: number): number | null {
+  const shape = (r: ParsedRegion) => r.length === 1 && r[0].length === 2;
+  const letterOf = (r: ParsedRegion): string | null => {
+    const [t0, t1] = r[0];
+    if (t0 === '2' && /^[A-Z]$/.test(t1)) return t1;
+    if (t1 === '2' && /^[A-Z]$/.test(t0)) return t0;
+    return null;
+  };
+  if (!shape(comp[region])) return null;
+  const letter = letterOf(comp[region]);
+  if (!letter) return null;
+  for (let r = 0; r < comp.length; r++) {
+    if (r !== region && shape(comp[r]) && letterOf(comp[r]) === letter) return r;
+  }
+  return null;
+}
+
 function findTrackedDisaPoint(enc: string, src: PosSrc, trackId: number): DisaPointRef | null {
   const loc = locateTrackId(src, trackId);
   if (!loc) return null;
-  return (
-    findDisaPoints(parseEncoding(enc)).find(
-      d => d.component === loc.component && d.region === loc.region && d.boundary === loc.boundary && d.token === loc.token,
-    ) ?? null
+  const parsed = parseEncoding(enc);
+  const direct = findDisaPoints(parsed).find(
+    d => d.component === loc.component && d.region === loc.region && d.boundary === loc.boundary && d.token === loc.token,
   );
+  if (direct) return direct;
+
+  const comp = parsed[loc.component];
+  const partnerRegion = comp ? dumbbellPartnerRegion(comp, loc.region) : null;
+  if (partnerRegion === null || !comp) return null;
+  const letter = comp[loc.region][loc.boundary][loc.token];
+  return {
+    component: loc.component,
+    region: loc.region,
+    boundary: loc.boundary,
+    token: loc.token,
+    letter,
+    detached: { component: loc.component, region: partnerRegion },
+  };
 }
 
 async function traceMove(parentEnc: string, parentSrc: PosSrc, move: MoveInfo): Promise<{ enc: string; src: PosSrc } | null> {
@@ -477,6 +437,82 @@ export interface TEntryResult {
 }
 
 /**
+ * Recompress a T/T' entry's tracked-apply text for display: `analyzeTEntry` deliberately keeps
+ * `enc` fully decompressed (that's the coordinate space `mark` and the bypass retrace need), but
+ * that means any Hollow/Split/Triplet organ elsewhere in the position shows as raw membrane pairs
+ * (e.g. "BC|...BC") instead of its compressed pseudo-point ("4") -- the same compact form
+ * analyze()'s own canon field would show. `canon()` (canonicalize(parsePosition(x))) recompresses
+ * Hollow/Split/Triplet but, by design, never touches DisaPoints -- so `target`'s own token/detached
+ * pair survive unchanged, just possibly at a different region/component index once everything else
+ * gets re-sorted. Relocate it by structural identity rather than trusting index continuity:
+ * - 'disapoint': try the SAME (component,region,boundary,token) coordinates first -- recompression
+ *   (Hollow/Split/Triplet only) never touches DisaPoints, so whenever it doesn't reorder components/
+ *   regions either (the common case), `target`'s coordinates are already correct and nothing needs
+ *   relocating. Only if that direct check fails, fall back to matching by R-encoding fingerprint
+ *   (canon(buildRemoveEncoding(...))) -- removing the SAME DisaPoint from two canon-equivalent
+ *   starting texts must land on canon-equivalent results. The direct check must come first: when a
+ *   position has two structurally-symmetric DisaPoints (an actual automorphism swaps them, e.g. two
+ *   interchangeable branches), removing EITHER one gives the identical canonical result -- the
+ *   fingerprint alone can't tell them apart and would always resolve to whichever tied candidate
+ *   happens to come first, silently mislabeling the untracked one's entry as if it were the tracked
+ *   one whenever no relocation was actually needed.
+ * - 'isolated': the target's own component is already a bare [22] pair, which recompression can't
+ *   touch (nothing to compress) -- ties among multiple identical [22] summands are genuinely
+ *   interchangeable for display, so position-among-ties is enough to relocate.
+ * Falls back to the decompressed form (better an uncompressed but correct display than a mismarked
+ * compressed one) if relocation can't find a match -- should not happen in practice, but the R-
+ * fingerprint match is a heuristic, not a proof.
+ */
+export async function toDisplayForm(
+  decompressedEnc: string,
+  mark: TPositionMark,
+): Promise<{ enc: string; mark: TPositionMark }> {
+  const compressed = await canon(decompressedEnc);
+  if (!compressed) return { enc: decompressedEnc, mark };
+  if (mark.kind === 'none') return { enc: compressed, mark };
+
+  const srcParsed = parseEncoding(decompressedEnc);
+  const dstParsed = parseEncoding(compressed);
+
+  if (mark.kind === 'disapoint') {
+    const target = findDisaPoints(srcParsed)[mark.index];
+    if (!target) return { enc: decompressedEnc, mark };
+    const dstDps = findDisaPoints(dstParsed);
+
+    const directIdx = dstDps.findIndex(
+      d =>
+        d.component === target.component &&
+        d.region === target.region &&
+        d.boundary === target.boundary &&
+        d.token === target.token,
+    );
+    if (directIdx !== -1) return { enc: compressed, mark: { kind: 'disapoint', index: directIdx } };
+
+    const targetRemove = await canon(buildRemoveEncoding(srcParsed, target));
+    for (let i = 0; i < dstDps.length; i++) {
+      if ((await canon(buildRemoveEncoding(dstParsed, dstDps[i]))) === targetRemove) {
+        return { enc: compressed, mark: { kind: 'disapoint', index: i } };
+      }
+    }
+    return { enc: decompressedEnc, mark };
+  }
+
+  // 'isolated'
+  const srcTrivial = srcParsed.reduce<number[]>((acc, c, i) => {
+    if (isTrivialDeadPair(c)) acc.push(i);
+    return acc;
+  }, []);
+  const dstTrivial = dstParsed.reduce<number[]>((acc, c, i) => {
+    if (isTrivialDeadPair(c)) acc.push(i);
+    return acc;
+  }, []);
+  const tieRank = srcTrivial.indexOf(mark.index);
+  const dstIndex = tieRank !== -1 && tieRank < dstTrivial.length ? dstTrivial[tieRank] : dstTrivial[dstTrivial.length - 1];
+  if (dstIndex === undefined) return { enc: decompressedEnc, mark };
+  return { enc: compressed, mark: { kind: 'isolated', index: dstIndex } };
+}
+
+/**
  * Combined per-T-move analysis: where the tracked DisaPoint ends up (see TPositionMark) and
  * whether the Grandparent Bypass Theorem applies (does `target`, tracked through this move AND one
  * grandchild move, have some grandchild-level descendant whose own (L,R,D) genetic code exactly
@@ -503,9 +539,20 @@ export async function analyzeTEntry(
 
   let mark: TPositionMark = { kind: 'none' };
   if (loc) {
-    const idx = findDisaPoints(childParsed).findIndex(
+    const childDps = findDisaPoints(childParsed);
+    let idx = childDps.findIndex(
       d => d.component === loc.component && d.region === loc.region && d.boundary === loc.boundary && d.token === loc.token,
     );
+    if (idx === -1) {
+      // Symmetric "isolated dumbbell" fallback -- see dumbbellPartnerRegion's doc. The tracked token
+      // may have landed on the copy findDisaPoints didn't pick as its representative; by symmetry the
+      // OTHER copy (already in childDps, at the known partner region) is equally valid to mark -- the
+      // resulting compact display is identical either way, since the "detached" side is dropped
+      // regardless of which copy plays that role.
+      const comp = childParsed[loc.component];
+      const partnerRegion = comp ? dumbbellPartnerRegion(comp, loc.region) : null;
+      if (partnerRegion !== null) idx = childDps.findIndex(d => d.component === loc.component && d.region === partnerRegion);
+    }
     if (idx !== -1) mark = { kind: 'disapoint', index: idx };
     else if (isTrivialDeadPair(childParsed[loc.component])) mark = { kind: 'isolated', index: loc.component };
   } else {
@@ -524,7 +571,19 @@ export async function analyzeTEntry(
     }
   }
 
-  const analysis1 = await analyze(step1.enc);
+  // allMovesTracked, not analyze/childrenTracked: analyze() canonicalizes its input first, which can
+  // silently recompress a Hollow/Split/Triplet organ and shift region/boundary numbering out from
+  // under step1.src (see childrenTracked's doc comment in stalks.ts -- found via a real T-move whose
+  // Grandparent Bypass never triggered because of exactly this mismatch). childrenTracked fixes that
+  // but still dedupes canonically-identical grandchildren (childrenAllWithMoveTag's `seen`), which
+  // hides a real bug: when target's own retrace needs a move that's canonically identical to ANOTHER
+  // move elsewhere (e.g. a structurally-symmetric DisaPoint's own analogous move) and that other move
+  // happens to be enumerated first, dedup drops the one that would have preserved target's token --
+  // producing a false "target didn't survive" and silently missing a real bypass match. Confirmed via
+  // [13*3] vs [133*] on 2A|2B|1AB: both DisaPoints are symmetric (swap A<->B), so both MUST get the
+  // same bypass verdict, but childrenTracked's dedup kept only "enclose region0" (equivalent to
+  // "enclose region1"), which happens to preserve B's token but not A's -- allMovesTracked keeps both.
+  const analysis1 = await allMovesTracked(step1.enc);
   if (!analysis1.ok) return { enc: step1.enc, mark, bypass: false };
 
   const matches = await Promise.all(
@@ -536,9 +595,7 @@ export async function analyzeTEntry(
       if (step2Canon !== gcCanon) return false;
       const dp2 = findTrackedDisaPoint(step2.enc, step2.src, TRACK_ID);
       if (!dp2) return false; // survived but isn't (currently) a DisaPoint here -- nothing to compare
-      const analysis2 = await analyze(step2.enc);
-      if (!analysis2.ok) return false;
-      const code2 = await computeGeneticCode(step2.enc, analysis2.children, dp2);
+      const code2 = await computeGeneticCode(step2.enc, dp2);
       return codesEqual(code2, rootCode);
     }),
   );

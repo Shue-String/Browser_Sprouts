@@ -215,6 +215,28 @@ function occupiedCentroidAntipode(
   return normalize({ x: -oc.x, y: -oc.y, z: -oc.z });
 }
 
+/** True if the straight chord `p1`↔`p2` crosses any edge bordering a living
+ * region (i.e. leaves dead territory) — excludeEdgeIds skips edges that are
+ * expected to be nearby/collapsing themselves (e.g. the dead quad's own 4
+ * boundary edges), so only genuinely unrelated living structure counts. */
+function chordCrossesLivingEdges(
+  state: GameState,
+  p1: SpherePoint,
+  p2: SpherePoint,
+  excludeEdgeIds: Set<EdgeId>,
+): boolean {
+  for (const e of state.edges.values()) {
+    if (excludeEdgeIds.has(e.id)) continue;
+    const lr = state.regions.get(e.leftRegion);
+    const rr = state.regions.get(e.rightRegion);
+    if ((lr?.isDead ?? true) && (rr?.isDead ?? true)) continue; // both sides dead — not living structure
+    for (let i = 0; i < e.points.length - 1; i++) {
+      if (arcsCross(p1, p2, e.points[i], e.points[i + 1])) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * One frame of dead-region shrink + pop. Pulls every fully-dead component toward
  * its centroid; once a component is smaller than POP_RADIUS it is deleted (the
@@ -1025,12 +1047,15 @@ export function triangleDeadStep(
   const vc = state.vertices.get(collapse.c);
   if (!va || !vb || !vc) return { done: true, popAt: null };
 
-  // Centroid of the three vertices.
-  const target = normalize({
-    x: va.pos.x + vb.pos.x + vc.pos.x,
-    y: va.pos.y + vb.pos.y + vc.pos.y,
-    z: va.pos.z + vb.pos.z + vc.pos.z,
-  });
+  // Collapse toward the point antipodal to nearby live content (see
+  // occupiedCentroidAntipode) rather than the raw triangle centroid, so this
+  // doesn't sweep its shrinking edges across content sitting in the smaller half.
+  const target = occupiedCentroidAntipode(state, new Set([collapse.a, collapse.b, collapse.c]))
+    ?? normalize({
+      x: va.pos.x + vb.pos.x + vc.pos.x,
+      y: va.pos.y + vb.pos.y + vc.pos.y,
+      z: va.pos.z + vb.pos.z + vc.pos.z,
+    });
 
   const da = Math.acos(Math.max(-1, Math.min(1, va.pos.x*target.x + va.pos.y*target.y + va.pos.z*target.z)));
   const db = Math.acos(Math.max(-1, Math.min(1, vb.pos.x*target.x + vb.pos.y*target.y + vb.pos.z*target.z)));
@@ -1490,8 +1515,22 @@ export function detectQuadDead(state: GameState): QuadDeadCollapse | null {
     const eDA = state.edges.get(edgeDA)!;
     const daPath = (eDA.v1 === d ? eDA.points : [...eDA.points].reverse()).map(p => ({ ...p }));
 
-    const bcWaypoint = occupiedCentroidAntipode(state, new Set([b_, c]));
-    const daWaypoint = occupiedCentroidAntipode(state, new Set([d, a]));
+    // BC and DA both eventually straighten into the same P–Q segment (P = AB's
+    // merge point, Q = CD's merge point; DA just runs it in reverse) as B/C/D/A
+    // slide onto their respective merge points — see quadDeadStep. Antipodal
+    // steering is only needed when that eventual direct P–Q chord would actually
+    // cut across living structure (the majority-dead-region case); for a small,
+    // self-contained dead quad the direct chord never leaves the dead face, and
+    // forcing it through a distant antipodal waypoint anyway produces a pointless
+    // "around the back" detour instead of a plain shrink. Reuses the exact same
+    // pointAlongPath merge-point computation quadDeadStep uses, so this predicts
+    // what the animation will actually converge to.
+    const midAB = pointAlongPath(abPath, 0.5);
+    const midCD = pointAlongPath(cdPath, 0.5);
+    const quadEdgeSetForChordCheck = new Set<EdgeId>([edgeAB, edgeBC, edgeCD, edgeDA]);
+    const needsDetour = chordCrossesLivingEdges(state, midAB, midCD, quadEdgeSetForChordCheck);
+    const bcWaypoint = needsDetour ? occupiedCentroidAntipode(state, new Set([b_, c])) : null;
+    const daWaypoint = needsDetour ? occupiedCentroidAntipode(state, new Set([d, a])) : null;
 
     return {
       kind: 'quad-dead',

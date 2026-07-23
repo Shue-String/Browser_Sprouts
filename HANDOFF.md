@@ -18,19 +18,6 @@
 - **TOP PRIORITY**: Dead regions embedded inside a living component can only be shrunk, not
   popped — they jam against the living structure instead of collapsing through it. Containment
   check + separate shrink pass not yet implemented. See memory `project_dead_region_elimination.md`.
-- Edges should prefer taut geometry (geodesics) where they can reach without crossing.
-  Vertices affect edges but not vice-versa; allowing both directions needs care to avoid
-  edge-midpoints repelling their own edge's endpoints.
-- **Stalks cleanup-fixpoint duplication** (flagged in the 2026-07-15 audit, next session):
-  `moves.cpp`'s `chopWalk`/`cleanup` and `canon.cpp`'s `chopLB`/`cleanupLC` are the same
-  "collapse cyclically-adjacent joint visits to a scab, then drop-empty/decay/isolate to a
-  fixpoint" algorithm, duplicated across two parallel labeled-working-form hierarchies
-  (`Item/IWalk/IComp` vs `Slot/LBnd/LComp`). Worth a shared `labeled-form.hpp` (tag/emit/cleanup)
-  to remove the duplication, but it's a real refactor — not done in this pass.
-- **`savefile.cpp` error paths are untested** (bad magic/version/oversized alphabet all throw
-  `std::runtime_error`, but no test exercises them — `test_main.cpp`'s `checkThrows` only
-  catches `EncodingError`). Not being fixed now — the save format itself is getting redone in
-  a future version, so tests wait for that rewrite.
 
 ## Voronoi junction naming/pathfinding
 

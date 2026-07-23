@@ -268,6 +268,9 @@ EMSCRIPTEN_BINDINGS(stalks_module) {
     emscripten::function("analyze", &stalks::analyzeJson);
     emscripten::function("analyzeFull", &stalks::analyzeFullJson);
     emscripten::function("analyzeNimber", &stalks::analyzeNimberJson);
+    emscripten::function("childrenTracked", &stalks::childrenTrackedJson);
+    emscripten::function("regionMovesTracked", &stalks::regionMovesTrackedJson);
+    emscripten::function("allMovesTracked", &stalks::allMovesTrackedJson);
     emscripten::function("canon", &canonSafe);
     emscripten::function("applyMoveTracked", &applyMoveTracked);
     emscripten::function("canonicalizeTrackedProvenance", &canonicalizeTrackedProvenance);
