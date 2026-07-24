@@ -310,6 +310,38 @@ export async function allMovesTracked(enc: string): Promise<AllMovesResult> {
   }
 }
 
+/** Result of decompress(): the fully-decompressed literal encoding, or a parse/engine error. */
+export type DecompressResult =
+  | { ok: true; enc: string }
+  | { ok: false; reason: 'parse-error' | 'engine-unavailable'; message?: string };
+
+/**
+ * Fully decompress an encoding -- expand every Hollow/Split/Triplet/DisaPoint pseudo-point into
+ * its raw membrane/scab/joint tokens, with no compression-shortcut digits left. Not canonicalized
+ * or reordered otherwise: region/boundary/token indices are a straightforward expansion of `enc`'s
+ * own layout.
+ *
+ * Needed before childrenTracked/regionMovesTracked/allMovesTracked: their `enc` "must already be
+ * decompressed", but analyze()'s own `canon` field only leaves DisaPoints decompressed (Hollow/
+ * Split/Triplet elsewhere stay compressed) -- so a caller enumerating moves against a DisaPoint in
+ * a position that ALSO contains another pseudo-point must decompress here first, or silently
+ * under-enumerate moves that only become expressible once that other pseudo-point is expanded (see
+ * collectGenetics.ts's computeLReachable, the caller this exists for). Never rejects.
+ */
+export async function decompress(enc: string): Promise<DecompressResult> {
+  let mod: StalksModule;
+  try {
+    mod = await getModule();
+  } catch {
+    return { ok: false, reason: 'engine-unavailable', message: 'Stalks engine not built yet.' };
+  }
+  try {
+    return JSON.parse(mod.decompressed(enc)) as DecompressResult;
+  } catch (e) {
+    return { ok: false, reason: 'parse-error', message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** Engine-unavailable error, shared by the on-demand entry points. */
 function unavailable(): AnalysisErr {
   return {

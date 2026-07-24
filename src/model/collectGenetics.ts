@@ -20,6 +20,8 @@ import {
   analyze,
   applyMoveTracked,
   canon,
+  childrenTracked,
+  decompress,
   regionMovesTracked,
 } from '../engine/stalks';
 
@@ -209,6 +211,39 @@ function untrackedSrc(components: ParsedComponent[]): PosSrc {
 }
 
 /**
+ * Relocate `target` into `decompressedText` -- a full decompression of the same position (every
+ * Hollow/Split/Triplet/DisaPoint pseudo-point elsewhere expanded to raw tokens, not just `target`'s
+ * own DisaPoint, which was already decompressed in the source text). Expanding OTHER pseudo-points
+ * inserts/reorders regions, so `target`'s own (region,boundary,token) coordinates can shift even
+ * though its local structure (its own token + detached partner) is untouched.
+ *
+ * Same two-step strategy as toDisplayForm's relocation: try `target`'s own coordinates first (the
+ * common case -- decompressing a pseudo-point that comes AFTER target in the walk doesn't move
+ * target at all), then fall back to matching by R-encoding fingerprint (removing the SAME DisaPoint
+ * from two canon-equivalent starting texts must land on canon-equivalent results). Returns null if
+ * no candidate matches (shouldn't happen in practice).
+ */
+async function relocateForDecompress(
+  originalParsed: ParsedComponent[],
+  target: DisaPointRef,
+  decompressedText: string,
+): Promise<DisaPointRef | null> {
+  const decompressedParsed = parseEncoding(decompressedText);
+  const candidates = findDisaPoints(decompressedParsed);
+
+  const direct = candidates.find(
+    d => d.component === target.component && d.region === target.region && d.boundary === target.boundary && d.token === target.token,
+  );
+  if (direct) return direct;
+
+  const targetRCanon = await canon(buildRemoveEncoding(originalParsed, target));
+  for (const candidate of candidates) {
+    if (await canon(buildRemoveEncoding(decompressedParsed, candidate)) === targetRCanon) return candidate;
+  }
+  return null;
+}
+
+/**
  * Ground-truth L: every legal move (Enclosure or Join) of `target`'s own component that touches
  * its own token, directly enumerated by the engine (regionMovesTracked) rather than guessed by
  * transplanting a MoveTag analyze()'s children list happened to keep. `canonSet` (each result's own
@@ -216,14 +251,33 @@ function untrackedSrc(components: ParsedComponent[]): PosSrc {
  * of which specific move reached it -- see classifyChildrenByDisaPoint, which needs exactly that.
  * `nimbers` is deduped (L is a SET of reachable nimbers, per the genetic-code spec -- distinct legal
  * moves landing on the same nimber, or even the same exact position, are common and shouldn't inflate
- * it into a multiset). `canonText` must be decompressed, matching `target`'s (component,region,
- * boundary,token) coordinates.
+ * it into a multiset).
+ *
+ * `canonText` need NOT be fully decompressed -- analyze()'s own `canon` field only decompresses
+ * DisaPoints, leaving Hollow/Split/Triplet elsewhere compressed, which is what callers actually
+ * have. regionMovesTracked requires full decompression (no pseudo-points anywhere), so this
+ * decompresses `canonText` itself first and relocates `target` into that fully-decompressed text --
+ * skipping that step previously left moves that only become expressible once some OTHER pseudo-point
+ * is expanded silently unenumerated (e.g. connecting straight to the critical membrane from inside a
+ * Split point's own interior), which under-populated `canonSet` and let real L-moves get
+ * misclassified as T by classifyChildrenByDisaPoint.
  */
 export async function computeLReachable(
   canonText: string,
   target: DisaPointRef,
 ): Promise<{ nimbers: number[]; canonSet: Set<string> }> {
-  const res = await regionMovesTracked(canonText, target.component, target.region, target.boundary, target.token);
+  const decompressedRes = await decompress(canonText);
+  if (!decompressedRes.ok) return { nimbers: [], canonSet: new Set() };
+  const relocated = await relocateForDecompress(parseEncoding(canonText), target, decompressedRes.enc);
+  if (!relocated) return { nimbers: [], canonSet: new Set() };
+
+  const res = await regionMovesTracked(
+    decompressedRes.enc,
+    relocated.component,
+    relocated.region,
+    relocated.boundary,
+    relocated.token,
+  );
   if (!res.ok) return { nimbers: [], canonSet: new Set() };
   const canons = await Promise.all(res.children.map(c => canon(c.enc)));
   return { nimbers: [...new Set(res.children.map(c => c.nimber))], canonSet: new Set(canons) };
@@ -525,11 +579,34 @@ export async function analyzeTEntry(
   rootCode: DisaGeneticCode,
 ): Promise<TEntryResult> {
   const none: TEntryResult = { enc: tChild.enc, mark: { kind: 'none' }, bypass: false };
-  if (!tChild.move) return none;
 
+  // `tChild.move`'s indices come from analyze()'s internal (fully decompressed) exploration, NOT
+  // from `rootEnc` (analyze()'s `canon` field) itself whenever `rootEnc` still has some OTHER
+  // pseudo-point (Hollow/Split/Triplet) compressed -- applyMoveTracked/traceMove against `rootEnc`
+  // directly then throws ("decompress pseudo-points before generating moves") or, worse, silently
+  // hits the wrong tokens. Same root cause as computeLReachable's fix: decompress `rootEnc` first,
+  // relocate `target` into it, and re-derive the move by matching tChild's own canon against a
+  // fresh decompressed children list (whose move indices are guaranteed consistent with that text)
+  // rather than trusting tChild.move against rootEnc.
+  const decompRes = await decompress(rootEnc);
+  if (!decompRes.ok) return none;
   const rootParsed = parseEncoding(rootEnc);
-  const rootSrc = srcWithTarget(rootParsed, target);
-  const step1 = await traceMove(rootEnc, rootSrc, tChild.move);
+  const relocatedTarget = await relocateForDecompress(rootParsed, target, decompRes.enc);
+  if (!relocatedTarget) return none;
+
+  const decompChildrenRes = await childrenTracked(decompRes.enc);
+  if (!decompChildrenRes.ok) return none;
+  const tChildCanonForMatch = await canon(tChild.enc);
+  const matchedChild = (
+    await Promise.all(
+      decompChildrenRes.children.map(async c => ({ c, hit: (await canon(c.enc)) === tChildCanonForMatch })),
+    )
+  ).find(x => x.hit)?.c;
+  if (!matchedChild?.move) return none;
+
+  const decompRootParsed = parseEncoding(decompRes.enc);
+  const rootSrc = srcWithTarget(decompRootParsed, relocatedTarget);
+  const step1 = await traceMove(decompRes.enc, rootSrc, matchedChild.move);
   if (!step1) return none;
   const [step1Canon, tChildCanon] = await Promise.all([canon(step1.enc), canon(tChild.enc)]);
   if (step1Canon !== tChildCanon) return none;
@@ -561,7 +638,7 @@ export async function analyzeTEntry(
     // conceptually does. Fall back to a structural inference: a T move never touches target's own
     // token directly (that's what distinguishes it from L/R), so if a [22] dead pair appears that
     // wasn't already present in the root, it can only be target's branch that decayed into it.
-    const rootTrivialCount = rootParsed.filter(isTrivialDeadPair).length;
+    const rootTrivialCount = decompRootParsed.filter(isTrivialDeadPair).length;
     const childTrivialIndices = childParsed.reduce<number[]>((acc, c, i) => {
       if (isTrivialDeadPair(c)) acc.push(i);
       return acc;

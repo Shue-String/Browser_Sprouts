@@ -7,6 +7,20 @@ namespace stalks {
 // EncodingError on a malformed encoding. Used by the app's lightweight gameplay-parent recorder.
 std::string canonOnly(const std::string& enc);
 
+// Fully decompress an encoding (expand every Hollow/Split/Triplet/DisaPoint pseudo-point into its
+// raw membrane/scab/joint tokens; no compression-shortcut digits survive) and return the literal
+// serialization -- NOT canonicalized/reordered otherwise, so region/boundary/token indices in the
+// result are a straightforward expansion of the input's own layout. This is the form
+// childrenTrackedJson/regionMovesTrackedJson/allMovesTrackedJson require ("enc must already be
+// decompressed"): analyzeJson's own `canon` field only leaves DisaPoints decompressed (Hollow/
+// Split/Triplet elsewhere stay compressed), so any caller enumerating moves against a target
+// DisaPoint in a position that ALSO contains another pseudo-point must decompress first here or
+// risk silently under-enumerating moves that only become expressible once that other pseudo-point
+// is expanded (see collectGenetics.ts's computeLReachable, the caller this exists for). Never
+// throws: returns {"ok":true,"enc":"<decompressed>"} or {"ok":false,"reason":"parse-error",
+// "message":...}.
+std::string decompressedJson(const std::string& enc);
+
 // Analyze a position for the Position Browser. Parses + canonicalizes `enc`, and if every
 // minimal subposition has lives2() <= 24 (i.e. <= 12 lives), builds the exact game graph rooted
 // there and returns a JSON blob with: canon, nimber, min/maxMoves, subposCount, the per-subposition

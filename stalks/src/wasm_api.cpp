@@ -274,4 +274,5 @@ EMSCRIPTEN_BINDINGS(stalks_module) {
     emscripten::function("canon", &canonSafe);
     emscripten::function("applyMoveTracked", &applyMoveTracked);
     emscripten::function("canonicalizeTrackedProvenance", &canonicalizeTrackedProvenance);
+    emscripten::function("decompressed", &stalks::decompressedJson);
 }

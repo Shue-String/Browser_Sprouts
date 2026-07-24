@@ -56,6 +56,12 @@ export interface StalksModule {
    * canonicalizeTrackedProvenance in wasm_api.cpp / stalks.ts).
    */
   canonicalizeTrackedProvenance(enc: string): string;
+  /**
+   * Fully decompress an encoding (expand every Hollow/Split/Triplet/DisaPoint pseudo-point into
+   * raw tokens) and return its literal serialization -- see decompressedJson in analyze.cpp /
+   * stalks.ts. Not canonicalized/reordered otherwise.
+   */
+  decompressed(enc: string): string;
 }
 
 /** Async factory: instantiates the WASM and resolves to the module. */

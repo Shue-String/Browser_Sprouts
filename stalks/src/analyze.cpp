@@ -403,6 +403,20 @@ std::string canonOnly(const std::string& enc) {
     return serialize(canonicalize(parsePosition(enc)));
 }
 
+std::string decompressedJson(const std::string& enc) {
+    try {
+        std::string out = "{\"ok\":true,\"enc\":";
+        jsonStr(out, serialize(parsePosition(enc).decompressed()));
+        out += "}";
+        return out;
+    } catch (const EncodingError& e) {
+        std::string err = "{\"ok\":false,\"reason\":\"parse-error\",\"message\":";
+        jsonStr(err, e.what());
+        err += "}";
+        return err;
+    }
+}
+
 std::string childrenTrackedJson(const std::string& enc) {
     try {
         const Position p = parsePosition(enc);

@@ -1,10 +1,16 @@
 /**
- * Collect: type a position encoding into the search bar (optionally marking one DisaPoint with a
- * trailing '*', e.g. "23A|A3*,13738") to see the "genetic code" of each DisaPoint it contains: the
+ * Collect: type a position encoding into the search bar (optionally marking one DisaPoint as the
+ * critical membrane -- written 'α', e.g. "23A|Aα,13738" -- in place of its '3') to see the "genetic
+ * code" of each DisaPoint it contains: the
  * nimber sets reachable via L (region-internal) and R (self-connect, branch disappears) moves, the
  * D (hypothetical scab-replace) nimber, and the lists of T and T' positions -- every other legal
- * move of the position, shown in canon (bracket/⊕) form. Every T/T' position still contains the
- * original DisaPoint somewhere: a plain T move keeps it a genuine DisaPoint (marked '*', same
+ * move of the position, shown in canon (bracket/⊕) form. Internally this is still just a DisaPoint
+ * (token '3') for every L/T-move computation; 'α' is purely how the chosen one is displayed, per the
+ * paper's Left/Right-position notation (a second critical membrane, when double-crit positions are
+ * added, will display as 'β'). The legacy trailing '*' right after a '3' (e.g. "23A|A3*,13738") is
+ * still accepted as input for backward compatibility, but is never shown anymore -- output is always
+ * 'α'. Every T/T' position still contains the
+ * original DisaPoint somewhere: a plain T move keeps it a genuine DisaPoint (marked 'α', same
  * convention as the search result label) and is listed under "T"; a T' move instead strands it --
  * together with its detached partner -- as its own inert [22] ⊕-summand (marked '*' on that summand
  * instead; see TPositionMark) and is listed separately under "T'". Each T/T' position also gets a
@@ -20,7 +26,7 @@
  *
  * Every DisaPoint variation ever searched or genome-loaded (or seeded as a default from the
  * ({0},1,1) and ({1},0,0) genomes, see seedDefaultHistory) is kept as a "variation" in the list on
- * the left, in quick-canon (bracket/⊕) form with '*' marking the DisaPoint, most-recently-viewed
+ * the left, in quick-canon (bracket/⊕) form with 'α' marking the DisaPoint, most-recently-viewed
  * first and deduped by that label. Each line also shows the variation's own nimber, right-aligned,
  * and so does every T/T' child position in the detail pane. The list persists across reloads via
  * localStorage; invalid/empty searches never get added to it.
@@ -72,8 +78,10 @@ interface TEntry {
   genome?: DisaGeneticCode;
 }
 
-/** Render one T/T'-move child in canon form (brackets + ⊕), with the surviving DisaPoint (or, in
- * the T' case, the isolated [22] ⊕-summand it decayed into) marked with '*' -- see TPositionMark. */
+/** Render one T/T'-move child in canon form (brackets + ⊕). A genuine surviving DisaPoint is
+ * marked 'α' in place of its '3' (see markNth); the T' case instead marks the isolated [22]
+ * ⊕-summand it decayed into with a trailing '*' -- that's a different, summand-level marker (no
+ * digit to swap for 'α' there) -- see TPositionMark. */
 function formatTPosition(childEnc: string, mark: TPositionMark): string {
   const parsed = parseEncoding(childEnc);
   const compact = buildDisplayEncoding(parsed, findDisaPoints(parsed));
@@ -90,7 +98,7 @@ function formatTPosition(childEnc: string, mark: TPositionMark): string {
 }
 
 interface Entry {
-  /** Quick-canon (bracket/⊕) form of the position, with '*' marking this DisaPoint. Doubles as the
+  /** Quick-canon (bracket/⊕) form of the position, with 'α' marking this DisaPoint. Doubles as the
    * dedup key for the variation list. */
   label: string;
   /** Nimber of the whole position this variation belongs to (same for every DisaPoint of one search). */
@@ -128,7 +136,9 @@ let history: Entry[] = [];
 let activeLabel: string | null = null;
 let searchGen = 0;
 
-const HISTORY_STORAGE_KEY = 'sprouts-collect-variations-v7';
+// v8: label format changed from trailing '*' to 'α' for the marked DisaPoint (see markNth) --
+// bumped so stale v7-format labels don't linger in the list.
+const HISTORY_STORAGE_KEY = 'sprouts-collect-variations-v8';
 
 function saveHistory(): void {
   try {
@@ -152,20 +162,29 @@ function fmtNimber(n: number | null): string {
   return n === null ? 'error' : String(n);
 }
 
-/** Insert '*' right after the (1-indexed) nth '3' character in a display string. */
+/** Replace the (1-indexed) nth '3' character in a display string with 'α' -- the chosen
+ * DisaPoint standing in for a critical membrane, per the paper's Left/Right-position notation. */
 function markNth(display: string, n: number): string {
   let count = 0;
   for (let i = 0; i < display.length; i++) {
     if (display[i] === '3') {
       count++;
-      if (count === n) return display.slice(0, i + 1) + '*' + display.slice(i + 1);
+      if (count === n) return display.slice(0, i) + 'α' + display.slice(i + 1);
     }
   }
   return display;
 }
 
-/** Count '3' characters before the first '*' in raw input (1-indexed selection), and strip all '*'. */
+/** Find which '3' occurrence (1-indexed) raw input marks as the chosen DisaPoint -- either the
+ * modern 'α' in place of a '3', or the legacy trailing '*' right after a '3' -- and return the
+ * input with that marker normalized back to a plain '3' so the rest of parsing is unaffected. */
 function extractSelection(raw: string): { stripped: string; selected: number | undefined } {
+  const alphaIdx = raw.indexOf('α');
+  if (alphaIdx !== -1) {
+    let count = 0;
+    for (let i = 0; i < alphaIdx; i++) if (raw[i] === '3') count++;
+    return { stripped: raw.slice(0, alphaIdx) + '3' + raw.slice(alphaIdx + 1), selected: count };
+  }
   const starIdx = raw.indexOf('*');
   let selected: number | undefined;
   if (starIdx !== -1) {
@@ -556,7 +575,7 @@ function renderDetail(): void {
   const entry = history.find(h => h.label === activeLabel) ?? null;
   if (!entry) {
     detailEl.innerHTML =
-      '<div class="collect-empty">Type a position encoding above and press Enter to search — mark a specific DisaPoint with * (e.g. 23A|A3*,13738) — or type a genome like ({0},1,1) to load every matching position.</div>';
+      '<div class="collect-empty">Type a position encoding above and press Enter to search — mark a specific DisaPoint as α (e.g. 23A|Aα,13738) — or type a genome like ({0},1,1) to load every matching position.</div>';
     return;
   }
 
