@@ -1024,4 +1024,56 @@ std::vector<Position> childrenAll(const Position& p) {
     return out;
 }
 
+Position disaPointRMove(const Position& pos, std::size_t comp, std::uint32_t region,
+                         std::uint32_t boundary, std::size_t token) {
+    Position work = pos;
+    Component& c = work.components[comp];
+    Bnd& bnd = c.regions[region][boundary];
+    if (token >= bnd.size() || bnd[token] != MEMB)
+        throw EncodingError("disaPointRMove: target token is not a paired membrane");
+
+    std::uint32_t occ = 0;
+    for (std::size_t k = 0; k < token; ++k)
+        if (bnd[k] == MEMB) ++occ;
+
+    const auto idx = c.pairIndex();
+    const int pairIdx = idx[region][boundary][occ];
+    if (pairIdx < 0) throw EncodingError("disaPointRMove: target membrane is unpaired");
+    const auto [a, b] = c.pairings[static_cast<std::size_t>(pairIdx)];
+    const MRef self{region, boundary, occ};
+    const MRef other = (a == self) ? b : a;
+    const std::uint32_t detRegion = other.region;
+
+    // Reverse Component::decompressed's DISA case for just this one occurrence: fold the inline
+    // token back to DISA in place, drop its detached (SCAB, MEMB) partner region, and renumber the
+    // one consumed pairing entry plus any occ/region index that shifts as a result.
+    bnd[token] = DISA;
+    std::vector<std::pair<MRef, MRef>> newPairings;
+    newPairings.reserve(c.pairings.size() - 1);
+    for (const auto& pr : c.pairings) {
+        if (pr.first == self || pr.second == self) continue;
+        MRef x = pr.first, y = pr.second;
+        if (x.region == region && x.boundary == boundary && x.occ > occ) --x.occ;
+        if (y.region == region && y.boundary == boundary && y.occ > occ) --y.occ;
+        newPairings.push_back({x, y});
+    }
+    c.pairings = std::move(newPairings);
+
+    c.regions.erase(c.regions.begin() + static_cast<std::ptrdiff_t>(detRegion));
+    for (auto& pr : c.pairings) {
+        if (pr.first.region > detRegion) --pr.first.region;
+        if (pr.second.region > detRegion) --pr.second.region;
+    }
+    const std::uint32_t finalRegion = detRegion < region ? region - 1 : region;
+
+    for (auto& [child, tag] : childrenAllWithMoveTag(work)) {
+        if (tag.kind != MoveKind::InteriorPseudo) continue;
+        if (tag.component != comp || tag.region != finalRegion || tag.boundary != boundary ||
+            tag.i != static_cast<int>(token))
+            continue;
+        return child;
+    }
+    throw EncodingError("disaPointRMove: interior move not found (internal error)");
+}
+
 } // namespace stalks

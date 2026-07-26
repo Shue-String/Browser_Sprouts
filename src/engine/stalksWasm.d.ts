@@ -62,6 +62,20 @@ export interface StalksModule {
    * stalks.ts. Not canonicalized/reordered otherwise.
    */
   decompressed(enc: string): string;
+  /**
+   * Standalone quick-canon (Advanced Collections) lookup for an arbitrary encoding -- not just a
+   * position's own children (see quickCanonOf in wasm_api.cpp / stalks.ts). Returns
+   * {"ok":true,"enc":"<rep>","offset":0|1} or a parse/engine error.
+   */
+  quickCanonOf(enc: string): string;
+  /**
+   * Ground-truth DisaPoint R move: the paper's InteriorPseudo rewrite (3q*)=(q*) run through the
+   * real engine (see disaPointRMove in moves.hpp/wasm_api.cpp / stalks.ts), not a hand-spliced text
+   * edit. `enc` must have the target DisaPoint still decompressed as a membrane pair; (component,
+   * region, boundary, token) index its inline occurrence. Returns
+   * {"ok":true,"enc":"<canonical child>"} or an engine error.
+   */
+  disaPointRMove(enc: string, component: number, region: number, boundary: number, token: number): string;
 }
 
 /** Async factory: instantiates the WASM and resolves to the module. */

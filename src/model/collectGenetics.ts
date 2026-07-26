@@ -22,6 +22,7 @@ import {
   canon,
   childrenTracked,
   decompress,
+  disaPointRMove,
   regionMovesTracked,
 } from '../engine/stalks';
 
@@ -141,6 +142,16 @@ function cloneComponents(components: ParsedComponent[]): ParsedComponent[] {
   return components.map(regions => regions.map(boundaries => boundaries.map(tokens => [...tokens])));
 }
 
+/** Delete component `index` outright and reserialize -- used for the T' gene (see
+ * computeTprimeGene): "drop the [22] entirely, and just give the nimber of the rest of the
+ * position" -- the rest may itself be a multi-component ⊕-sum, which analyze() handles correctly
+ * on its own (no manual XOR needed here). */
+export function deleteComponent(enc: string, index: number): string {
+  const parsed = parseEncoding(enc);
+  parsed.splice(index, 1);
+  return serializeComponents(parsed);
+}
+
 /** Drop empty boundaries/regions left behind after deleting a token. */
 function pruneEmpty(components: ParsedComponent[]): ParsedComponent[] {
   return components
@@ -153,27 +164,25 @@ function pruneEmpty(components: ParsedComponent[]): ParsedComponent[] {
 }
 
 /**
- * R: the position with the DisaPoint's dead branch (and its own token) deleted outright. If the
- * DisaPoint is the sole content between one joint's two visits (an adjacent '7'...'8' pair -- see
- * canon.cpp's joint-tagging, first visit '7', second visit '8'), just deleting it would leave the
- * joint with zero-length content between its visits, which the engine can't parse as text -- so
- * collapse the whole 7/DisaPoint/8 triple into a single scab ('2') instead. e.g. R([11738]) = [112].
+ * R: the ground-truth position reached by the paper's InteriorPseudo rewrite (3q*)=(q*) on this
+ * DisaPoint's own membrane -- computed by the real engine (moves.hpp's disaPointRMove, called
+ * through stalks.ts's disaPointRMove wrapper), not a hand-spliced text edit. An earlier version of
+ * this function hand-simulated the splice (erase the token + its detached partner region, patch up
+ * straddled joints); stalks/tools/collect_genetics.cpp's header comment records the case that
+ * proved it wrong: removing a DisaPoint's membrane can MERGE two regions together (finishComponent's
+ * real region-merge/decay logic), which a text splice cannot replicate. `components` must have this
+ * DisaPoint still decompressed as a membrane pair, matching `target`'s own coordinates. Returns null
+ * on any engine failure (should not happen for a well-formed target).
  */
-export function buildRemoveEncoding(components: ParsedComponent[], target: DisaPointRef): string {
-  const work = cloneComponents(components);
-  const boundary = work[target.component][target.region][target.boundary];
-  const straddlesJoint =
-    target.token > 0 &&
-    target.token + 1 < boundary.length &&
-    boundary[target.token - 1] === '7' &&
-    boundary[target.token + 1] === '8';
-  if (straddlesJoint) {
-    boundary.splice(target.token - 1, 3, '2');
-  } else {
-    boundary.splice(target.token, 1);
-  }
-  work[target.detached.component].splice(target.detached.region, 1);
-  return serializeComponents(pruneEmpty(work));
+export async function computeR(components: ParsedComponent[], target: DisaPointRef): Promise<string | null> {
+  const res = await disaPointRMove(
+    serializeComponents(components),
+    target.component,
+    target.region,
+    target.boundary,
+    target.token,
+  );
+  return res.ok ? res.enc : null;
 }
 
 /**
@@ -236,9 +245,10 @@ async function relocateForDecompress(
   );
   if (direct) return direct;
 
-  const targetRCanon = await canon(buildRemoveEncoding(originalParsed, target));
+  const targetRCanon = await computeR(originalParsed, target);
+  if (targetRCanon === null) return null;
   for (const candidate of candidates) {
-    if (await canon(buildRemoveEncoding(decompressedParsed, candidate)) === targetRCanon) return candidate;
+    if ((await computeR(decompressedParsed, candidate)) === targetRCanon) return candidate;
   }
   return null;
 }
@@ -304,6 +314,33 @@ export function buildReplaceEncoding(components: ParsedComponent[], target: Disa
 // computeLReachable's ground-truth canon set (matching by canon equality, not raw indices or a
 // per-move guess -- see computeLReachable's doc comment).
 
+// NOTE on quickChildren (Advanced Collections quick-canon dedup): classification here deliberately
+// stays on `children` (ChildInfo[]), NOT `quickChildren` (QuickChildInfo[]). QuickChildInfo carries
+// no `move: MoveInfo` at all, and its `enc` is the quick-canon REP (a representative shared by every
+// child in that quick-canon class), not that specific child's own canon() -- there is no `move` or
+// per-child `enc` to bridge back to lMoveNimbersRobust/classifyChildrenByDisaPoint's
+// canon-equality/index-based matching, which needs both. Separately, `children` already dedupes by
+// exact canonical-result equality (childrenAllWithMoveTag's `seen.insert(serialize(child))` on the
+// C++ side -- see computeLReachable's doc comment), which is the FINER equivalence (game-tree-exact,
+// not quick-canon-coarse); quick-canon deliberately collapses MORE positions together than "same
+// canonical result" (it doesn't distinguish some nimber-irrelevant structural variants), so a T-row
+// "near duplicate" the user is trying to declutter is very likely a set of children that already
+// share one canonical result-class here (fine) but sit in DIFFERENT canon() classes that only
+// coincide once quick-canonicalized. Merging on quickChildren, given it drops move info, could not
+// preserve the L-vs-T structural boundary this classification depends on -- unsafe to do without an
+// engine change exposing `move`/per-child `enc` on QuickChildInfo, which is out of scope here (see
+// project notes on this Collect redesign pass for the punted decision).
+// R deliberately does NOT get the same "search `children` for a canon match" treatment as L: R is
+// the InteriorPseudo move on this DisaPoint's own (already-decompressed-in-canonical-form) membrane
+// -- see computeR/disaPointRMove -- and canonical text (canonicalize()'s BASE form; see canon.hpp)
+// keeps every DisaPoint decompressed by construction. That means R's result is structurally NEVER a
+// member of a canonical position's ordinary `children` (Enclosure/Join, plus InteriorPseudo only for
+// any OTHER still-compressed Hollow/Split/Triplet) -- there is no live '3' token left to interior-
+// move on. Matching `rCanon` against `children` below is kept only as a defensive fallback for the
+// rare coincidence where some genuine other move's result happens to land on the same canonical
+// text (then reusing that real ChildInfo is nicer than a synthesized one); callers must NOT rely on
+// it firing -- see collect.ts's computeRowsAndGenes, which builds R's witness row directly from
+// `rCanon` whenever this comes back null.
 export interface ClassifiedChildren {
   lChildren: ChildInfo[];
   rChild: ChildInfo | null;
@@ -347,24 +384,76 @@ export interface DisaGeneticCode {
   L: number[];
   R: number | null;
   D: number | null;
+  Tprime: number[];
 }
 
-function codesEqual(a: DisaGeneticCode, b: DisaGeneticCode): boolean {
-  if (a.R !== b.R || a.D !== b.D || a.L.length !== b.L.length) return false;
-  const as = [...a.L].sort((x, y) => x - y);
-  const bs = [...b.L].sort((x, y) => x - y);
+function sameNumberSet(a: number[], b: number[]): boolean {
+  if (a.length !== b.length) return false;
+  const as = [...a].sort((x, y) => x - y);
+  const bs = [...b].sort((x, y) => x - y);
   return as.every((v, i) => v === bs[i]);
 }
 
-/** Full (L,R,D) genetic code of one DisaPoint. */
+function codesEqual(a: DisaGeneticCode, b: DisaGeneticCode): boolean {
+  if (a.R !== b.R || a.D !== b.D) return false;
+  return sameNumberSet(a.L, b.L) && sameNumberSet(a.Tprime, b.Tprime);
+}
+
+/**
+ * T' gene: the deduped set of nimbers reached by literally deleting each T'-move child's isolated
+ * [22] summand and calling analyze() on what's left (analyze() handles a multi-component ⊕-sum's
+ * XOR on its own -- no manual combination needed here). `tChildren` should be the ALREADY-classified
+ * T children of `target` (see classifyChildrenByDisaPoint) -- this only re-checks each one's shape
+ * against `canonText`'s own trivial-dead-pair count to find which ones are actually T' (an isolated
+ * pair not already present in the parent), the same untracked structural signal
+ * analyzeTEntry's fallback path uses (a T move never touches target's own token, so a freshly-
+ * appearing [22] pair can only be its decayed branch).
+ *
+ * When the [22] summand IS the whole child (e.g. [α,3]/[3,α]/[α3]/[3α] -- a bare DisaPoint pair
+ * with nothing else in the position), deleting it leaves no subposition at all: the terminal
+ * (no-moves-left) position, whose nimber is 0 by definition (mex of the empty option set) -- not a
+ * lookup miss to silently drop. analyze('') would just fail to parse, so that case is handled
+ * directly rather than falling into the general deleteComponent+analyze path below.
+ */
+export async function computeTprimeGeneFromChildren(canonText: string, tChildren: ChildInfo[]): Promise<number[]> {
+  const rootTrivial = parseEncoding(canonText).filter(isTrivialDeadPair).length;
+  const nimbers = new Set<number>();
+  for (const tc of tChildren) {
+    const childParsed = parseEncoding(tc.enc);
+    const trivialIdx = childParsed.reduce<number[]>((acc, c, i) => {
+      if (isTrivialDeadPair(c)) acc.push(i);
+      return acc;
+    }, []);
+    if (trivialIdx.length <= rootTrivial) continue;
+    if (childParsed.length === 1) {
+      nimbers.add(0);
+      continue;
+    }
+    const remainder = deleteComponent(tc.enc, trivialIdx[trivialIdx.length - 1]);
+    const res = await analyze(remainder);
+    if (res.ok) nimbers.add(res.nimber);
+  }
+  return [...nimbers].sort((a, b) => a - b);
+}
+
+/** Full (L,R,D,T') genetic code of one DisaPoint. */
 export async function computeGeneticCode(canonText: string, target: DisaPointRef): Promise<DisaGeneticCode> {
   const parsed = parseEncoding(canonText);
-  const [L, rRes, dRes] = await Promise.all([
+  const [L, rEnc, dRes, rootAnalysis] = await Promise.all([
     lMoveNimbersRobust(canonText, target),
-    analyze(buildRemoveEncoding(parsed, target)),
+    computeR(parsed, target),
     analyze(buildReplaceEncoding(parsed, target)),
+    analyze(canonText),
   ]);
-  return { L, R: rRes.ok ? rRes.nimber : null, D: dRes.ok ? dRes.nimber : null };
+  const rRes = rEnc !== null ? await analyze(rEnc) : null;
+  const R = rRes && rRes.ok ? rRes.nimber : null;
+  const D = dRes.ok ? dRes.nimber : null;
+  let Tprime: number[] = [];
+  if (rootAnalysis.ok) {
+    const { tChildren } = await classifyChildrenByDisaPoint(canonText, rootAnalysis.children, target, rEnc);
+    Tprime = await computeTprimeGeneFromChildren(canonText, tChildren);
+  }
+  return { L, R, D, Tprime };
 }
 
 // Caller-assigned provenance id used only to trace one specific DisaPoint's token through a chain
@@ -458,7 +547,7 @@ async function traceMove(parentEnc: string, parentSrc: PosSrc, move: MoveInfo): 
  * own ⊕-summand with nothing else attached (see applyEnclosure/applyJoin's "split into
  * pairing-connected components" cleanup step). This is the "T'" shape: the DisaPoint hasn't been
  * destroyed by the move, but it's no longer a DisaPoint either -- it's inert. */
-function isTrivialDeadPair(component: ParsedComponent): boolean {
+export function isTrivialDeadPair(component: ParsedComponent): boolean {
   if (component.length !== 1 || component[0].length !== 1) return false;
   const boundary = component[0][0];
   return boundary.length === 2 && boundary[0] === '2' && boundary[1] === '2';
@@ -503,7 +592,7 @@ export interface TEntryResult {
  *   (Hollow/Split/Triplet only) never touches DisaPoints, so whenever it doesn't reorder components/
  *   regions either (the common case), `target`'s coordinates are already correct and nothing needs
  *   relocating. Only if that direct check fails, fall back to matching by R-encoding fingerprint
- *   (canon(buildRemoveEncoding(...))) -- removing the SAME DisaPoint from two canon-equivalent
+ *   (computeR(...)) -- removing the SAME DisaPoint from two canon-equivalent
  *   starting texts must land on canon-equivalent results. The direct check must come first: when a
  *   position has two structurally-symmetric DisaPoints (an actual automorphism swaps them, e.g. two
  *   interchangeable branches), removing EITHER one gives the identical canonical result -- the
@@ -542,10 +631,12 @@ export async function toDisplayForm(
     );
     if (directIdx !== -1) return { enc: compressed, mark: { kind: 'disapoint', index: directIdx } };
 
-    const targetRemove = await canon(buildRemoveEncoding(srcParsed, target));
-    for (let i = 0; i < dstDps.length; i++) {
-      if ((await canon(buildRemoveEncoding(dstParsed, dstDps[i]))) === targetRemove) {
-        return { enc: compressed, mark: { kind: 'disapoint', index: i } };
+    const targetRemove = await computeR(srcParsed, target);
+    if (targetRemove !== null) {
+      for (let i = 0; i < dstDps.length; i++) {
+        if ((await computeR(dstParsed, dstDps[i])) === targetRemove) {
+          return { enc: compressed, mark: { kind: 'disapoint', index: i } };
+        }
       }
     }
     return { enc: decompressedEnc, mark };

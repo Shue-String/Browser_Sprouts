@@ -18,18 +18,30 @@
  * move, has some grandchild-level descendant whose own (L,R,D) genetic code exactly matches this
  * one's.
  *
- * Typing a genome instead of a position -- anything starting with '(', e.g. "({0},1,1)" -- looks it
- * up in GENOME_DB (see src/data/collectGenomes.json, built by stalks/tools/collect_genetics.cpp)
- * and loads EVERY <=7-life position with that exact genome into the list on the left. GENOME_DB
- * only stores (enc, DisaPoint index, position nimber) per hit -- not T/T' -- so a genome-loaded
- * entry's T/T' rows are computed lazily, the first time it's actually opened (see fillDetail).
+ * The genome tuple is (L,R,D,T') -- T' is the deduped nimber set reached by deleting each T'-move
+ * child's isolated [22] summand and taking the nimber of what's left (see
+ * computeTprimeGeneFromChildren); T itself is NOT part of the genome, just an extra column shown
+ * last, same list-of-positions display as always.
+ *
+ * Typing a genome instead of a position -- anything starting with '(', e.g. "({0},1,1,{0})" (or the
+ * legacy 3-tuple "({0},1,1)", which matches every T' bucket sharing that L/R/D) -- looks it up in
+ * GENOME_DB (see src/data/collectGenomes.json, built by stalks/tools/collect_genetics.cpp) and
+ * loads EVERY <=7-life position with that genome into the list on the left. GENOME_DB only stores
+ * (enc, DisaPoint index, life count, Grandparent-Bypass-all-pass flag) per hit -- not T or the
+ * L/R/D/T' witnessing positions -- so a genome-loaded entry's row/expand-dropdown data is computed
+ * lazily, the first time it's actually opened (see fillDetail); L/R/D/T' themselves are known
+ * immediately from the bucket.
  *
  * Every DisaPoint variation ever searched or genome-loaded (or seeded as a default from the
  * ({0},1,1) and ({1},0,0) genomes, see seedDefaultHistory) is kept as a "variation" in the list on
- * the left, in quick-canon (bracket/⊕) form with 'α' marking the DisaPoint, most-recently-viewed
- * first and deduped by that label. Each line also shows the variation's own nimber, right-aligned,
- * and so does every T/T' child position in the detail pane. The list persists across reloads via
- * localStorage; invalid/empty searches never get added to it.
+ * the left, in quick-canon (bracket/⊕) form with 'α' marking the DisaPoint, ordered by ascending
+ * life count (not insertion order) and deduped by label. Each line also shows the variation's own
+ * life count, right-aligned (the parent position's nimber isn't meaningful for collection
+ * purposes), plus a '?' next to the label when every one of its T-move children satisfies the
+ * Grandparent Bypass Theorem (the same condition that puts a '?' on an individual T row in the
+ * detail pane below -- see TEntry.bypass). Every T/T' child position in the detail pane still shows
+ * its own nimber, right-aligned, unchanged. The list persists across reloads via localStorage;
+ * invalid/empty searches never get added to it.
  *
  * Limited to positions with 8 or fewer lives (counting each DisaPoint as one life) for now — see
  * the user's spec: beyond that the engine falls back to on-demand quick-canon nimber lookups,
@@ -43,13 +55,14 @@ import {
   findDisaPoints,
   countLives,
   buildDisplayEncoding,
-  buildRemoveEncoding,
+  computeR,
   buildReplaceEncoding,
   lMoveNimbersRobust,
   classifyChildrenByDisaPoint,
   analyzeTEntry,
   toDisplayForm,
   computeGeneticCode,
+  computeTprimeGeneFromChildren,
   type DisaPointRef,
   type DisaGeneticCode,
   type TPositionMark,
@@ -59,7 +72,13 @@ import genomeDbJson from '../data/collectGenomes.json';
 interface GenomeHit {
   enc: string;
   dp: number;
-  nimber: number;
+  /** Life count of the whole position (Position::lives2()/2 -- see stalks/tools/dump_low_life_quick.cpp),
+   * not its nimber -- the parent position's nimber isn't meaningful for collection purposes. */
+  lives: number;
+  /** True iff every one of this DisaPoint's T-move children satisfies the Grandparent Bypass
+   * Theorem (see stalks/tools/collect_genetics.cpp's computeAllBypass) -- precomputed offline so
+   * the left-hand list can show its own '?' immediately, before fillDetail lazily computes T. */
+  allBypass: boolean;
 }
 
 const GENOME_DB = genomeDbJson as unknown as Record<string, GenomeHit[]>;
@@ -101,17 +120,41 @@ interface Entry {
   /** Quick-canon (bracket/⊕) form of the position, with 'α' marking this DisaPoint. Doubles as the
    * dedup key for the variation list. */
   label: string;
-  /** Nimber of the whole position this variation belongs to (same for every DisaPoint of one search). */
-  nimber: number;
+  /** Life count of the whole position this variation belongs to (same for every DisaPoint of one
+   * search) -- the left-hand list is ordered by this and shows it beside each entry. The parent
+   * position's nimber isn't meaningful for collection purposes, unlike its life count. */
+  lives: number;
+  /** True iff every one of this DisaPoint's T-move children satisfies the Grandparent Bypass
+   * Theorem -- i.e. every row in the T section below would show its own '?' (see TEntry.bypass).
+   * Known immediately for a genome-loaded entry (GenomeHit.allBypass); computed the moment T is
+   * available otherwise (eagerly for a search entry, lazily in fillDetail for a genome/T-row one).
+   * Drives the '?' shown next to this entry in the left-hand list. */
+  bypass: boolean;
+  /** Genome tuple, displayed/ordered L, R, D, T' (T is not part of the genome -- see module header). */
   L: number[];
   R: number | null;
   D: number | null;
+  /** T' gene: deduped nimber set from deleting each T'-move child's isolated [22] summand and
+   * analyzing what's left (see computeTprimeGeneFromChildren). Braced like L, not a position list. */
+  Tprime: number[];
+  /** T move list -- every other legal move, shown as a position list (unchanged from before). */
   T: TEntry[];
-  Tprime: TEntry[];
-  /** False for a genome-loaded entry until fillDetail has computed its T/T' rows. Always true for
-   * entries built via a normal position search (computeEntry computes everything eagerly). */
+  /** T' move list (the actual [22]-decay child positions) -- kept for the expand dropdown; the T'
+   * TABLE ROW itself now shows the `Tprime` nimber-set gene above, not this list directly. */
+  TprimeChildren: TEntry[];
+  /** Witnessing child position(s) for each element of L, for L's own expand dropdown -- reuses
+   * classifyChildrenByDisaPoint's lChildren rather than recomputing (see computeGeneticCode header
+   * note re: L/T' classification). */
+  lRows: TEntry[];
+  /** Witnessing child position for R (there's at most one R-move), for R's expand dropdown. */
+  rRow: TEntry | null;
+  /** The hypothetical D (scab-replace) position, for D's expand dropdown. Not a real game-tree
+   * child -- built directly by buildReplaceEncoding -- but still openable/hoverable the same way. */
+  dRow: TEntry | null;
+  /** False for a genome-loaded entry until fillDetail has computed its T/T'/lRows/rRow/dRow rows.
+   * Always true for entries built via a normal position search (computeEntry computes eagerly). */
   tComputed: boolean;
-  /** Only set on genome-loaded entries -- what fillDetail needs to compute T/T' lazily. */
+  /** Only set on genome-loaded entries -- what fillDetail needs to compute the rest lazily. */
   sourceEnc?: string;
   sourceDpIndex?: number;
 }
@@ -121,10 +164,13 @@ function isEntry(x: unknown): x is Entry {
   const o = x as Record<string, unknown>;
   return (
     typeof o.label === 'string' &&
-    typeof o.nimber === 'number' &&
+    typeof o.lives === 'number' &&
+    typeof o.bypass === 'boolean' &&
     Array.isArray(o.L) &&
     Array.isArray(o.T) &&
     Array.isArray(o.Tprime) &&
+    Array.isArray(o.TprimeChildren) &&
+    Array.isArray(o.lRows) &&
     typeof o.tComputed === 'boolean'
   );
 }
@@ -136,9 +182,18 @@ let history: Entry[] = [];
 let activeLabel: string | null = null;
 let searchGen = 0;
 
-// v8: label format changed from trailing '*' to 'α' for the marked DisaPoint (see markNth) --
-// bumped so stale v7-format labels don't linger in the list.
-const HISTORY_STORAGE_KEY = 'sprouts-collect-variations-v8';
+// v9: Entry shape changed -- Tprime went from a TEntry[] position list to a number[] gene
+// (renamed list is TprimeChildren), plus new lRows/rRow/dRow expand-dropdown fields -- bumped so
+// stale v8-format entries don't linger in the list (isEntry would reject them anyway, but the key
+// bump also lets old data coexist untouched rather than being silently dropped in place).
+// v11: no shape change, but several R/D computation bugs were fixed across the v10 window itself
+// (joint-wrap-arc collapse, alpha-mislabeling on witness rows) -- entries cached under v10 may have
+// baked in a stale wrong value from before one of those fixes landed, with no other invalidation
+// path (existing entries are never recomputed, only reused). Bump forces a clean reseed.
+// v13: Entry.nimber (the parent position's nimber) replaced by Entry.lives (its life count) plus a
+// new Entry.bypass flag -- isEntry would reject old v12 entries anyway (no `lives`/`bypass` fields),
+// bumped for the same "don't silently drop old data in place" reason as v9.
+const HISTORY_STORAGE_KEY = 'sprouts-collect-variations-v13';
 
 function saveHistory(): void {
   try {
@@ -195,63 +250,157 @@ function extractSelection(raw: string): { stripped: string; selected: number | u
   return { stripped: raw.replace(/\*/g, ''), selected };
 }
 
-// ---- genome key format: "({l1,l2,...},R,D)", L sorted ascending and deduped -- byte-identical
-// to stalks/tools/collect_genetics.cpp's genomeKey, which built src/data/collectGenomes.json's keys.
+function sortedDedup(vals: number[]): number[] {
+  return [...new Set(vals)].sort((a, b) => a - b);
+}
 
-function genomeKey(L: number[], R: number, D: number): string {
-  const sorted = [...new Set(L)].sort((a, b) => a - b);
-  return `({${sorted.join(',')}},${R},${D})`;
+// ---- genome key format: "({l1,...},R,D,{t1,...})", L and T' each sorted ascending and deduped --
+// byte-identical to stalks/tools/collect_genetics.cpp's genomeKey, which built
+// src/data/collectGenomes.json's keys.
+
+function genomeKey(L: number[], R: number, D: number, Tprime: number[]): string {
+  return `({${sortedDedup(L).join(',')}},${R},${D},{${sortedDedup(Tprime).join(',')}})`;
+}
+
+function parseNumSet(raw: string): number[] | null {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return [];
+  const vals = trimmed.split(',').map(s => Number.parseInt(s.trim(), 10));
+  return vals.some(n => Number.isNaN(n)) ? null : vals;
 }
 
 interface ParsedGenome {
-  key: string;
+  /** Exact GENOME_DB key when T' was given in the query; null when only (L,R,D) was typed --
+   * callers then scan every key sharing that (L,R,D) via findKeysByLRD (see loadGenome), since
+   * T' isn't knowable from the query alone in that form. */
+  key: string | null;
   L: number[];
   R: number;
   D: number;
+  Tprime: number[] | null;
 }
 
+/** Accepts the modern 4-tuple "({L},R,D,{T'})" and, for backward compatibility, the legacy
+ * 3-tuple "({L},R,D)" (T' unspecified -- see ParsedGenome.key). */
 function parseGenomeQuery(input: string): ParsedGenome | null {
-  const m = /^\(\{([0-9,\s]*)\}\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$/.exec(input);
-  if (!m) return null;
-  const rawL = m[1].trim();
-  const L = rawL.length === 0 ? [] : rawL.split(',').map(s => Number.parseInt(s.trim(), 10));
-  if (L.some(n => Number.isNaN(n))) return null;
-  const R = Number.parseInt(m[2], 10);
-  const D = Number.parseInt(m[3], 10);
-  const sorted = [...new Set(L)].sort((a, b) => a - b);
-  return { key: genomeKey(sorted, R, D), L: sorted, R, D };
+  const m4 = /^\(\{([0-9,\s]*)\}\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*\{([0-9,\s]*)\}\s*\)$/.exec(input);
+  if (m4) {
+    const L = parseNumSet(m4[1]);
+    const Tprime = parseNumSet(m4[4]);
+    if (L === null || Tprime === null) return null;
+    const R = Number.parseInt(m4[2], 10);
+    const D = Number.parseInt(m4[3], 10);
+    return { key: genomeKey(L, R, D, Tprime), L: sortedDedup(L), R, D, Tprime: sortedDedup(Tprime) };
+  }
+  const m3 = /^\(\{([0-9,\s]*)\}\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$/.exec(input);
+  if (m3) {
+    const L = parseNumSet(m3[1]);
+    if (L === null) return null;
+    const R = Number.parseInt(m3[2], 10);
+    const D = Number.parseInt(m3[3], 10);
+    return { key: null, L: sortedDedup(L), R, D, Tprime: null };
+  }
+  return null;
 }
 
-/** Build a (T/T'-pending) Entry directly from a GENOME_DB hit -- no analyze() call needed, since
- * `hit.enc` is already the decompressed canonical text and L/R/D are implied by the genome bucket. */
-function buildGenomeEntry(hit: GenomeHit, L: number[], R: number, D: number): Entry {
+/** Every GENOME_DB key sharing this exact (L,R,D), regardless of T' -- used whenever T' isn't
+ * pinned down (legacy 3-tuple queries, and seedDefaultHistory's own (L,R,D)-only defaults). Each
+ * bucket found gets its own T' attributed to its hits (buildGenomeEntry). */
+function findKeysByLRD(L: number[], R: number, D: number): { key: string; Tprime: number[] }[] {
+  const prefix = `({${sortedDedup(L).join(',')}},${R},${D},{`;
+  const out: { key: string; Tprime: number[] }[] = [];
+  for (const key of Object.keys(GENOME_DB)) {
+    if (!key.startsWith(prefix)) continue;
+    const inner = key.slice(prefix.length, key.length - 2); // strip trailing "})"
+    const Tprime = inner.length === 0 ? [] : inner.split(',').map(s => Number.parseInt(s, 10));
+    out.push({ key, Tprime });
+  }
+  return out;
+}
+
+/** Build a (rows-pending) Entry directly from a GENOME_DB hit -- no analyze() call needed for
+ * L/R/D/T', since `hit.enc` is already the decompressed canonical text and the genome is implied
+ * by the bucket. The row/expand-dropdown data (T, T' children, lRows, rRow, dRow) is still lazy. */
+function buildGenomeEntry(hit: GenomeHit, L: number[], R: number, D: number, Tprime: number[]): Entry {
   const parsed = parseEncoding(hit.enc);
   const disaPoints = findDisaPoints(parsed);
   const display = buildDisplayEncoding(parsed, disaPoints);
   return {
     label: bracketDisplay(markNth(display, hit.dp + 1)),
-    nimber: hit.nimber,
+    lives: hit.lives,
+    bypass: hit.allBypass,
     L,
     R,
     D,
+    Tprime,
     T: [],
-    Tprime: [],
+    TprimeChildren: [],
+    lRows: [],
+    rRow: null,
+    dRow: null,
     tComputed: false,
     sourceEnc: hit.enc,
     sourceDpIndex: hit.dp,
   };
 }
 
-/** T/T' classification + formatting, shared by the eager (computeEntry) and lazy (fillDetail) paths. */
-async function computeTAndTPrime(
+/** Render one "witness" child position as a TEntry-shaped row -- shared plumbing for L/R/D/T/T's
+ * expand dropdowns (see renderTCell). `enc`/`dpIndex` (needed for hover/click-to-open) are set
+ * whenever the position still contains ANY DisaPoint -- since this doesn't do T's own
+ * tracked-provenance retrace, it opens the FIRST DisaPoint found; good enough for "browse a
+ * witnessing position" without claiming index-exact target identity.
+ *
+ * `markAsTarget` controls whether that first DisaPoint (if any) gets 'α'-marked in the label as if
+ * it were the DisaPoint this whole detail view is about. Only genuine T rows (via `analyzeTEntry`'s
+ * tracked-provenance retrace) get to claim that -- L, R, and D all leave `buildWitnessRow` at
+ * `false`: any DisaPoint present in their result is some OTHER, unrelated one that just happens to
+ * live elsewhere in the position (L doesn't specially preserve `target`'s own identity either --
+ * that was a wrong assumption in an earlier pass of this code), and marking it 'α' would
+ * misleadingly claim it's the tracked point. It renders as an ordinary '3' instead. */
+function buildWitnessRow(enc: string, nimber: number, markAsTarget: boolean): TEntry {
+  const parsed = parseEncoding(enc);
+  const disaPoints = findDisaPoints(parsed);
+  const compact = buildDisplayEncoding(parsed, disaPoints);
+  const label = bracketDisplay(disaPoints.length > 0 && markAsTarget ? markNth(compact, 1) : compact);
+  return {
+    label,
+    nimber,
+    bypass: false,
+    ...(disaPoints.length > 0 ? { enc, dpIndex: 0 } : {}),
+  };
+}
+
+interface RowsAndGenes {
+  T: TEntry[];
+  TprimeChildren: TEntry[];
+  Tprime: number[];
+  lRows: TEntry[];
+  rRow: TEntry | null;
+}
+
+/** Everything move-classification-derived, shared by the eager (computeEntry) and lazy
+ * (fillDetail) paths: T/T' row lists, the T' gene (computeTprimeGeneFromChildren), and L/R's
+ * witnessing-position rows (reusing classifyChildrenByDisaPoint's lChildren/rChild rather than
+ * recomputing -- see that function's doc comment). T' gene is computed BEFORE the T rows so the
+ * (L,R,D,T') rootCode passed into analyzeTEntry's Grandparent Bypass check is complete. */
+async function computeRowsAndGenes(
   canonText: string,
   children: ChildInfo[],
   dp: DisaPointRef,
-  rootCode: DisaGeneticCode,
+  L: number[],
+  R: number | null,
+  D: number | null,
   rCanon: string | null,
-): Promise<{ T: TEntry[]; Tprime: TEntry[] }> {
-  const { tChildren } = await classifyChildrenByDisaPoint(canonText, children, dp, rCanon);
-  const classified = await Promise.all(
+): Promise<RowsAndGenes> {
+  const { lChildren, rChild, tChildren } = await classifyChildrenByDisaPoint(canonText, children, dp, rCanon);
+  const Tprime = await computeTprimeGeneFromChildren(canonText, tChildren);
+  const rootCode: DisaGeneticCode = { L, R, D, Tprime };
+
+  // T/T' row lists: every classified child, shown as-is (the quick-canon dedup attempt tried here
+  // previously was rolled back -- it mismatched DisaPoint identity across representatives and
+  // produced garbled/incorrectly-collapsed labels, e.g. showing an uncompacted detached pair
+  // instead of the proper compact form; see git history for the full attempt and why it was reverted).
+  const classifiedT = await Promise.all(
     tChildren.map(async tChild => {
       const { enc, mark, bypass } = await analyzeTEntry(canonText, dp, tChild, rootCode);
       const display = await toDisplayForm(enc, mark);
@@ -264,13 +413,28 @@ async function computeTAndTPrime(
       return { mark, entry };
     }),
   );
+
+  const lRows = lChildren.map(lc => buildWitnessRow(lc.enc, lc.nimber, false));
+  // rChild only ever comes back non-null in the rare coincidence where some genuine OTHER move of
+  // the position happens to land on the same canonical result as R -- see ClassifiedChildren's doc
+  // comment in collectGenetics.ts for why R is structurally never a member of `children` in general.
+  // The normal case builds the witness row directly from rCanon/R, exactly like D's dRow below.
+  const rRow = rChild
+    ? buildWitnessRow(rChild.enc, rChild.nimber, false)
+    : rCanon !== null && R !== null
+      ? buildWitnessRow(rCanon, R, false)
+      : null;
+
   return {
-    T: classified.filter(c => c.mark.kind !== 'isolated').map(c => c.entry),
-    Tprime: classified.filter(c => c.mark.kind === 'isolated').map(c => c.entry),
+    T: classifiedT.filter(c => c.mark.kind !== 'isolated').map(c => c.entry),
+    TprimeChildren: classifiedT.filter(c => c.mark.kind === 'isolated').map(c => c.entry),
+    Tprime,
+    lRows,
+    rRow,
   };
 }
 
-/** (L,R,D) genome of a "T" entry's own surviving DisaPoint, computed on first hover/click and
+/** (L,R,D,T') genome of a "T" entry's own surviving DisaPoint, computed on first hover/click and
  * cached on the TEntry itself. Returns null for entries that aren't a genuine DisaPoint (T' rows,
  * and T rows where the tracked point didn't survive at all -- see TEntry's enc/dpIndex doc). */
 async function computeTEntryGenome(t: TEntry): Promise<DisaGeneticCode | null> {
@@ -283,17 +447,27 @@ async function computeTEntryGenome(t: TEntry): Promise<DisaGeneticCode | null> {
   return genome;
 }
 
-/** Build a (T/T'-pending) Entry from a T-row's own genome, mirroring buildGenomeEntry -- same
- * lazy-T/T' shape, just sourced from a T-move child instead of a GENOME_DB hit. */
+/** Build a (rows-pending) Entry from a T-row's own genome, mirroring buildGenomeEntry -- same
+ * lazy shape, just sourced from a T-move child instead of a GENOME_DB hit. `t.enc` is always set
+ * here (selectTEntry only reaches this once that's confirmed) -- used to compute this position's
+ * own life count, since a TEntry only carries its nimber. `bypass` isn't known yet (T isn't
+ * computed for a fresh lazy entry); fillDetail fills it in once T is actually available. */
 function buildEntryFromTEntry(t: TEntry, genome: DisaGeneticCode): Entry {
+  const parsed = parseEncoding(t.enc ?? '');
+  const lives = countLives(parsed, findDisaPoints(parsed));
   return {
     label: t.label,
-    nimber: t.nimber,
+    lives,
+    bypass: false,
     L: genome.L,
     R: genome.R,
     D: genome.D,
+    Tprime: genome.Tprime,
     T: [],
-    Tprime: [],
+    TprimeChildren: [],
+    lRows: [],
+    rRow: null,
+    dRow: null,
     tComputed: false,
     sourceEnc: t.enc,
     sourceDpIndex: t.dpIndex,
@@ -322,36 +496,52 @@ async function selectTEntry(t: TEntry): Promise<void> {
 async function computeEntry(
   canonText: string,
   children: ChildInfo[],
-  rootNimber: number,
+  lives: number,
   dp: DisaPointRef,
   idx: number,
   display: string,
 ): Promise<Entry> {
   const parsed = parseEncoding(canonText);
   const L = await lMoveNimbersRobust(canonText, dp);
-  const rEnc = buildRemoveEncoding(parsed, dp);
   const dEnc = buildReplaceEncoding(parsed, dp);
-  const [rRes, dRes] = await Promise.all([analyze(rEnc), analyze(dEnc)]);
-  const R = rRes.ok ? rRes.nimber : null;
+  const [rEnc, dRes] = await Promise.all([computeR(parsed, dp), analyze(dEnc)]);
+  const rRes = rEnc !== null ? await analyze(rEnc) : null;
+  const R = rRes && rRes.ok ? rRes.nimber : null;
   const D = dRes.ok ? dRes.nimber : null;
-  const rootCode: DisaGeneticCode = { L, R, D };
 
-  const { T, Tprime } = await computeTAndTPrime(canonText, children, dp, rootCode, rRes.ok ? rRes.canon : null);
-
-  return {
-    label: bracketDisplay(markNth(display, idx + 1)),
-    nimber: rootNimber,
+  const { T, TprimeChildren, Tprime, lRows, rRow } = await computeRowsAndGenes(
+    canonText,
+    children,
+    dp,
     L,
     R,
     D,
-    T,
+    rEnc,
+  );
+  const dRow = dRes.ok ? buildWitnessRow(dEnc, dRes.nimber, false) : null;
+  const bypass = T.length > 0 && T.every(t => t.bypass);
+
+  return {
+    label: bracketDisplay(markNth(display, idx + 1)),
+    lives,
+    bypass,
+    L,
+    R,
+    D,
     Tprime,
+    T,
+    TprimeChildren,
+    lRows,
+    rRow,
+    dRow,
     tComputed: true,
   };
 }
 
-/** Lazily fill in T/T' for a genome-loaded entry the first time it's actually viewed. Mutates
- * `entry` in place and persists the result so it's only ever computed once. */
+/** Lazily fill in the row/expand-dropdown data for a genome-loaded entry the first time it's
+ * actually viewed. Mutates `entry` in place and persists the result so it's only ever computed
+ * once. L/R/D/T' (the genome itself) are already known from the GENOME_DB bucket; this only fills
+ * T, T's own witnessing children, and the L/R/D expand rows. */
 async function fillDetail(entry: Entry): Promise<void> {
   if (entry.tComputed || entry.sourceEnc === undefined || entry.sourceDpIndex === undefined) return;
 
@@ -368,18 +558,33 @@ async function fillDetail(entry: Entry): Promise<void> {
     return;
   }
 
-  const rRes = await analyze(buildRemoveEncoding(parsed, dp));
-  const rootCode: DisaGeneticCode = { L: entry.L, R: entry.R, D: entry.D };
-  const { T, Tprime } = await computeTAndTPrime(result.canon, result.children, dp, rootCode, rRes.ok ? rRes.canon : null);
+  const dEnc = buildReplaceEncoding(parsed, dp);
+  const rEnc = await computeR(parsed, dp);
+  const { T, TprimeChildren, lRows, rRow } = await computeRowsAndGenes(
+    result.canon,
+    result.children,
+    dp,
+    entry.L,
+    entry.R,
+    entry.D,
+    rEnc,
+  );
 
   entry.T = T;
-  entry.Tprime = Tprime;
+  entry.TprimeChildren = TprimeChildren;
+  entry.lRows = lRows;
+  entry.rRow = rRow;
+  entry.dRow = entry.D !== null ? buildWitnessRow(dEnc, entry.D, false) : null;
+  // Refine the precomputed (or T-row-added, always-false) bypass marker now that T is actually
+  // known -- self-correcting against the offline data file, same condition computeEntry uses.
+  entry.bypass = T.length > 0 && T.every(t => t.bypass);
   entry.tComputed = true;
   saveHistory();
 }
 
 /** Populate the persistent variation list with every position matching the ({0},1,1) and
- * ({1},0,0) genomes from GENOME_DB, as sensible defaults to browse before any search has run. */
+ * ({1},0,0) (L,R,D) genomes from GENOME_DB (any T'), as sensible defaults to browse before any
+ * search has run. */
 function seedDefaultHistory(): void {
   const seen = new Set<string>();
   const seeded: Entry[] = [];
@@ -388,12 +593,14 @@ function seedDefaultHistory(): void {
     { L: [1], R: 0, D: 0 },
   ];
   for (const { L, R, D } of defaults) {
-    const hits = GENOME_DB[genomeKey(L, R, D)] ?? [];
-    for (const hit of hits) {
-      const entry = buildGenomeEntry(hit, L, R, D);
-      if (seen.has(entry.label)) continue;
-      seen.add(entry.label);
-      seeded.push(entry);
+    for (const { key, Tprime } of findKeysByLRD(L, R, D)) {
+      const hits = GENOME_DB[key] ?? [];
+      for (const hit of hits) {
+        const entry = buildGenomeEntry(hit, L, R, D, Tprime);
+        if (seen.has(entry.label)) continue;
+        seen.add(entry.label);
+        seeded.push(entry);
+      }
     }
   }
   history = seeded;
@@ -416,19 +623,32 @@ function loadHistory(): void {
   seedDefaultHistory();
 }
 
-/** Look up a genome query and load every matching <=7-life position into history. */
+/** Look up a genome query and load every matching <=7-life position into history. Accepts either
+ * the full 4-tuple ({L},R,D,{T'}) (exact GENOME_DB key) or the legacy 3-tuple ({L},R,D), which
+ * matches every T' bucket sharing that (L,R,D) -- see findKeysByLRD. */
 function loadGenome(raw: string): void {
   const parsedGenome = parseGenomeQuery(raw);
   if (!parsedGenome) {
-    status = `Couldn't parse that genome — expected a form like ({0,1},2,3).`;
+    status = `Couldn't parse that genome — expected a form like ({0,1},2,3,{0}).`;
     statusIsError = true;
     render();
     return;
   }
 
-  const hits = GENOME_DB[parsedGenome.key];
-  if (!hits || hits.length === 0) {
-    status = `No positions with genome ${parsedGenome.key} found (8 or fewer lives).`;
+  const buckets =
+    parsedGenome.key !== null && parsedGenome.Tprime !== null
+      ? [{ key: parsedGenome.key, Tprime: parsedGenome.Tprime }]
+      : findKeysByLRD(parsedGenome.L, parsedGenome.R, parsedGenome.D);
+
+  const entries: Entry[] = [];
+  for (const { key, Tprime } of buckets) {
+    const hits = GENOME_DB[key];
+    if (!hits) continue;
+    for (const hit of hits) entries.push(buildGenomeEntry(hit, parsedGenome.L, parsedGenome.R, parsedGenome.D, Tprime));
+  }
+
+  if (entries.length === 0) {
+    status = `No positions with genome ({${parsedGenome.L.join(',')}},${parsedGenome.R},${parsedGenome.D}) found (8 or fewer lives).`;
     statusIsError = true;
     render();
     return;
@@ -437,7 +657,6 @@ function loadGenome(raw: string): void {
   // A genome search replaces the list rather than appending to it, so it's always clear that
   // every entry on screen shares this exact genome (anything looked at afterward re-appends normally).
   history = [];
-  const entries = hits.map(hit => buildGenomeEntry(hit, parsedGenome.L, parsedGenome.R, parsedGenome.D));
   for (let i = entries.length - 1; i >= 0; i--) addToHistory(entries[i]);
   activeLabel = entries[0].label;
   status = '';
@@ -490,7 +709,7 @@ async function runSearch(raw: string): Promise<void> {
   const display = buildDisplayEncoding(parsed, disaPoints);
   const children: ChildInfo[] = result.children;
 
-  const computed = await Promise.all(disaPoints.map((dp, idx) => computeEntry(result.canon, children, result.nimber, dp, idx, display)));
+  const computed = await Promise.all(disaPoints.map((dp, idx) => computeEntry(result.canon, children, lives, dp, idx, display)));
   if (myGen !== searchGen) return;
 
   for (let i = computed.length - 1; i >= 0; i--) addToHistory(computed[i]);
@@ -501,7 +720,7 @@ async function runSearch(raw: string): Promise<void> {
 }
 
 function fmtGenome(g: DisaGeneticCode): string {
-  return `L=${fmtSet(g.L)}  R=${fmtNimber(g.R)}  D=${fmtNimber(g.D)}`;
+  return `L=${fmtSet(g.L)}  R=${fmtNimber(g.R)}  D=${fmtNimber(g.D)}  T'=${fmtSet(g.Tprime)}`;
 }
 
 /** Bumped on every hide/re-show so a genome fetch that resolves after the pointer has moved on
@@ -585,26 +804,35 @@ function renderDetail(): void {
     });
   }
 
-  const tCell = entry.tComputed ? '' : '<span class="collect-t-pending">computing…</span>';
-  const tpCell = entry.tComputed ? '' : '<span class="collect-t-pending">computing…</span>';
+  // L/R/D/T' are known immediately for both search-computed and genome-loaded entries (the genome
+  // IS L,R,D,T' -- see buildGenomeEntry); only their witnessing-position expand rows (and T/T'
+  // children) are lazy for a genome-loaded entry, hence the separate "computing…" only on the
+  // dropdown rows below, not the gene summaries themselves.
+  const pending = entry.tComputed ? '' : '<span class="collect-t-pending">computing…</span>';
 
   detailEl.innerHTML = `
     <div class="collect-detail-enc">${entry.label}</div>
     <table class="collect-code-table">
-      <tr><th>Move</th><th>Child nimbers / positions</th></tr>
-      <tr><td>L</td><td class="nimset">${fmtSet(entry.L)}</td></tr>
-      <tr><td>R</td><td class="nimset">${fmtNimber(entry.R)}</td></tr>
-      <tr><td>D</td><td class="nimset">${fmtNimber(entry.D)}</td></tr>
-      <tr><td>T</td><td class="collect-t-cell" id="collect-t-cell">${tCell}</td></tr>
-      <tr><td>T'</td><td class="collect-t-cell" id="collect-tprime-cell">${tpCell}</td></tr>
+      <tr><th>Move</th><th>Genome / witnessing positions</th></tr>
+      <tr><td>L</td><td class="collect-t-cell"><div class="nimset">${fmtSet(entry.L)}</div><div id="collect-l-rows">${pending}</div></td></tr>
+      <tr><td>R</td><td class="collect-t-cell"><div class="nimset">${fmtNimber(entry.R)}</div><div id="collect-r-rows">${pending}</div></td></tr>
+      <tr><td>D</td><td class="collect-t-cell"><div class="nimset">${fmtNimber(entry.D)}</div><div id="collect-d-rows">${pending}</div></td></tr>
+      <tr><td>T'</td><td class="collect-t-cell"><div class="nimset">${fmtSet(entry.Tprime)}</div><div id="collect-tprime-rows">${pending}</div></td></tr>
+      <tr><td>T</td><td class="collect-t-cell" id="collect-t-cell">${pending}</td></tr>
     </table>
   `;
 
   if (entry.tComputed) {
+    const lEl = document.getElementById('collect-l-rows');
+    const rEl = document.getElementById('collect-r-rows');
+    const dEl = document.getElementById('collect-d-rows');
+    const tpEl = document.getElementById('collect-tprime-rows');
     const tEl = document.getElementById('collect-t-cell');
-    const tpEl = document.getElementById('collect-tprime-cell');
+    if (lEl) renderTCell(lEl, entry.lRows);
+    if (rEl) renderTCell(rEl, entry.rRow ? [entry.rRow] : []);
+    if (dEl) renderTCell(dEl, entry.dRow ? [entry.dRow] : []);
+    if (tpEl) renderTCell(tpEl, entry.TprimeChildren);
     if (tEl) renderTCell(tEl, entry.T);
-    if (tpEl) renderTCell(tpEl, entry.Tprime);
   }
 }
 
@@ -619,10 +847,14 @@ function render(): void {
   statusEl.classList.toggle('error', statusIsError);
 
   listEl.innerHTML = '';
-  history.forEach(entry => {
+  // Ordered by life count ascending, not insertion order -- see the module header.
+  const ordered = [...history].sort((a, b) => a.lives - b.lives);
+  ordered.forEach(entry => {
     const btn = document.createElement('button');
     btn.className = 'collect-entry' + (entry.label === activeLabel ? ' active' : '');
-    btn.innerHTML = `<span class="collect-entry-label">${entry.label}</span><span class="collect-entry-nimber">${entry.nimber}</span>`;
+    btn.innerHTML =
+      `<span class="collect-entry-label">${entry.label}${entry.bypass ? ' <span class="collect-bypass">?</span>' : ''}</span>` +
+      `<span class="collect-entry-nimber">${entry.lives}</span>`;
     btn.addEventListener('click', () => {
       activeLabel = entry.label;
       render();

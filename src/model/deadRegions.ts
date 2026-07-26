@@ -962,6 +962,13 @@ export interface TriangleDeadCollapse {
   x: VertexId;                          // external neighbour of A
   y: VertexId;                          // external neighbour of B
   z: VertexId;                          // external neighbour of C
+  // Antipodal steering is only needed when the direct collapse-to-centroid
+  // chords would actually cut across living structure (the majority-dead-
+  // region case, same as quadDeadStep's bcWaypoint/daWaypoint) — for a small,
+  // self-contained dead triangle the direct chords never leave the dead face,
+  // and forcing them through a distant antipodal point anyway sends the
+  // collapse the wrong way across the sphere. Null when no detour is needed.
+  steerTarget: SpherePoint | null;
 }
 
 const TRIANGLE_DEAD_SHRINK_STEP = 0.09;
@@ -1019,6 +1026,16 @@ export function detectTriangleDead(state: GameState): TriangleDeadCollapse | nul
     const [bId, cId] = sorted.slice(1) as [VertexId, VertexId];
     const extMap = new Map(vids.map((id, i) => [id, exts[i]!]));
 
+    // Decide once, at detection time, whether the direct collapse-to-centroid
+    // needs antipodal steering (see steerTarget doc on TriangleDeadCollapse).
+    const plainCentroid = normalize({
+      x: vs[0].pos.x + vs[1].pos.x + vs[2].pos.x,
+      y: vs[0].pos.y + vs[1].pos.y + vs[2].pos.y,
+      z: vs[0].pos.z + vs[1].pos.z + vs[2].pos.z,
+    });
+    const needsDetour = vs.some(v => chordCrossesLivingEdges(state, v.pos, plainCentroid, triEdgeSet));
+    const steerTarget = needsDetour ? occupiedCentroidAntipode(state, triVidSet) : null;
+
     return {
       kind: 'triangle-dead',
       a: aId, b: bId, c: cId,
@@ -1028,6 +1045,7 @@ export function detectTriangleDead(state: GameState): TriangleDeadCollapse | nul
       edgeC: extMap.get(cId)!.eid,
       x: extMap.get(aId)!.nbr,
       y: extMap.get(bId)!.nbr,
+      steerTarget,
       z: extMap.get(cId)!.nbr,
     };
   }
@@ -1047,10 +1065,11 @@ export function triangleDeadStep(
   const vc = state.vertices.get(collapse.c);
   if (!va || !vb || !vc) return { done: true, popAt: null };
 
-  // Collapse toward the point antipodal to nearby live content (see
-  // occupiedCentroidAntipode) rather than the raw triangle centroid, so this
-  // doesn't sweep its shrinking edges across content sitting in the smaller half.
-  const target = occupiedCentroidAntipode(state, new Set([collapse.a, collapse.b, collapse.c]))
+  // Collapse toward the plain triangle centroid, unless detection determined
+  // the direct chords would cut across living structure — in which case
+  // steerTarget (decided once, at detection time) routes around it instead.
+  // See steerTarget's doc on TriangleDeadCollapse.
+  const target = collapse.steerTarget
     ?? normalize({
       x: va.pos.x + vb.pos.x + vc.pos.x,
       y: va.pos.y + vb.pos.y + vc.pos.y,

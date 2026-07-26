@@ -8,6 +8,8 @@
 export const DEBUG = {
   /** Per-move Recreate candidate/voronoi-fallback diagnostics (very chatty). */
   recreate: false,
+  /** Tracked-encoding check match/mismatch/status logging. */
+  tracked: false,
 };
 
 if (typeof window !== 'undefined') {

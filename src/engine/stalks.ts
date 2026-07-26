@@ -342,6 +342,66 @@ export async function decompress(enc: string): Promise<DecompressResult> {
   }
 }
 
+/** Result of quickCanonOf: the quick-canon representative + offset of an arbitrary encoding. */
+export type QuickCanonOfResult =
+  | { ok: true; enc: string; offset: number }
+  | { ok: false; reason: 'parse-error' | 'engine-error' | 'engine-unavailable'; message?: string };
+
+/**
+ * Standalone quick-canon (Advanced Collections) lookup for an ARBITRARY encoding -- unlike
+ * `AnalysisOk.quickCanon`/`quickChildren`, which only cover a position's own value and its own
+ * children, this works on any encoding a caller already has in hand (e.g. one specific T-child's
+ * own canon() pulled out of a fully-valued `children: ChildInfo[]` list). Used to dedupe such a
+ * list down to one representative per quick-canon equivalence class -- see
+ * collect.ts/collectGenetics.ts's T-row declutter. `enc` need not be decompressed. Never rejects.
+ */
+export async function quickCanonOf(enc: string): Promise<QuickCanonOfResult> {
+  let mod: StalksModule;
+  try {
+    mod = await getModule();
+  } catch {
+    return { ok: false, reason: 'engine-unavailable', message: 'Stalks engine not built yet.' };
+  }
+  try {
+    return JSON.parse(mod.quickCanonOf(enc)) as QuickCanonOfResult;
+  } catch (e) {
+    return { ok: false, reason: 'parse-error', message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Result of disaPointRMove: the ground-truth R child's canonical encoding. */
+export type DisaPointRMoveResult =
+  | { ok: true; enc: string }
+  | { ok: false; reason: 'parse-error' | 'engine-error' | 'engine-unavailable'; message?: string };
+
+/**
+ * Ground-truth DisaPoint R move: runs the paper's InteriorPseudo rewrite (3q*)=(q*) through the
+ * real engine (moves.hpp's disaPointRMove) instead of collectGenetics.ts's old buildRemoveEncoding
+ * text splice, which silently produced a structurally wrong result whenever removing the
+ * DisaPoint's membrane merges two regions together (see stalks/tools/collect_genetics.cpp's header
+ * comment for the case that caught it). `enc` must have the target DisaPoint still decompressed as
+ * a membrane pair, matching DisaPointRef's own (region, boundary, token) coordinate convention.
+ */
+export async function disaPointRMove(
+  enc: string,
+  component: number,
+  region: number,
+  boundary: number,
+  token: number,
+): Promise<DisaPointRMoveResult> {
+  let mod: StalksModule;
+  try {
+    mod = await getModule();
+  } catch {
+    return { ok: false, reason: 'engine-unavailable', message: 'Stalks engine not built yet.' };
+  }
+  try {
+    return JSON.parse(mod.disaPointRMove(enc, component, region, boundary, token)) as DisaPointRMoveResult;
+  } catch (e) {
+    return { ok: false, reason: 'parse-error', message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** Engine-unavailable error, shared by the on-demand entry points. */
 function unavailable(): AnalysisErr {
   return {

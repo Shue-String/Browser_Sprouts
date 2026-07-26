@@ -66,6 +66,11 @@ export interface RenderOptions {
   vertexIdLabels?: Map<VertexId, string>;
   /** Debug: draw a direction arrow for each edge from each region-boundary side. */
   showBoundaryArrows?: boolean;
+  /** Debug: cross-check region bookkeeping (leftRegion/rightRegion, driving an edge-side
+   *  offset stripe) against an independent near-vertex point-in-polygon probe (driving a
+   *  per-vertex wedge ring) — see project_dead_region_elimination. A stripe running into a
+   *  differently-colored wedge marks exactly where the two disagree. */
+  showRegionDiagnostic?: boolean;
   /** Debug: draw the region adjacency (dual) graph — nodes at region centroids. */
   showRegionNetwork?: boolean;
   /** Fill the lambert disk grey to indicate game over. */
@@ -451,6 +456,9 @@ export class Renderer {
 
     // --- Boundary traversal arrows (debug) ---
     if (opts.showBoundaryArrows) this.renderBoundaryArrows(state, camera);
+
+    // --- Region bookkeeping vs. geometry cross-check (debug) ---
+    if (opts.showRegionDiagnostic) this.renderRegionDiagnostic(state, camera);
 
     // --- Active stroke ---
     if (opts.activeStroke && opts.activeStroke.length > 1) {
@@ -1212,33 +1220,24 @@ export class Renderer {
    * Draw one direction arrow per boundary step. Each entry records the exact edge
    * it traverses (`edgeId`) and the walk direction, so there is no parallel-edge
    * guessing. The arrowhead points along the walk; it is offset onto the side
-   * interior to its region (point-in-region test, disambiguated by the edge's
-   * other face) and colored a darker variant of the region's fill hue.
+   * interior to its region and colored a darker variant of the region's fill hue.
+   *
+   * The interior side comes straight from `edge.leftRegion`/`rightRegion` — the
+   * same bookkeeping-only rule renderEdgeSideHighlight uses — not a 2D canvas
+   * point-in-polygon vote. That vote used to compare inside(thisRegion) vs
+   * inside(neighbour) in screen space, but a region's projected polygon can wrap
+   * oddly (self-intersect, or span past the visible hemisphere) once it covers a
+   * large enough share of the sphere, silently flipping the vote and drawing the
+   * arrow into the wrong region — see project_dead_region_elimination's
+   * "boundary arrows on the wrong side" bug.
    */
   private renderBoundaryArrows(state: GameState, camera: RotationMatrix): void {
     const living = [...state.regions.values()].filter(r => !r.isDead);
     if (living.length === 0) return;
 
     const { hues, sat } = this.computeRegionHues(state);
-    // Region polygons (exact, via each entry's edgeId) for the interior-side test.
-    const regionPolys = new Map<RegionId, CanvasPoint[][]>();
-    for (const r of living) {
-      regionPolys.set(r.id, r.boundaries.map(b => this.boundaryPolygon(b.entries, state, camera)));
-    }
-    const innerRegions = living.filter(r => !r.isOuter);
-    const evenOddIn = (comps: CanvasPoint[][], pt: CanvasPoint): boolean => {
-      let inside = false;
-      for (const c of comps) if (c.length >= 3 && pointInPolygon(c, pt)) inside = !inside;
-      return inside;
-    };
-    const contains = (region: Region, pt: CanvasPoint): boolean => {
-      if (!region.isOuter) return evenOddIn(regionPolys.get(region.id)!, pt);
-      for (const ir of innerRegions) if (evenOddIn(regionPolys.get(ir.id)!, pt)) return false;
-      return true;
-    };
-
     const ctx = this.ctx;
-    const OFFSET = 7, PROBE = 6, HEAD = 9;
+    const OFFSET = 7, HEAD = 9;
 
     for (const region of living) {
       const hue = hues.get(region.id)!;
@@ -1258,24 +1257,16 @@ export class Renderer {
           const m = pr[mi], p0 = pr[Math.max(0, mi - 1)], p1 = pr[Math.min(pr.length - 1, mi + 1)];
           let tx = p1.px - p0.px, ty = p1.py - p0.py;
           const L = Math.hypot(tx, ty) || 1; tx /= L; ty /= L;
-          const nx = ty, ny = -tx; // left-normal (screen y-down)
+          const nx = ty, ny = -tx; // left-normal of THIS entry's own travel direction (screen y-down)
 
-          // Offset onto the side interior to this region. Score each side as
-          // inside(thisRegion) − inside(neighbour); the neighbour is the edge's
-          // OTHER face (known exactly now), which cancels any spurious self-
-          // containment when this region traces only one arc of a loop.
-          const otherId = edge.leftRegion === region.id ? edge.rightRegion : edge.leftRegion;
-          const other = state.regions.get(otherId);
-          const score = (px: number, py: number): number => {
-            const pt = { px, py };
-            let s = contains(region, pt) ? 1 : 0;
-            if (other && !other.isDead && contains(other, pt)) s -= 1;
-            return s;
-          };
-          const sPlus  = score(m.px + nx * PROBE, m.py + ny * PROBE);
-          const sMinus = score(m.px - nx * PROBE, m.py - ny * PROBE);
-          let sx = nx, sy = ny;
-          if (sMinus > sPlus) { sx = -nx; sy = -ny; }
+          // Same rule as renderEdgeSideHighlight: leftRegion is the face on the
+          // left when traveling v1→v2. This entry travels from entry.vertexId,
+          // which is v1→v2 if entry.vertexId===edge.v1, else the reverse (v2→v1,
+          // whose "left" is the edge's rightRegion).
+          const matchesLeft = edge.v1 === entry.vertexId
+            ? edge.leftRegion === region.id
+            : edge.rightRegion === region.id;
+          const sx = matchesLeft ? nx : -nx, sy = matchesLeft ? ny : -ny;
 
           const cxp = m.px + sx * OFFSET, cyp = m.py + sy * OFFSET;
           const tipx = cxp + tx * HEAD * 0.5, tipy = cyp + ty * HEAD * 0.5;
@@ -1557,6 +1548,224 @@ export class Renderer {
       }
     }
     ctx.restore();
+  }
+
+  /**
+   * Debug cross-check between two DIFFERENT ways of knowing "which region is this":
+   *
+   *  1. An edge-side offset stripe per living region, driven purely by the model's
+   *     leftRegion/rightRegion bookkeeping (renderEdgeSideHighlight — no geometric
+   *     probe, trusts the recorded dart→face assignment).
+   *  2. A per-vertex wedge ring, colored by an INDEPENDENT small-radius
+   *     point-in-polygon probe at each wedge's bisector (same technique
+   *     computeScabArc uses to verify a scab's living side) rather than by reading
+   *     leftRegion/rightRegion at all.
+   *
+   * Both should always agree if the model is sound. Where a stripe runs into a
+   * differently-colored wedge, that vertex's neighborhood is where bookkeeping and
+   * actual geometry have diverged — see project_dead_region_elimination's
+   * "boundary trace is wrong" investigation (computeSpliceSlots picking the wrong
+   * containing region for a new stroke).
+   */
+  private renderRegionDiagnostic(state: GameState, camera: RotationMatrix): void {
+    const ctx = this.ctx;
+    const { hues, sat } = this.computeRegionHues(state);
+    const colorFor = (rid: RegionId | undefined): string => {
+      const region = rid !== undefined ? state.regions.get(rid) : undefined;
+      if (!region) return 'rgba(128,128,128,0.55)';
+      if (region.isDead) return 'rgba(80,80,80,0.6)';
+      const hue = hues.get(rid!) ?? 0;
+      return `hsla(${hue}, ${Math.min(100, sat + 25)}%, 42%, 0.6)`;
+    };
+
+    // --- 1. Edge-side stripes, straight from leftRegion/rightRegion. ---
+    for (const r of state.regions.values()) {
+      if (r.isDead) continue;
+      const edgeIds = new Set<number>();
+      for (const b of r.boundaries) for (const e of b.entries) if (e.edgeId !== undefined) edgeIds.add(e.edgeId);
+      if (edgeIds.size === 0) continue;
+      this.renderEdgeSideHighlight(state, camera, edgeIds, r.id, colorFor(r.id), 8);
+    }
+
+    // --- 2. Per-vertex wedge ring. Rotating the camera must never change which
+    // region a wedge belongs to — that's a fact about the SPHERE, not about
+    // the current view. The previous version tested containment against
+    // `this.boundaryPolygon(...)`, which runs every boundary point through
+    // `toCanvas(pos, camera)` first: a camera-DEPENDENT 2D projection. That's
+    // exactly why rotating produced different answers, and it's the same root
+    // cause behind the real computeSpliceSlots bug (a region big enough to
+    // fold over on itself in projection breaks any 2D point-in-polygon test,
+    // regardless of which projection is used).
+    //
+    // Fix: do containment natively in 3D via spherical winding number — sum
+    // the signed bearing-angle swept by a region's boundary loop (as raw
+    // SpherePoints from boundarySphereLoop, no projection) around the probe
+    // point; ~1 full turn means enclosed, ~0 means not. This is the exact
+    // same technique screenOuterRegion above already uses to test containment
+    // of the camera's own back-pole — just generalized to an arbitrary,
+    // camera-independent 3D point instead of a camera-derived one.
+    //
+    // computeScabArc sidesteps the ambiguity for scabs by never testing the
+    // huge live region at all — only the ONE small adjacent DEAD region. And
+    // drawHoverWedge never distinguishes a membrane's two wedges, because
+    // they're PROVABLY the same region (no live-vs-live choice to make).
+    // Keep both shortcuts ahead of the (now sphere-native, but still a real
+    // decision) fallback:
+    //   1. Dead check, narrow scope: only dead regions touching this vertex.
+    //   2. Unambiguous-membrane shortcut: a single non-dead region touching
+    //      this vertex needs no test at all.
+    //   3. Otherwise this vertex genuinely borders 2+ different live regions
+    //      — the hard case — resolved by winding number now instead of 2D
+    //      polygon containment, but still marked with a dashed border so a
+    //      close call never looks as confident as a verified one.
+    const windingAround = (loop: SpherePoint[], point: SpherePoint): number => {
+      if (loop.length < 2) return 0;
+      const ang = (p: SpherePoint) => bearingFrom(point, p);
+      // A wedge is always probed right next to ITS OWN vertex, and every
+      // adjacent region's boundary loop necessarily passes through/near that
+      // same vertex — bearingFrom(point, p) is only singular when p is very
+      // close to `point` (or its antipode), which is exactly this case. One
+      // near-degenerate sample poisons the whole running sum (a wild jump
+      // gets wrapped into [-π,π] as a plausible-looking but wrong delta),
+      // which is exactly what happened for vertex 2/6: every candidate region
+      // came back ~0 winding instead of one of them reading ±1. Skip loop
+      // points too close to the probed point, the same "near-degenerate
+      // tangent" skip stablePt already applies elsewhere in this codebase.
+      const NEAR_EPS = 1e-3; // ~2.5 degrees
+      const kept = loop.filter(p => p.x * point.x + p.y * point.y + p.z * point.z <= 1 - NEAR_EPS);
+      if (kept.length < 2) return 0;
+      let total = 0;
+      let prev = ang(kept[kept.length - 1]);
+      for (const p of kept) {
+        const a = ang(p);
+        let da = a - prev;
+        while (da > Math.PI) da -= 2 * Math.PI;
+        while (da < -Math.PI) da += 2 * Math.PI;
+        total += da; prev = a;
+      }
+      return total / (2 * Math.PI);
+    };
+    const insideRegion = (rid: RegionId, point: SpherePoint): boolean => {
+      const region = state.regions.get(rid);
+      if (!region) return false;
+      let total = 0;
+      for (const b of region.boundaries) total += windingAround(this.boundarySphereLoop(b.entries, state), point);
+      // +1 specifically, not just |winding| large: recomputeRegions' "interior
+      // always on the left" convention makes genuine containment wind +1. A
+      // DIFFERENT, UNRELATED region's loop can wind -1 (or, rarely, +1) around
+      // this same point as a numerical artifact of that loop passing near this
+      // point's antipode (bearingFrom's local tangent frame is singular
+      // there) — searching every region in probeAnyRegion below, rather than
+      // just the ones actually adjacent to this vertex, let such an artifact
+      // match before the real region was ever reached.
+      return total > 0.5;
+    };
+    // Restrict the search to regions actually touching this vertex (dead or
+    // live) rather than every region in the state — an edge's own bookkeeping
+    // already tells us the small set of real candidates, so there's no reason
+    // to risk an unrelated distant region's antipodal winding artifact.
+    const probeAmong = (candidates: Iterable<RegionId>, point: SpherePoint): RegionId | undefined => {
+      for (const rid of candidates) if (insideRegion(rid, point)) return rid;
+      return undefined;
+    };
+
+    const leftOfDeparture  = (e: Edge, vid: VertexId): RegionId => e.v1 === vid ? e.leftRegion  : e.rightRegion;
+    const rightOfDeparture = (e: Edge, vid: VertexId): RegionId => e.v1 === vid ? e.rightRegion : e.leftRegion;
+
+    const RING_INNER = VERTEX_RADIUS_ACTIVE + 10, RING_OUTER = RING_INNER + 8;
+    const PROBE_ANGLE = 0.05; // radians on the sphere
+    const TAU = Math.PI * 2;
+    for (const v of state.vertices.values()) {
+      if (v.isPseudo) continue;
+      const incident: Edge[] = [];
+      let selfLoop = false;
+      for (const e of state.edges.values()) {
+        if (e.v1 === v.id && e.v2 === v.id) { selfLoop = true; break; }
+        if (e.v1 === v.id || e.v2 === v.id) incident.push(e);
+      }
+      if (selfLoop || incident.length === 0) continue;
+
+      // Bookkeeping-derived candidates for this vertex, split dead vs non-dead.
+      const adjacentDeadIds = new Set<RegionId>();
+      const adjacentLiveIds = new Set<RegionId>();
+      for (const e of incident) {
+        for (const rid of [leftOfDeparture(e, v.id), rightOfDeparture(e, v.id)]) {
+          const r = state.regions.get(rid);
+          if (r?.isDead) adjacentDeadIds.add(rid); else if (r) adjacentLiveIds.add(rid);
+        }
+      }
+      const unambiguousLive = adjacentLiveIds.size === 1 ? [...adjacentLiveIds][0] : undefined;
+
+      // Sort by true 3D bearing (camera-independent — the same measure
+      // recomputeRegions' own ring sort uses) to get the real wedge adjacency;
+      // canvas angle is used only afterward, purely to draw the arc shape.
+      const dated = incident.map(e => {
+        const near = e.v1 === v.id ? e.points[1] : e.points[e.points.length - 2];
+        const stub = near ?? v.pos;
+        return { e, stub, bearing: bearingFrom(v.pos, stub) };
+      }).sort((a, b) => a.bearing - b.bearing);
+
+      const { px, py } = this.toCanvas(v.pos, camera);
+      const canvasAngleOf = (p: SpherePoint): number => {
+        const c = this.toCanvas(p, camera);
+        return Math.atan2(c.py - py, c.px - px);
+      };
+
+      for (let i = 0; i < dated.length; i++) {
+        const cur = dated[i], next = dated[(i + 1) % dated.length];
+        // next.bearing wraps past +PI back around to cur.bearing for the last
+        // wedge — unwrap it forward past cur.bearing before averaging, or the
+        // bisector collapses onto the SAME point as the previous wedge's.
+        const nextBearing = next.bearing > cur.bearing ? next.bearing : next.bearing + TAU;
+        const probe3D = pointAtBearing(v.pos, (cur.bearing + nextBearing) / 2, PROBE_ANGLE);
+
+        // 1. Narrow, reliable dead check.
+        let rid: RegionId | undefined;
+        let verified = false;
+        const deadHits = [...adjacentDeadIds].filter(id => insideRegion(id, probe3D));
+        if (deadHits.length === 1) { rid = deadHits[0]; verified = true; }
+        // 2. Unambiguous single-live-region shortcut (no probing needed).
+        else if (unambiguousLive !== undefined) { rid = unambiguousLive; verified = true; }
+        // 3. Genuinely ambiguous — still restricted to this vertex's own
+        // adjacent regions (never the whole region set — see probeAmong).
+        else { rid = probeAmong([...adjacentDeadIds, ...adjacentLiveIds], probe3D); verified = false; }
+
+        // cur/next order came from 3D bearing (the true rotation order); the
+        // canvas angle of the SAME two edges can come out mirrored relative
+        // to that order wherever the sphere-to-screen projection flips
+        // chirality (the far side of the sphere, as seen from the current
+        // camera, is a mirror image of the near side) — drawing a0→a1
+        // unconditionally would then paint this wedge's resolved color onto
+        // the ADJACENT wedge instead. Settle it by checking which of the two
+        // complementary canvas spans the probe's OWN canvas angle actually
+        // falls in, and draw that one.
+        const a0 = canvasAngleOf(cur.stub);
+        const a1raw = canvasAngleOf(next.stub);
+        const a1 = a1raw > a0 ? a1raw : a1raw + TAU;
+        let probeAngle = canvasAngleOf(probe3D);
+        while (probeAngle < a0) probeAngle += TAU;
+        while (probeAngle >= a0 + TAU) probeAngle -= TAU;
+        const inForwardSpan = probeAngle <= a1;
+        const drawA0 = inForwardSpan ? a0 : a1;
+        const drawA1 = inForwardSpan ? a1 : a0 + TAU;
+
+        ctx.fillStyle = colorFor(rid);
+        ctx.beginPath();
+        ctx.moveTo(px + Math.cos(drawA0) * RING_INNER, py + Math.sin(drawA0) * RING_INNER);
+        ctx.arc(px, py, RING_OUTER, drawA0, drawA1);
+        ctx.arc(px, py, RING_INNER, drawA1, drawA0, true);
+        ctx.closePath();
+        ctx.fill();
+        if (!verified) {
+          ctx.save();
+          ctx.setLineDash([3, 2]);
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+    }
   }
 
   get projectionDiskRadius(): number { return this.diskRadius; }

@@ -142,4 +142,20 @@ std::vector<std::pair<Position, EdgeTag>> childrenAllTagged(const Position& p);
 // two-endpoint identity to draw.
 std::vector<std::pair<Position, MoveTag>> childrenAllWithMoveTag(const Position& p);
 
+// Ground-truth "R" move for a DisaPoint: the paper's InteriorPseudo rewrite (3q*)=(q*), applied to
+// the literal compressed DISA token this DisaPoint decompresses from. `pos` must have this
+// DisaPoint still decompressed as a membrane pair (its own inline occurrence at
+// pos.components[comp].regions[region][boundary][token]; its detached partner is found via the
+// component's own pairing table) -- the same coordinate convention every other DisaPoint-facing
+// caller in this codebase uses (collectGenetics.ts's DisaPointRef, collect_genetics.cpp's DisaRef).
+//
+// Hand-reverses just this one DisaPoint's decompression back to a literal DISA token (no other
+// pseudo-point or DisaPoint in the position is disturbed), then asks childrenAllWithMoveTag for its
+// InteriorPseudo child directly -- this reproduces finishComponent's real region-merge/decay rules
+// exactly, because it runs the same code path, rather than re-deriving them by hand-splicing text
+// (which silently diverges whenever removing the membrane merges two regions together). Throws
+// EncodingError if the coordinates don't name a paired MEMB token.
+Position disaPointRMove(const Position& pos, std::size_t comp, std::uint32_t region,
+                         std::uint32_t boundary, std::size_t token);
+
 } // namespace stalks

@@ -872,7 +872,7 @@ function runPendingTrackedCheck(): void {
   }
   void tracked.onMoveSettled(state, p.v1, p.v2, newVertexIds).then(res => {
     if (res.status === 'match') {
-      console.log(`[tracked] match: ${res.enc}${res.matchCount && res.matchCount > 1 ? ` (${res.matchCount} automorphic)` : ''}`);
+      if (DEBUG.tracked) console.log(`[tracked] match: ${res.enc}${res.matchCount && res.matchCount > 1 ? ` (${res.matchCount} automorphic)` : ''}`);
       updateTrackedPanel({ mismatch: false });
     } else if (res.status === 'mismatch') {
       console.warn(`[tracked] MISMATCH — engine=${res.engineKey} geometry=${res.geometryKey}`);
@@ -881,7 +881,7 @@ function runPendingTrackedCheck(): void {
       if (shrinkCheckbox.checked) { recreateCheckFailed = true; wake(); }
       updateTrackedPanel({ mismatch: true, engineKey: res.engineKey, geometryKey: res.geometryKey, enc: res.enc ?? undefined, charInfo: res.charInfo });
     } else {
-      console.log(`[tracked] ${res.status}`);
+      if (DEBUG.tracked) console.log(`[tracked] ${res.status}`);
       updateTrackedPanel(null);
     }
   });
@@ -1337,6 +1337,14 @@ let lastEnclosureCoverage: { pos: SpherePoint; side: 'arc' | 'other' | 'none' }[
 enclosureSidesCheckbox.addEventListener('change', () => {
   showEnclosureSides = enclosureSidesCheckbox.checked;
   if (!showEnclosureSides) { lastEnclosureSideColors = undefined; lastEnclosureCoverage = undefined; }
+  wake();
+});
+
+// Region diagnostic: color-coded boundary edges + per-vertex wedge rings
+const regionDiagnosticCheckbox = document.getElementById('region-diagnostic-checkbox') as HTMLInputElement;
+let showRegionDiagnostic = false;
+regionDiagnosticCheckbox.addEventListener('change', () => {
+  showRegionDiagnostic = regionDiagnosticCheckbox.checked;
   wake();
 });
 
@@ -2755,7 +2763,7 @@ function frameBody(now: number): void {
       }
     }
     const playerTurn = (state.moveCount % 2 === 0 ? 1 : 2) as 1 | 2;
-    renderer.render(state, camera, { ...extras, showMidpoints, showRegions, showVertexIds, showBoundaryArrows, showRegionNetwork, vertexLabels, spotLabels: spotLabelsDisplay, popAnimations: activePops, gameOver: isGameOver(), playerTurn, checkFailed: recreateCheckFailed, recreateHints: manualHints ?? undefined, candidatePreviewStrokes: candidatePreviewList ?? movePreviewFailCandidates ?? undefined, subregionHighlight: subregionHighlight ?? undefined, proposedArc: proposedArc ?? undefined, movePreviewArc: movePreviewArc ?? undefined, movePreviewFailRing: movePreviewFailRing ?? undefined, voronoiGraph: lastVoronoiGraph ?? undefined, voronoiCircumcenters: lastVoronoiCCs ?? undefined, voronoiExtraSeeds: lastVoronoiExtraSeeds ?? undefined, voronoiFullNodes: lastVoronoiFullNodes ?? undefined, voronoiSurvivingIds: lastVoronoiSurvivingIds ?? undefined, voronoiFakeCgrId: lastVoronoiFakeCgrId ?? undefined, hoverHighlight: hoverCharInfo ?? undefined, enclosureSideColors: showEnclosureSides ? lastEnclosureSideColors : undefined, enclosureCoverage: showEnclosureSides ? lastEnclosureCoverage : undefined, vertexIdLabels: canvasVertexLabels });
+    renderer.render(state, camera, { ...extras, showMidpoints, showRegions, showVertexIds, showBoundaryArrows, showRegionDiagnostic, showRegionNetwork, vertexLabels, spotLabels: spotLabelsDisplay, popAnimations: activePops, gameOver: isGameOver(), playerTurn, checkFailed: recreateCheckFailed, recreateHints: manualHints ?? undefined, candidatePreviewStrokes: candidatePreviewList ?? movePreviewFailCandidates ?? undefined, subregionHighlight: subregionHighlight ?? undefined, proposedArc: proposedArc ?? undefined, movePreviewArc: movePreviewArc ?? undefined, movePreviewFailRing: movePreviewFailRing ?? undefined, voronoiGraph: lastVoronoiGraph ?? undefined, voronoiCircumcenters: lastVoronoiCCs ?? undefined, voronoiExtraSeeds: lastVoronoiExtraSeeds ?? undefined, voronoiFullNodes: lastVoronoiFullNodes ?? undefined, voronoiSurvivingIds: lastVoronoiSurvivingIds ?? undefined, voronoiFakeCgrId: lastVoronoiFakeCgrId ?? undefined, hoverHighlight: hoverCharInfo ?? undefined, enclosureSideColors: showEnclosureSides ? lastEnclosureSideColors : undefined, enclosureCoverage: showEnclosureSides ? lastEnclosureCoverage : undefined, vertexIdLabels: canvasVertexLabels });
   }
 
   if (needsRender) {

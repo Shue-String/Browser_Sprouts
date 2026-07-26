@@ -189,6 +189,59 @@ interface SpliceSlot {
   afterEdgeId: EdgeId | null;
 }
 
+/** The raw SpherePoint loop a boundary walk traces, following each entry's
+ *  actual physical edge (or the bare vertex position for an isolated spot). */
+function boundarySphereLoop(entries: BoundaryEntry[], state: GameState): SpherePoint[] {
+  const loop: SpherePoint[] = [];
+  for (const e of entries) {
+    const edge = e.edgeId !== undefined ? state.edges.get(e.edgeId) : undefined;
+    if (edge) {
+      const pts = edgePtsForEntry(e, edge);
+      for (let j = 0; j < pts.length - 1; j++) loop.push(pts[j]);
+    } else {
+      const v = state.vertices.get(e.vertexId);
+      if (v) loop.push(v.pos);
+    }
+  }
+  return loop;
+}
+
+/** Spherical winding number of `loop` around `point`: the signed bearing-angle
+ *  swept by the loop, in full turns (~1 means enclosed, ~0 means not). Entirely
+ *  camera/projection-independent — rotating the view can never change the
+ *  answer, unlike a 2D pointInPolygon test on any projected polygon. */
+function windingAround(loop: SpherePoint[], point: SpherePoint): number {
+  if (loop.length < 2) return 0;
+  // A near-degenerate sample (loop point very close to `point`, where
+  // bearingFrom's local tangent frame is singular) poisons the whole running
+  // sum with a wild-but-plausible-looking jump — skip those, same guard
+  // stablePt applies elsewhere in this file.
+  const NEAR_EPS = 1e-3;
+  const kept = loop.filter(p => p.x * point.x + p.y * point.y + p.z * point.z <= 1 - NEAR_EPS);
+  if (kept.length < 2) return 0;
+  let total = 0;
+  let prev = bearingFrom(point, kept[kept.length - 1]);
+  for (const p of kept) {
+    const a = bearingFrom(point, p);
+    let da = a - prev;
+    while (da > Math.PI) da -= 2 * Math.PI;
+    while (da < -Math.PI) da += 2 * Math.PI;
+    total += da; prev = a;
+  }
+  return total / (2 * Math.PI);
+}
+
+/** Sphere-native containment: true iff `point` winds +1 turn around `region`'s
+ *  boundary. (recomputeRegions' "interior always on the left" convention makes
+ *  genuine containment wind +1, not just |winding| large — an unrelated loop
+ *  can wind -1, or rarely +1, around the SAME point purely as a numerical
+ *  artifact of passing near that point's antipode.) */
+function regionContainsPoint(state: GameState, region: { boundaries: { entries: BoundaryEntry[] }[] }, point: SpherePoint): boolean {
+  let total = 0;
+  for (const b of region.boundaries) total += windingAround(boundarySphereLoop(b.entries, state), point);
+  return total > 0.5;
+}
+
 /**
  * Determine, for each endpoint of a newly-drawn edge, where in that vertex's
  * EXISTING (stable) rotation ring the new dart(s) must be inserted — decided by
@@ -216,30 +269,52 @@ interface SpliceSlot {
  */
 function computeSpliceSlots(
   state: GameState,
-  proj: (p: SpherePoint) => CanvasPoint,
   moveInfo: { v1: VertexId; v2: VertexId; newEdgeIds: [EdgeId, EdgeId]; midVid: VertexId },
 ): Map<VertexId, SpliceSlot> {
   const result = new Map<VertexId, SpliceSlot>();
   const midPos = state.vertices.get(moveInfo.midVid)?.pos;
   if (!midPos) return result;
-  const midProj = proj(midPos);
 
-  // Locate the old (still-committed) region containing the new edge's midpoint:
-  // the smallest bounded region whose primary boundary polygon contains it, else
-  // the global outer region.
+  // Locate the old (still-committed) region containing the new edge's midpoint.
+  //
+  // A move's stroke never crosses an existing edge, so BOTH its endpoints
+  // (v1, v2 — or just v1 for a self-loop) already sit on the boundary of the
+  // one correct containing region, as either a normal edge-departure entry or
+  // a zero-edge isolated-spot entry. That bookkeeping is exact and free, so
+  // check it FIRST — before ever falling back to any point-in-region test.
+  // A 2D pointInPolygon test on a projected sample (the old approach here)
+  // silently misclassifies whenever the correct region is large enough to
+  // wrap the sphere (a "majority-spanning" region can swallow, in projection,
+  // a point that's actually inside a smaller, unrelated region) — see
+  // project_dead_region_elimination: this exact move (join into a live vertex
+  // sitting on a jammed dead region's boundary) picked a same-projected-area
+  // decoy region instead, silently starving the correct endpoint of any
+  // splice candidates and leaving the dead region jammed forever.
+  const touchesVertex = (region: { boundaries: { entries: BoundaryEntry[] }[] }, vid: VertexId): boolean =>
+    region.boundaries.some(b => b.entries.some(e => e.vertexId === vid));
+  const v1Candidates = [...state.regions.values()].filter(r => touchesVertex(r, moveInfo.v1));
+  const candidates = moveInfo.v1 === moveInfo.v2
+    ? v1Candidates
+    : v1Candidates.filter(r => touchesVertex(r, moveInfo.v2));
+
   let containing: { boundaries: { entries: BoundaryEntry[] }[] } | null = null;
-  let bestArea = Infinity;
-  for (const region of state.regions.values()) {
-    if (region.isDead || region.isOuter) continue;
-    const primary = region.boundaries[0];
-    if (!primary || primary.entries.length < 3) continue;
-    const poly = polyFromEntries(primary.entries, state, proj);
-    if (poly.length < 3 || !pointInPolygon(poly, midProj)) continue;
-    const area = Math.abs(signedArea(poly));
-    if (area < bestArea) { bestArea = area; containing = region; }
-  }
-  if (!containing) {
-    for (const region of state.regions.values()) if (region.isOuter) { containing = region; break; }
+  if (candidates.length === 1) {
+    containing = candidates[0];
+  } else if (candidates.length > 1) {
+    // Both endpoints are shared by more than one region (a joint) — only now
+    // does the ambiguity need resolving, and it's done sphere-natively (3D
+    // winding number around midPos), never via a projected 2D polygon.
+    containing = candidates.find(r => regionContainsPoint(state, r, midPos)) ?? candidates[0];
+  } else {
+    // Neither endpoint's bookkeeping matched anything (shouldn't happen for a
+    // validated stroke) — fall back to a sphere-native search over every
+    // region, then the outer region, rather than silently giving up.
+    for (const region of state.regions.values()) {
+      if (regionContainsPoint(state, region, midPos)) { containing = region; break; }
+    }
+    if (!containing) {
+      for (const region of state.regions.values()) if (region.isOuter) { containing = region; break; }
+    }
   }
   if (!containing) return result;
 
@@ -339,7 +414,7 @@ export function recomputeRegions(
   // off exactly which two OLD, stable darts the new dart must be inserted
   // between at each endpoint. See conversation 2026-07-08 (region determination
   // near-vertex tangent bug).
-  const spliceSlots = moveInfo ? computeSpliceSlots(state, proj, moveInfo) : null;
+  const spliceSlots = moveInfo ? computeSpliceSlots(state, moveInfo) : null;
 
   // --- Degrees from the edge set (self-loop edges count twice). ---
   const degree = new Map<VertexId, number>();

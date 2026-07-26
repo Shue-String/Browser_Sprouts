@@ -2,6 +2,7 @@
 // (never by the native CMake target, which does not have <emscripten/bind.h>).
 #include "analyze.hpp"
 #include "canon.hpp"      // canonicalizeDecompressedTracked
+#include "collections.hpp" // quickCanon
 #include "encoding.hpp"   // parsePosition, serialize
 #include "moves.hpp"      // enclosureChildTracked / joinChildTracked, Enclosure/Join
 #include "tokens.hpp"     // EncodingError
@@ -262,6 +263,72 @@ std::string canonicalizeTrackedProvenance(std::string enc) {
     }
 }
 
+// Standalone quick-canon (Advanced Collections) lookup for an ARBITRARY encoding -- not just a
+// position's own children (which analyze()'s `quickCanon`/`quickChildren` fields already cover).
+// Needed so a caller holding some other position's full canon (e.g. one specific play-child
+// already picked out of a fully-valued children list) can find which quick-canon equivalence
+// class it falls into, to dedupe a list of such children down to one representative per class
+// (see collectGenetics.ts's classifyChildrenByDisaPoint / the T-row declutter). Mirrors
+// writeQuickCanon's JSON shape in analyze.cpp: {"enc":..,"offset":..}.
+//
+// Success shape: {"ok":true,"enc":"<rep>","offset":0|1}. Failure shape (malformed input):
+// {"ok":false,"reason":"parse-error","message":"..."}.
+std::string quickCanonOf(std::string enc) {
+    try {
+        const stalks::Position p = stalks::parsePosition(enc);
+        const stalks::QuickCanonResult qc = stalks::quickCanon(p);
+        std::string out = "{\"ok\":true,\"enc\":";
+        // Reuse the encoding string writer via a tiny local JSON-string escape (mirrors jsonError's).
+        out += '"';
+        for (char ch : stalks::serialize(qc.rep)) {
+            if (ch == '"' || ch == '\\')
+                out += '\\';
+            out += ch;
+        }
+        out += "\",\"offset\":";
+        out += std::to_string(qc.offset);
+        out += "}";
+        return out;
+    } catch (const stalks::EncodingError& e) {
+        return jsonError("parse-error", e.what());
+    } catch (const std::exception& e) {
+        return jsonError("engine-error", e.what());
+    } catch (...) {
+        return jsonError("engine-error", "unknown");
+    }
+}
+
+// Ground-truth DisaPoint R move (see moves.hpp's disaPointRMove doc comment): the paper's
+// InteriorPseudo rewrite (3q*)=(q*) run through the real engine, rather than collectGenetics.ts's
+// old buildRemoveEncoding text splice (which silently produced a structurally wrong result whenever
+// removing the DisaPoint's membrane merges two regions together -- see stalks/tools/
+// collect_genetics.cpp's header comment). `enc` must have this DisaPoint still decompressed as a
+// membrane pair, matching every other DisaPointRef coordinate this codebase already uses (region/
+// boundary/token index into enc's own components[component].regions[region][boundary]).
+//
+// Success shape: {"ok":true,"enc":"<canonical child>"}. Failure shape (bad coordinates, or the
+// resulting encoding isn't in fact a paired membrane): {"ok":false,"reason":"...","message":"..."}.
+std::string disaPointRMoveJson(std::string enc, int component, int region, int boundary, int token) {
+    try {
+        const stalks::Position p = stalks::parsePosition(enc);
+        if (component < 0 || static_cast<std::size_t>(component) >= p.components.size())
+            return jsonError("bad-move", "component index out of range");
+        const stalks::Position child = stalks::disaPointRMove(
+            p, static_cast<std::size_t>(component), static_cast<std::uint32_t>(region),
+            static_cast<std::uint32_t>(boundary), static_cast<std::size_t>(token));
+        std::string out = "{\"ok\":true,\"enc\":\"";
+        out += stalks::serialize(child);
+        out += "\"}";
+        return out;
+    } catch (const stalks::EncodingError& e) {
+        return jsonError("engine-error", e.what());
+    } catch (const std::exception& e) {
+        return jsonError("engine-error", e.what());
+    } catch (...) {
+        return jsonError("engine-error", "unknown");
+    }
+}
+
 }  // namespace
 
 EMSCRIPTEN_BINDINGS(stalks_module) {
@@ -275,4 +342,6 @@ EMSCRIPTEN_BINDINGS(stalks_module) {
     emscripten::function("applyMoveTracked", &applyMoveTracked);
     emscripten::function("canonicalizeTrackedProvenance", &canonicalizeTrackedProvenance);
     emscripten::function("decompressed", &stalks::decompressedJson);
+    emscripten::function("quickCanonOf", &quickCanonOf);
+    emscripten::function("disaPointRMove", &disaPointRMoveJson);
 }
