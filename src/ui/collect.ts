@@ -64,6 +64,7 @@ import {
   computeGeneticCode,
   computeTprimeGeneFromChildren,
   relocateDisaPoint,
+  disaPointsEquivalent,
   type DisaPointRef,
   type DisaGeneticCode,
   type TPositionMark,
@@ -354,6 +355,47 @@ function buildGenomeEntry(hit: GenomeHit, L: number[], R: number, D: number, Tpr
   };
 }
 
+/** Collapse GENOME_DB hits that are the SAME position's multiple DisaPoints when they're truly
+ * behaviorally interchangeable (see collectGenetics.ts's disaPointsEquivalent, which does the actual
+ * comparison via real engine output -- never assume symmetry just from how the encoding text looks).
+ * Only merges hits that share an identical `enc` -- two DIFFERENT positions that happen to reach the
+ * same genome bucket by coincidence are never touched, even if every hit is compared pairwise here.
+ * Keeps the first hit of each equivalence class (lowest `dp`) and preserves the original order of
+ * whatever survives. */
+async function dedupeSymmetricHits(hits: GenomeHit[]): Promise<GenomeHit[]> {
+  const byEnc = new Map<string, GenomeHit[]>();
+  for (const hit of hits) {
+    const group = byEnc.get(hit.enc);
+    if (group) group.push(hit);
+    else byEnc.set(hit.enc, [hit]);
+  }
+
+  const drop = new Set<GenomeHit>();
+  for (const [enc, group] of byEnc) {
+    if (group.length < 2) continue;
+    const disaPoints = findDisaPoints(parseEncoding(enc));
+    const kept: GenomeHit[] = [];
+    for (const hit of group) {
+      const dp = disaPoints[hit.dp];
+      if (!dp) {
+        kept.push(hit);
+        continue;
+      }
+      let isDup = false;
+      for (const k of kept) {
+        const kdp = disaPoints[k.dp];
+        if (kdp && (await disaPointsEquivalent(enc, dp, kdp))) {
+          isDup = true;
+          break;
+        }
+      }
+      if (isDup) drop.add(hit);
+      else kept.push(hit);
+    }
+  }
+  return hits.filter(h => !drop.has(h));
+}
+
 /** Render one "witness" child position as a TEntry-shaped row -- shared plumbing for L/R/D/T/T's
  * expand dropdowns (see renderTCell). `enc`/`dpIndex` (needed for hover/click-to-open) are set
  * whenever the position still contains ANY DisaPoint -- since this doesn't do T's own
@@ -624,8 +666,12 @@ function loadHistory(): void {
 
 /** Look up a genome query and load every matching <=7-life position into history. Accepts either
  * the full 4-tuple ({L},R,D,{T'}) (exact GENOME_DB key) or the legacy 3-tuple ({L},R,D), which
- * matches every T' bucket sharing that (L,R,D) -- see findKeysByLRD. */
-function loadGenome(raw: string): void {
+ * matches every T' bucket sharing that (L,R,D) -- see findKeysByLRD. Async: dedupeSymmetricHits
+ * needs real engine calls to tell truly-interchangeable DisaPoints of one position apart from ones
+ * that only coincidentally share a genome -- see that function's doc comment. Guarded by the same
+ * `searchGen` counter runSearch uses, so an overlapping newer search/genome-load wins. */
+async function loadGenome(raw: string): Promise<void> {
+  const myGen = ++searchGen;
   const parsedGenome = parseGenomeQuery(raw);
   if (!parsedGenome) {
     status = `Couldn't parse that genome — expected a form like ({0,1},2,3,{0}).`;
@@ -639,12 +685,23 @@ function loadGenome(raw: string): void {
       ? [{ key: parsedGenome.key, Tprime: parsedGenome.Tprime }]
       : findKeysByLRD(parsedGenome.L, parsedGenome.R, parsedGenome.D);
 
-  const entries: Entry[] = [];
+  const allHits: { hit: GenomeHit; Tprime: number[] }[] = [];
   for (const { key, Tprime } of buckets) {
     const hits = GENOME_DB[key];
     if (!hits) continue;
-    for (const hit of hits) entries.push(buildGenomeEntry(hit, parsedGenome.L, parsedGenome.R, parsedGenome.D, Tprime));
+    for (const hit of hits) allHits.push({ hit, Tprime });
   }
+
+  status = 'Searching…';
+  statusIsError = false;
+  render();
+
+  const deduped = await dedupeSymmetricHits(allHits.map(x => x.hit));
+  if (myGen !== searchGen) return;
+  const keep = new Set(deduped);
+  const entries = allHits
+    .filter(x => keep.has(x.hit))
+    .map(x => buildGenomeEntry(x.hit, parsedGenome.L, parsedGenome.R, parsedGenome.D, x.Tprime));
 
   if (entries.length === 0) {
     status = `No positions with genome ({${parsedGenome.L.join(',')}},${parsedGenome.R},${parsedGenome.D}) found (8 or fewer lives).`;
@@ -901,7 +958,7 @@ export function initCollect(): void {
       e.preventDefault();
       const trimmed = input.value.trim();
       if (trimmed.startsWith('(')) {
-        loadGenome(trimmed);
+        void loadGenome(trimmed);
       } else {
         void runSearch(input.value);
       }

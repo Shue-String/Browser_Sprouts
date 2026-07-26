@@ -585,6 +585,53 @@ export async function computeGeneticCode(canonText: string, target: DisaPointRef
   return { L, R, D, Tprime };
 }
 
+/**
+ * True iff `dpA` and `dpB` (two DisaPoints of the SAME `canonText`) are behaviorally interchangeable
+ * -- everything the Collect UI ever displays about one is identical to the other, so showing both as
+ * separate rows is pure duplication.
+ *
+ * Deliberately does NOT try to detect this by inspecting the encoding text (e.g. relabeling tokens
+ * and comparing canon() output) -- canonicalize() already discards whatever labels it's given and
+ * reassigns them from scratch by first-occurrence order every time it runs (see canon.cpp's canonAlgo
+ * step 9-11), so a "swap two labels, re-canonicalize, compare" trick can't reveal anything: the swap
+ * never survives into the output, canonicalize() would produce the identical text whether or not a
+ * real automorphism exists. There is also no automorphism-group API exposed by the engine (it's used
+ * only as an internal search-pruning detail inside canonicalize's own DFS, not as a queryable result).
+ *
+ * Instead this compares REAL engine outputs: the full (L,R,D,T') genome first (cheap, rules out most
+ * non-equivalent pairs immediately), then -- since a genome match alone can be coincidental between
+ * two genuinely different points -- the full canonical L/T child sets and R result too. Confirmed
+ * against "2A|2B|2C|7A8BC" (three DisaPoints where exactly two, not three, turn out to be
+ * interchangeable): dp1/dp2 matched on every one of these checks, dp0 differed on all of them.
+ */
+export async function disaPointsEquivalent(canonText: string, dpA: DisaPointRef, dpB: DisaPointRef): Promise<boolean> {
+  const [gA, gB] = await Promise.all([computeGeneticCode(canonText, dpA), computeGeneticCode(canonText, dpB)]);
+  if (gA.R !== gB.R || gA.D !== gB.D) return false;
+  if (!sameNumberSet(gA.L, gB.L) || !sameNumberSet(gA.Tprime, gB.Tprime)) return false;
+
+  const parsed = parseEncoding(canonText);
+  const [rEncA, rEncB] = await Promise.all([computeR(parsed, dpA), computeR(parsed, dpB)]);
+  if ((rEncA === null) !== (rEncB === null)) return false;
+  if (rEncA !== null && rEncB !== null) {
+    const [rCanonA, rCanonB] = await Promise.all([canon(rEncA), canon(rEncB)]);
+    if (rCanonA !== rCanonB) return false;
+  }
+
+  const [clsA, clsB] = await Promise.all([
+    classifyChildrenByDisaPoint(canonText, dpA, rEncA),
+    classifyChildrenByDisaPoint(canonText, dpB, rEncB),
+  ]);
+  const canonSet = async (children: ChildInfo[]) => (await Promise.all(children.map(c => canon(c.enc)))).sort();
+  const [tA, tB, lA, lB] = await Promise.all([
+    canonSet(clsA.tChildren),
+    canonSet(clsB.tChildren),
+    canonSet(clsA.lChildren),
+    canonSet(clsB.lChildren),
+  ]);
+  if (tA.length !== tB.length || lA.length !== lB.length) return false;
+  return tA.every((v, i) => v === tB[i]) && lA.every((v, i) => v === lB[i]);
+}
+
 // Caller-assigned provenance id used only to trace one specific DisaPoint's token through a chain
 // of tracked move applications (see checkGrandparentBypass) -- distinct from GEN_SRC/UNTRACKED.
 const TRACK_ID = 1;
