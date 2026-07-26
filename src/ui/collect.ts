@@ -625,30 +625,42 @@ async function fillDetail(entry: Entry): Promise<void> {
 
 /** Populate the persistent variation list with every position matching the ({0},1,1) and
  * ({1},0,0) (L,R,D) genomes from GENOME_DB (any T'), as sensible defaults to browse before any
- * search has run. */
-function seedDefaultHistory(): void {
-  const seen = new Set<string>();
-  const seeded: Entry[] = [];
+ * search has run. Async for the same reason loadGenome is: dedupeSymmetricHits needs real engine
+ * calls to collapse truly-interchangeable DisaPoints (see that function's doc comment) -- this only
+ * runs once, on a brand-new browser/profile with no cached history yet, and its result is cached via
+ * saveHistory() afterward, so the one-time cost doesn't recur. */
+async function seedDefaultHistory(): Promise<void> {
   const defaults: { L: number[]; R: number; D: number }[] = [
     { L: [0], R: 1, D: 1 },
     { L: [1], R: 0, D: 0 },
   ];
+
+  const allHits: { hit: GenomeHit; L: number[]; R: number; D: number; Tprime: number[] }[] = [];
   for (const { L, R, D } of defaults) {
     for (const { key, Tprime } of findKeysByLRD(L, R, D)) {
       const hits = GENOME_DB[key] ?? [];
-      for (const hit of hits) {
-        const entry = buildGenomeEntry(hit, L, R, D, Tprime);
-        if (seen.has(entry.label)) continue;
-        seen.add(entry.label);
-        seeded.push(entry);
-      }
+      for (const hit of hits) allHits.push({ hit, L, R, D, Tprime });
     }
+  }
+
+  const deduped = await dedupeSymmetricHits(allHits.map(x => x.hit));
+  const keep = new Set(deduped);
+
+  const seen = new Set<string>();
+  const seeded: Entry[] = [];
+  for (const x of allHits) {
+    if (!keep.has(x.hit)) continue;
+    const entry = buildGenomeEntry(x.hit, x.L, x.R, x.D, x.Tprime);
+    if (seen.has(entry.label)) continue;
+    seen.add(entry.label);
+    seeded.push(entry);
   }
   history = seeded;
   saveHistory();
+  render();
 }
 
-function loadHistory(): void {
+async function loadHistory(): Promise<void> {
   try {
     const stored = localStorage.getItem(HISTORY_STORAGE_KEY);
     if (stored) {
@@ -661,7 +673,7 @@ function loadHistory(): void {
   } catch {
     /* fall through to seeding */
   }
-  seedDefaultHistory();
+  await seedDefaultHistory();
 }
 
 /** Look up a genome query and load every matching <=7-life position into history. Accepts either
@@ -950,7 +962,7 @@ function render(): void {
 export function initCollect(): void {
   if (wired) { render(); return; }
   wired = true;
-  loadHistory();
+  void loadHistory();
 
   const input = document.getElementById('collect-search-input') as HTMLInputElement;
   input.addEventListener('keydown', e => {
