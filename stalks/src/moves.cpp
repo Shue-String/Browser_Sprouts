@@ -1015,6 +1015,60 @@ std::vector<std::pair<Position, MoveTag>> childrenAllWithMoveTag(const Position&
     return out;
 }
 
+std::vector<std::pair<Position, MoveTag>> childrenAllWithMoveTagRaw(const Position& p) {
+    std::vector<std::pair<Position, MoveTag>> out;
+    auto add = [&](Position&& raw, const MoveTag& tag) {
+        Position child = canonicalize(raw);
+        child.validate();
+        out.emplace_back(std::move(child), tag);
+    };
+
+    for (std::size_t k = 0; k < p.components.size(); ++k) {
+        if (p.components[k].dead)
+            continue;
+        const Component& c = p.components[k];
+        for (std::uint32_t r = 0; r < c.regions.size(); ++r) {
+            for (std::uint32_t b = 0; b < c.regions[r].size(); ++b) {
+                const Bnd& w = c.regions[r][b];
+                for (int pos = 0; pos < static_cast<int>(w.size()); ++pos) {
+                    if (!isPseudo(w[static_cast<std::size_t>(pos)]))
+                        continue;
+                    IComp ic = labeled(c, /*allowPseudo=*/true);
+                    IWalk& tw = ic.regions[r][b];
+                    switch (w[static_cast<std::size_t>(pos)]) {
+                        case DISA:
+                        case HOLL:
+                            tw.erase(tw.begin() + pos);
+                            break;
+                        case SPLIT:
+                            tw[static_cast<std::size_t>(pos)] = Item{SCAB, -1, -1};
+                            break;
+                        default:
+                            tw[static_cast<std::size_t>(pos)] = Item{DISA, -1, -1};
+                            break;
+                    }
+                    MoveTag tag{MoveKind::InteriorPseudo, k, r, b, 0, 0, 0, pos, 0};
+                    add(spliceChild(p, k, stripSrc(finishComponent(ic))), tag);
+                }
+            }
+        }
+    }
+
+    const Position d = p.decompressed();
+    for (std::size_t k = 0; k < d.components.size(); ++k) {
+        if (d.components[k].dead)
+            continue;
+        const Component& c = d.components[k];
+        for (const auto& mv : enclosureMoves(c))
+            add(applyEnclosure(d, k, mv),
+                MoveTag{MoveKind::Enclosure, k, mv.region, mv.boundary, mv.mask, 0, 0, mv.i, mv.j});
+        for (const auto& mv : joinMoves(c))
+            add(applyJoin(d, k, mv),
+                MoveTag{MoveKind::Join, k, mv.region, 0, 0, mv.b1, mv.b2, mv.i, mv.j});
+    }
+    return out;
+}
+
 std::vector<Position> childrenAll(const Position& p) {
     std::vector<Position> out;
     for (auto& [child, tag] : childrenAllTagged(p)) {

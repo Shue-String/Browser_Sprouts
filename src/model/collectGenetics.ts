@@ -20,7 +20,7 @@ import {
   analyze,
   applyMoveTracked,
   canon,
-  childrenTracked,
+  canonicalizeTrackedProvenanceSync,
   decompress,
   disaPointRMove,
   regionMovesTracked,
@@ -219,26 +219,114 @@ function untrackedSrc(components: ParsedComponent[]): PosSrc {
   return components.map(regions => regions.map(boundaries => boundaries.map(tokens => tokens.map(() => -1))));
 }
 
+/** Flat sequential index of `ref`'s own token among EVERY token of `parsed`, walking components
+ * then regions then boundaries then tokens, ignoring separator punctuation ('+'/'|'/',') -- the same
+ * order/convention canonicalizeTrackedProvenanceSync's `src` array indexes into (it tracks per-TOKEN
+ * provenance, not raw string character offsets). Null if `ref` doesn't resolve inside `parsed`. */
+function flatTokenIndex(parsed: ParsedComponent[], ref: DisaPointRef): number | null {
+  let idx = 0;
+  for (let c = 0; c < parsed.length; c++) {
+    for (let r = 0; r < parsed[c].length; r++) {
+      for (let b = 0; b < parsed[c][r].length; b++) {
+        const boundary = parsed[c][r][b];
+        if (c === ref.component && r === ref.region && b === ref.boundary) {
+          return ref.token < boundary.length ? idx + ref.token : null;
+        }
+        idx += boundary.length;
+      }
+    }
+  }
+  return null;
+}
+
+/** Inverse of flatTokenIndex: which (component,region,boundary,token) tuple sits at flat token
+ * index `flatIdx` of `parsed`. Null if out of range. */
+function componentAtFlatIndex(
+  parsed: ParsedComponent[],
+  flatIdx: number,
+): { component: number; region: number; boundary: number; token: number } | null {
+  let idx = 0;
+  for (let c = 0; c < parsed.length; c++) {
+    for (let r = 0; r < parsed[c].length; r++) {
+      for (let b = 0; b < parsed[c][r].length; b++) {
+        const boundary = parsed[c][r][b];
+        if (flatIdx >= idx && flatIdx < idx + boundary.length) {
+          return { component: c, region: r, boundary: b, token: flatIdx - idx };
+        }
+        idx += boundary.length;
+      }
+    }
+  }
+  return null;
+}
+
 /**
- * Relocate `target` into `decompressedText` -- a full decompression of the same position (every
- * Hollow/Split/Triplet/DisaPoint pseudo-point elsewhere expanded to raw tokens, not just `target`'s
- * own DisaPoint, which was already decompressed in the source text). Expanding OTHER pseudo-points
- * inserts/reorders regions, so `target`'s own (region,boundary,token) coordinates can shift even
- * though its local structure (its own token + detached partner) is untouched.
+ * Relocate `target` into `otherText` -- any other serialization of the SAME position, whether that's
+ * a full decompression of `originalParsed` (every Hollow/Split/Triplet/DisaPoint pseudo-point
+ * elsewhere expanded to raw tokens, not just `target`'s own DisaPoint) or an independently
+ * re-canonicalized/re-analyzed text for what should be the identical structure (e.g. re-running
+ * analyze() on a stored genome-DB encoding, or the raw text a user typed before the engine
+ * canonicalizes it). Either kind of re-derivation can insert/reorder regions, so `target`'s own
+ * (region,boundary,token) coordinates can shift even though its local structure (its own token +
+ * detached partner) is untouched.
  *
- * Same two-step strategy as toDisplayForm's relocation: try `target`'s own coordinates first (the
- * common case -- decompressing a pseudo-point that comes AFTER target in the walk doesn't move
- * target at all), then fall back to matching by R-encoding fingerprint (removing the SAME DisaPoint
- * from two canon-equivalent starting texts must land on canon-equivalent results). Returns null if
- * no candidate matches (shouldn't happen in practice).
+ * Three-step strategy, most to least precise:
+ *  1. Exact per-token provenance via canonicalizeTrackedProvenanceSync, when `otherText` happens to
+ *     be exactly canonicalize(serializeComponents(originalParsed)) (verified by comparing its own
+ *     output text against `otherText` -- cheap and safe to attempt unconditionally, since it silently
+ *     returns null/no-match whenever that's not the relationship between the two texts, e.g. when
+ *     `otherText` came from a mere decompression step instead of a full canonicalization, or when
+ *     `originalParsed` itself still has other pseudo-points canonicalizeTrackedProvenanceSync can't
+ *     accept). This is the ONLY step that can correctly resolve a target that is one of several
+ *     structurally SYMMETRIC DisaPoints (the position has an automorphism permuting them): no
+ *     invariant computed independently on each side (R's nimber, R's canon text, ...) can ever tell
+ *     two truly-symmetric points apart, since by definition nothing distinguishes them -- but
+ *     canonicalizeTrackedProvenanceSync doesn't need to distinguish them by an invariant, it follows
+ *     the literal token through the transform. Confirmed necessary: for "1,3,3" (decompressing to
+ *     "1,A,B|2A|2B", where A and B are fully interchangeable), step 2's direct-coordinate match
+ *     misses (canonicalization moves the shared region to a different index) and step 3's R-fingerprint
+ *     match is genuinely ambiguous (A and B's R results are identical), silently resolving to
+ *     whichever candidate happens to be found first regardless of which one `target` actually was.
+ *  2. `target`'s own coordinates directly (the common case when no symmetry is involved -- e.g.
+ *     decompressing a pseudo-point that comes AFTER target in the walk doesn't move target at all).
+ *  3. R-encoding fingerprint (removing the SAME DisaPoint from two canon-equivalent starting texts
+ *     must land on canon-equivalent results) -- kept only as a last-resort fallback for whenever step
+ *     1 isn't applicable; ambiguous under symmetry as explained above, so steps 1/2 are tried first.
+ * Returns null if no candidate matches (shouldn't happen in practice).
+ *
+ * Callers MUST use this (never raw ordinal-index lookup, and never invariant-only matching) whenever
+ * a DisaPointRef computed against one text needs to be found again in a DIFFERENT text of the same
+ * position -- see collect.ts's runSearch and fillDetail, which both used to look up
+ * disaPoints[someIndex] directly against a freshly re-analyzed/re-canonicalized text and could
+ * silently resolve to the WRONG DisaPoint whenever the engine's own canonicalization reordered
+ * regions differently than the index's source (and, before step 1 was added here, still could when
+ * two-or-more DisaPoints were symmetric, since only R-fingerprint matching was available).
  */
-async function relocateForDecompress(
+export async function relocateDisaPoint(
   originalParsed: ParsedComponent[],
   target: DisaPointRef,
-  decompressedText: string,
+  otherText: string,
 ): Promise<DisaPointRef | null> {
-  const decompressedParsed = parseEncoding(decompressedText);
-  const candidates = findDisaPoints(decompressedParsed);
+  const tracked = canonicalizeTrackedProvenanceSync(serializeComponents(originalParsed));
+  if (tracked && tracked.enc === otherText) {
+    const srcFlatIdx = flatTokenIndex(originalParsed, target);
+    if (srcFlatIdx !== null) {
+      const dstFlatIdx = tracked.src.indexOf(srcFlatIdx);
+      if (dstFlatIdx !== -1) {
+        const otherParsed = parseEncoding(otherText);
+        const coords = componentAtFlatIndex(otherParsed, dstFlatIdx);
+        if (coords) {
+          const hit = findDisaPoints(otherParsed).find(
+            d => d.component === coords.component && d.region === coords.region && d.boundary === coords.boundary && d.token === coords.token,
+          );
+          if (hit) return hit;
+        }
+      }
+    }
+  }
+
+  const otherParsed = parseEncoding(otherText);
+  const candidates = findDisaPoints(otherParsed);
 
   const direct = candidates.find(
     d => d.component === target.component && d.region === target.region && d.boundary === target.boundary && d.token === target.token,
@@ -248,7 +336,7 @@ async function relocateForDecompress(
   const targetRCanon = await computeR(originalParsed, target);
   if (targetRCanon === null) return null;
   for (const candidate of candidates) {
-    if ((await computeR(decompressedParsed, candidate)) === targetRCanon) return candidate;
+    if ((await computeR(otherParsed, candidate)) === targetRCanon) return candidate;
   }
   return null;
 }
@@ -278,7 +366,7 @@ export async function computeLReachable(
 ): Promise<{ nimbers: number[]; canonSet: Set<string> }> {
   const decompressedRes = await decompress(canonText);
   if (!decompressedRes.ok) return { nimbers: [], canonSet: new Set() };
-  const relocated = await relocateForDecompress(parseEncoding(canonText), target, decompressedRes.enc);
+  const relocated = await relocateDisaPoint(parseEncoding(canonText), target, decompressedRes.enc);
   if (!relocated) return { nimbers: [], canonSet: new Set() };
 
   const res = await regionMovesTracked(
@@ -348,33 +436,78 @@ export interface ClassifiedChildren {
 }
 
 /**
- * Classify every child of the position relative to one DisaPoint: L (membership in
- * computeLReachable's canon set -- ground truth, not a per-move guess), R (matches `rCanon` if
- * given), T (everything else).
+ * Classify every legal move of the position relative to one DisaPoint: L (touches target's own
+ * token), R (matches `rCanon`), T (everything else).
+ *
+ * Deliberately does NOT classify against analyze()'s `children` list (as an earlier version did):
+ * that list is deduped by canonical RESULT (childrenAllWithMoveTag's `seen.insert(serialize(child))`
+ * on the C++ side), which is target-agnostic. Whenever the position has a structural automorphism
+ * that maps target's own DisaPoint onto some OTHER point (e.g. two-or-more symmetric DisaPoints
+ * sharing an isomorphic role, like "2A|2B|2C|7A8BC"), a genuine T move (say, connecting A to C, not
+ * touching target B at all) can produce a canonical result IDENTICAL to some L move that DOES touch
+ * B (say, connecting A to B) -- only one of the two survives analyze()'s dedup, and if the survivor
+ * happens to be the L one, the T move silently vanishes from the input list entirely, undercounting
+ * T (in the worst case, to empty) with no per-child fix possible since there was nothing left to
+ * classify. See allMovesTracked's own doc comment for the general form of this dedup pitfall.
+ *
+ * Fixed by enumerating every legal move directly via allMovesTracked (NOT deduped by result) on the
+ * fully decompressed text, exactly like computeLReachable already does for L's own nimber set, then
+ * classifying each individual move by whether it touches target's own (region,boundary,i/j)
+ * coordinates -- so an L move and a coincidentally-identical-result T move are never conflated, even
+ * though they land on the same canonical position. L/T lists are each deduped by canon() internally
+ * (one row per distinct reachable position within that classification), matching the previous
+ * one-row-per-canonical-child display convention.
  */
 export async function classifyChildrenByDisaPoint(
   canonText: string,
-  children: ChildInfo[],
   target: DisaPointRef,
   rCanon: string | null,
 ): Promise<ClassifiedChildren> {
-  const { canonSet: lCanonSet } = await computeLReachable(canonText, target);
+  const empty: ClassifiedChildren = { lChildren: [], rChild: null, tChildren: [] };
+  const decompressedRes = await decompress(canonText);
+  if (!decompressedRes.ok) return empty;
+  const relocated = await relocateDisaPoint(parseEncoding(canonText), target, decompressedRes.enc);
+  if (!relocated) return empty;
+
+  const res = await allMovesTracked(decompressedRes.enc);
+  if (!res.ok) return empty;
 
   const lChildren: ChildInfo[] = [];
   let rChild: ChildInfo | null = null;
   const tChildren: ChildInfo[] = [];
+  const seenL = new Set<string>();
+  const seenT = new Set<string>();
 
-  for (const child of children) {
-    const childCanon = await canon(child.enc);
-    if (lCanonSet.has(childCanon)) {
-      lChildren.push(child);
+  for (const child of res.children) {
+    const move = child.move;
+    const touchesTarget =
+      !!move &&
+      move.kind !== MoveKind.InteriorPseudo &&
+      move.region === relocated.region &&
+      move.component === relocated.component &&
+      (move.kind === MoveKind.Enclosure
+        ? move.boundary === relocated.boundary && (move.i === relocated.token || move.j === relocated.token)
+        : (move.b1 === relocated.boundary && move.i === relocated.token) ||
+          (move.b2 === relocated.boundary && move.j === relocated.token));
+
+    if (touchesTarget) {
+      const childCanon = await canon(child.enc);
+      if (!seenL.has(childCanon)) {
+        seenL.add(childCanon);
+        lChildren.push(child);
+      }
       continue;
     }
+
+    const childCanon = await canon(child.enc);
     if (rCanon !== null && rChild === null && childCanon === rCanon) {
       rChild = child;
       continue;
     }
-    tChildren.push(child);
+    if (!seenT.has(childCanon)) {
+      seenT.add(childCanon);
+      tChildren.push(child);
+    }
   }
 
   return { lChildren, rChild, tChildren };
@@ -415,21 +548,21 @@ function codesEqual(a: DisaGeneticCode, b: DisaGeneticCode): boolean {
  * lookup miss to silently drop. analyze('') would just fail to parse, so that case is handled
  * directly rather than falling into the general deleteComponent+analyze path below.
  */
-export async function computeTprimeGeneFromChildren(canonText: string, tChildren: ChildInfo[]): Promise<number[]> {
-  const rootTrivial = parseEncoding(canonText).filter(isTrivialDeadPair).length;
+export async function computeTprimeGeneFromChildren(canonText: string, tChildren: ChildInfo[], target: DisaPointRef): Promise<number[]> {
+  // Use provenance-based mark (traceTMove) to detect which T children are genuinely T' (i.e. the
+  // DisaPoint decayed into an isolated [22] summand). A purely structural count of new [22]
+  // components is incorrect: a T move can produce [22] by an unrelated mechanism (e.g. connecting
+  // two 2-life vertices that share a boundary letter), which has nothing to do with the DisaPoint.
   const nimbers = new Set<number>();
   for (const tc of tChildren) {
+    const traced = await traceTMove(canonText, target, tc);
+    if (!traced || traced.mark.kind !== 'isolated') continue;
     const childParsed = parseEncoding(tc.enc);
-    const trivialIdx = childParsed.reduce<number[]>((acc, c, i) => {
-      if (isTrivialDeadPair(c)) acc.push(i);
-      return acc;
-    }, []);
-    if (trivialIdx.length <= rootTrivial) continue;
     if (childParsed.length === 1) {
       nimbers.add(0);
       continue;
     }
-    const remainder = deleteComponent(tc.enc, trivialIdx[trivialIdx.length - 1]);
+    const remainder = deleteComponent(tc.enc, traced.mark.index);
     const res = await analyze(remainder);
     if (res.ok) nimbers.add(res.nimber);
   }
@@ -439,20 +572,16 @@ export async function computeTprimeGeneFromChildren(canonText: string, tChildren
 /** Full (L,R,D,T') genetic code of one DisaPoint. */
 export async function computeGeneticCode(canonText: string, target: DisaPointRef): Promise<DisaGeneticCode> {
   const parsed = parseEncoding(canonText);
-  const [L, rEnc, dRes, rootAnalysis] = await Promise.all([
+  const [L, rEnc, dRes] = await Promise.all([
     lMoveNimbersRobust(canonText, target),
     computeR(parsed, target),
     analyze(buildReplaceEncoding(parsed, target)),
-    analyze(canonText),
   ]);
   const rRes = rEnc !== null ? await analyze(rEnc) : null;
   const R = rRes && rRes.ok ? rRes.nimber : null;
   const D = dRes.ok ? dRes.nimber : null;
-  let Tprime: number[] = [];
-  if (rootAnalysis.ok) {
-    const { tChildren } = await classifyChildrenByDisaPoint(canonText, rootAnalysis.children, target, rEnc);
-    Tprime = await computeTprimeGeneFromChildren(canonText, tChildren);
-  }
+  const { tChildren } = await classifyChildrenByDisaPoint(canonText, target, rEnc);
+  const Tprime = await computeTprimeGeneFromChildren(canonText, tChildren, target);
   return { L, R, D, Tprime };
 }
 
@@ -658,49 +787,42 @@ export async function toDisplayForm(
 }
 
 /**
- * Combined per-T-move analysis: where the tracked DisaPoint ends up (see TPositionMark) and
- * whether the Grandparent Bypass Theorem applies (does `target`, tracked through this move AND one
- * grandchild move, have some grandchild-level descendant whose own (L,R,D) genetic code exactly
- * matches `rootCode`?). Both share the same first tracked-apply step, so this only traces it once.
+ * Trace one T move (identified by matching `tChild`'s canon against the decompressed root's
+ * children) through provenance to determine where `target` ends up: still a DisaPoint, decayed into
+ * an isolated [22] summand, or gone. Shared by computeTprimeGeneFromChildren (needs only the mark)
+ * and analyzeTEntry (also needs step1's tracked encoding for the Grandparent Bypass check). Returns
+ * null if the move can't be matched or traced.
  */
-export async function analyzeTEntry(
+async function traceTMove(
   rootEnc: string,
   target: DisaPointRef,
   tChild: ChildInfo,
-  rootCode: DisaGeneticCode,
-): Promise<TEntryResult> {
-  const none: TEntryResult = { enc: tChild.enc, mark: { kind: 'none' }, bypass: false };
-
-  // `tChild.move`'s indices come from analyze()'s internal (fully decompressed) exploration, NOT
-  // from `rootEnc` (analyze()'s `canon` field) itself whenever `rootEnc` still has some OTHER
-  // pseudo-point (Hollow/Split/Triplet) compressed -- applyMoveTracked/traceMove against `rootEnc`
-  // directly then throws ("decompress pseudo-points before generating moves") or, worse, silently
-  // hits the wrong tokens. Same root cause as computeLReachable's fix: decompress `rootEnc` first,
-  // relocate `target` into it, and re-derive the move by matching tChild's own canon against a
-  // fresh decompressed children list (whose move indices are guaranteed consistent with that text)
-  // rather than trusting tChild.move against rootEnc.
+): Promise<{ step1: { enc: string; src: PosSrc }; mark: TPositionMark; decompRootParsed: ParsedComponent[] } | null> {
+  // `tChild` always comes from classifyChildrenByDisaPoint's tChildren, which itself calls
+  // allMovesTracked(decompress(rootEnc).enc) -- so `tChild.move`'s indices are ALREADY relative to
+  // that same decompressed text (decompress() is a pure function of rootEnc, so re-decompressing it
+  // here reproduces the identical text). Earlier this instead re-matched tChild by CANON EQUALITY
+  // against a freshly (deduped) childrenTracked(decompRes.enc) list, which broke as soon as
+  // classifyChildrenByDisaPoint started surfacing every raw move separately (see its own doc
+  // comment): whenever two or more DISTINCT moves shared a canonical result (the same structural-
+  // automorphism case that caused the "empty T" bug), canon-matching could only ever find ONE
+  // representative move and silently applied ITS trace to every tChild sharing that canon --
+  // producing the same (possibly wrong, possibly un-α-markable) mark for children that actually
+  // came from different moves relative to `target`. Using tChild.move directly removes the
+  // ambiguity: each tChild is traced through the move that actually produced it.
   const decompRes = await decompress(rootEnc);
-  if (!decompRes.ok) return none;
+  if (!decompRes.ok) return null;
   const rootParsed = parseEncoding(rootEnc);
-  const relocatedTarget = await relocateForDecompress(rootParsed, target, decompRes.enc);
-  if (!relocatedTarget) return none;
-
-  const decompChildrenRes = await childrenTracked(decompRes.enc);
-  if (!decompChildrenRes.ok) return none;
-  const tChildCanonForMatch = await canon(tChild.enc);
-  const matchedChild = (
-    await Promise.all(
-      decompChildrenRes.children.map(async c => ({ c, hit: (await canon(c.enc)) === tChildCanonForMatch })),
-    )
-  ).find(x => x.hit)?.c;
-  if (!matchedChild?.move) return none;
+  const relocatedTarget = await relocateDisaPoint(rootParsed, target, decompRes.enc);
+  if (!relocatedTarget) return null;
+  if (!tChild.move) return null;
 
   const decompRootParsed = parseEncoding(decompRes.enc);
   const rootSrc = srcWithTarget(decompRootParsed, relocatedTarget);
-  const step1 = await traceMove(decompRes.enc, rootSrc, matchedChild.move);
-  if (!step1) return none;
+  const step1 = await traceMove(decompRes.enc, rootSrc, tChild.move);
+  if (!step1) return null;
   const [step1Canon, tChildCanon] = await Promise.all([canon(step1.enc), canon(tChild.enc)]);
-  if (step1Canon !== tChildCanon) return none;
+  if (step1Canon !== tChildCanon) return null;
 
   const childParsed = parseEncoding(step1.enc);
   const loc = locateTrackId(step1.src, TRACK_ID);
@@ -738,6 +860,27 @@ export async function analyzeTEntry(
       mark = { kind: 'isolated', index: childTrivialIndices[childTrivialIndices.length - 1] };
     }
   }
+
+  return { step1, mark, decompRootParsed };
+}
+
+/**
+ * Combined per-T-move analysis: where the tracked DisaPoint ends up (see TPositionMark) and
+ * whether the Grandparent Bypass Theorem applies (does `target`, tracked through this move AND one
+ * grandchild move, have some grandchild-level descendant whose own (L,R,D) genetic code exactly
+ * matches `rootCode`?). Both share the same first tracked-apply step, so this only traces it once.
+ */
+export async function analyzeTEntry(
+  rootEnc: string,
+  target: DisaPointRef,
+  tChild: ChildInfo,
+  rootCode: DisaGeneticCode,
+): Promise<TEntryResult> {
+  const none: TEntryResult = { enc: tChild.enc, mark: { kind: 'none' }, bypass: false };
+
+  const traced = await traceTMove(rootEnc, target, tChild);
+  if (!traced) return none;
+  const { step1, mark } = traced;
 
   // allMovesTracked, not analyze/childrenTracked: analyze() canonicalizes its input first, which can
   // silently recompress a Hollow/Split/Triplet organ and shift region/boundary numbering out from

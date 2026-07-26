@@ -248,28 +248,46 @@ struct GeneticCode {
     int R = -1, D = -1;
 };
 
-// T': every whole-position move (childrenAll, not just `dp`'s own region) whose result contains a
-// NEW isolated dead-pair component (isTrivialDeadPair) not already present in the root -- the
-// same untracked structural fallback collectGenetics.ts's analyzeTEntry uses when tracked
-// provenance is unavailable (an L or R move of any DisaPoint never itself produces this shape: L
-// reconnects the token within its own region, R deletes/collapses it outright -- see those
-// functions' doc comments -- so "a fresh [22] pair appeared" is specific to a T'-shaped move).
+// T': every T move of this specific DisaPoint whose result contains a NEW isolated dead-pair
+// component (isTrivialDeadPair) not already present in the root. Uses childrenAllWithMoveTagRaw
+// (NOT the deduped childrenAllWithMoveTag -- see that function's doc comment) and the same L/R
+// exclusion logic as computeAllBypass so that L moves (which can also produce a new [22] component
+// -- e.g. connecting two 2-life vertices via a shared boundary letter) and the coincidental R
+// re-appearance are not mistakenly counted. Per-DisaPoint (not shared).
 //
-// KNOWN IMPRECISION vs. the TS live-computation path: this tool does not track per-DisaPoint
-// provenance through the move (the TS side's applyMoveTracked retrace, see analyzeTEntry). When a
-// position has more than one DisaPoint, this is computed ONCE per position (not per DisaPoint) and
-// shared across all of that position's DisaPoints -- there's no way, without tracking, to tell
-// which DisaPoint's own branch decayed into a given fresh isolated pair when several are present.
-// Positions with exactly one DisaPoint (the common case) are unaffected by this caveat.
-std::set<int> computeTPrime(const Position& pos, const ParsedPosition& parsed, const Lookup& lookup) {
+// Using the deduped childrenAllWithMoveTag here previously undercounted T' (in the worst case, to
+// empty) whenever the position had a structural automorphism mapping this DisaPoint onto some
+// OTHER point: a genuine T move not touching this DisaPoint at all could produce a canonical result
+// identical to an L move that DOES touch it, and only one of the two survives the dedup -- if it's
+// the L one, the T move (and any T'-shape it has) vanishes with nothing left to classify. Since the
+// output here is a std::set<int> of nimbers, iterating every raw move (rather than one per distinct
+// canonical child) costs a few redundant insertions, not incorrect results.
+std::set<int> computeTPrime(const Position& pos, const ParsedPosition& parsed, const DisaRef& dp,
+                             const std::optional<std::string>& rCanonText, const Lookup& lookup) {
     std::set<int> out;
     int rootTrivial = 0;
     for (const auto& comp : parsed) {
         if (isTrivialDeadPair(comp)) ++rootTrivial;
     }
+    bool rExcluded = false;
 
-    for (const auto& kid : childrenAll(pos)) {
-        ParsedPosition childParsed = parseText(serialize(kid));
+    for (const auto& [kid, tag] : childrenAllWithMoveTagRaw(pos)) {
+        if (tag.kind == MoveKind::InteriorPseudo) continue;
+        const bool isL = tag.kind == MoveKind::Enclosure
+            ? (tag.component == dp.component && tag.region == dp.region && tag.boundary == dp.boundary &&
+               (tag.i == static_cast<int>(dp.token) || tag.j == static_cast<int>(dp.token)))
+            : (tag.component == dp.component && tag.region == dp.region &&
+               ((tag.b1 == dp.boundary && tag.i == static_cast<int>(dp.token)) ||
+                (tag.b2 == dp.boundary && tag.j == static_cast<int>(dp.token))));
+        if (isL) continue;
+
+        const std::string childText = serialize(kid);
+        if (!rExcluded && rCanonText.has_value() && childText == *rCanonText) {
+            rExcluded = true;
+            continue;
+        }
+
+        ParsedPosition childParsed = parseText(childText);
         std::vector<std::size_t> trivialIdx;
         for (std::size_t i = 0; i < childParsed.size(); ++i) {
             if (isTrivialDeadPair(childParsed[i])) trivialIdx.push_back(i);
@@ -335,7 +353,12 @@ std::optional<GeneticCode> fullGenomeAt(const Position& pos, const DisaRef& dp, 
     const std::optional<int> r = computeRGroundTruth(pos, dp, lookup);
     if (!r.has_value()) return std::nullopt;
     code.R = *r;
-    code.Tprime = computeTPrime(pos, parsed, lookup);
+    std::optional<std::string> rCanonText;
+    try {
+        rCanonText = serialize(disaPointRMove(pos, dp.component, static_cast<std::uint32_t>(dp.region),
+                                               static_cast<std::uint32_t>(dp.boundary), dp.token));
+    } catch (const EncodingError&) {}
+    code.Tprime = computeTPrime(pos, parsed, dp, rCanonText, lookup);
     return code;
 }
 
@@ -435,8 +458,13 @@ bool tMoveBypasses(const TrackedCanon& step1, const Lookup& lookup, const Geneti
 //      root (the same structural signal computeTPrime already uses; see its doc comment for why
 //      this is exact for the common single-DisaPoint case) -- these are the T' row's own children,
 //      shown in a different section of the chart, not "T".
-// childrenAllWithMoveTag dedupes by resulting canonical position; raw undeduped moves would
-// double-count children reachable several ways.
+// Uses childrenAllWithMoveTagRaw (NOT the deduped childrenAllWithMoveTag): the deduped list can
+// silently drop a genuine T move whenever it dedup-collides with an L move via a structural
+// automorphism (see computeTPrime's doc comment for the exact mechanism) -- tCount/allPass would
+// then be computed over an incomplete move set. Raw enumeration means a single canonical child
+// reachable via several moves gets tCount/bypass-checked more than once, which is only redundant
+// work, not an incorrect result (allPass just needs every real T move to pass; re-checking one that
+// already passed changes nothing).
 bool computeAllBypass(const Position& pos, const DisaRef& dp, const GeneticCode& rootCode,
                        const Lookup& lookup) {
     const auto psrc = buildTrackedSrc(pos, dp);
@@ -456,7 +484,7 @@ bool computeAllBypass(const Position& pos, const DisaRef& dp, const GeneticCode&
     int tCount = 0;
     bool allPass = true;
 
-    for (const auto& [child, tag] : childrenAllWithMoveTag(pos)) {
+    for (const auto& [child, tag] : childrenAllWithMoveTagRaw(pos)) {
         if (tag.kind == MoveKind::InteriorPseudo) continue;  // never occurs on fully-decompressed input
         const bool isL = tag.kind == MoveKind::Enclosure
             ? (tag.component == dp.component && tag.region == dp.region && tag.boundary == dp.boundary &&
@@ -603,11 +631,6 @@ int main(int argc, char** argv) {
         if (!lookup.valueForEnc(decText, unusedRootNimber)) continue;
         const int lives = pos.lives2() / 2;
 
-        // Shared across every DisaPoint of this position -- see computeTPrime's doc comment for why
-        // (no per-DisaPoint provenance tracking here; positions with >1 DisaPoint all share the
-        // same T' set, a documented imprecision).
-        const std::set<int> sharedTprime = computeTPrime(pos, parsed, lookup);
-
         if (disaPointsCompressed.size() != disaPoints.size()) continue;  // shouldn't happen; skip defensively
 
         for (std::size_t i = 0; i < disaPoints.size(); ++i) {
@@ -615,9 +638,17 @@ int main(int argc, char** argv) {
             bool hasD = false;
             GeneticCode code = computeCode(pos, parsed, dp, lookup, hasD);
             std::optional<int> rNimber = computeRGroundTruth(compressedPos, disaPointsCompressed[i], lookup);
-            code.Tprime = sharedTprime;
             if (!rNimber.has_value() || !hasD) continue;
             code.R = *rNimber;
+            std::optional<std::string> rCanonText;
+            try {
+                rCanonText = serialize(disaPointRMove(compressedPos,
+                                                       disaPointsCompressed[i].component,
+                                                       static_cast<std::uint32_t>(disaPointsCompressed[i].region),
+                                                       static_cast<std::uint32_t>(disaPointsCompressed[i].boundary),
+                                                       disaPointsCompressed[i].token));
+            } catch (const EncodingError&) {}
+            code.Tprime = computeTPrime(pos, parsed, dp, rCanonText, lookup);
             ++genomeHits;
             const bool allBypass = computeAllBypass(pos, dp, code, lookup);
             byGenome[genomeKey(code)].push_back({decText, i, lives, allBypass});

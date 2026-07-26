@@ -48,7 +48,7 @@
  * which this feature doesn't attempt to handle yet.
  */
 
-import { analyze, type ChildInfo } from '../engine/stalks';
+import { analyze, decompress } from '../engine/stalks';
 import { display as bracketDisplay } from './positionBrowser';
 import {
   parseEncoding,
@@ -63,6 +63,7 @@ import {
   toDisplayForm,
   computeGeneticCode,
   computeTprimeGeneFromChildren,
+  relocateDisaPoint,
   type DisaPointRef,
   type DisaGeneticCode,
   type TPositionMark,
@@ -193,7 +194,13 @@ let searchGen = 0;
 // v13: Entry.nimber (the parent position's nimber) replaced by Entry.lives (its life count) plus a
 // new Entry.bypass flag -- isEntry would reject old v12 entries anyway (no `lives`/`bypass` fields),
 // bumped for the same "don't silently drop old data in place" reason as v9.
-const HISTORY_STORAGE_KEY = 'sprouts-collect-variations-v13';
+// v14: no shape change, but classifyChildrenByDisaPoint switched from analyze()'s deduped children
+// list to allMovesTracked (undeduped) -- a position with a structural automorphism between DisaPoints
+// could previously lose real T moves to the dedup (in the worst case, showing T as empty). Entries
+// cached under v13 may have baked in that undercount with no other invalidation path (tComputed
+// entries are never recomputed). Bump forces a clean reseed against the fixed classification and the
+// regenerated collectGenomes.json (same fix applied to the offline genome-DB builder).
+const HISTORY_STORAGE_KEY = 'sprouts-collect-variations-v14';
 
 function saveHistory(): void {
   try {
@@ -230,9 +237,12 @@ function markNth(display: string, n: number): string {
   return display;
 }
 
-/** Find which '3' occurrence (1-indexed) raw input marks as the chosen DisaPoint -- either the
+/** Find which '3' occurrence (0-indexed) raw input marks as the chosen DisaPoint -- either the
  * modern 'α' in place of a '3', or the legacy trailing '*' right after a '3' -- and return the
- * input with that marker normalized back to a plain '3' so the rest of parsing is unaffected. */
+ * input with that marker normalized back to a plain '3' so the rest of parsing is unaffected.
+ * `selected` indexes into findDisaPoints(parseEncoding(stripped)) directly -- NOT into whatever
+ * order the engine's own analyze()/canon puts DisaPoints in, which can differ (see runSearch's use
+ * of relocateDisaPoint to bridge the two). */
 function extractSelection(raw: string): { stripped: string; selected: number | undefined } {
   const alphaIdx = raw.indexOf('α');
   if (alphaIdx !== -1) {
@@ -385,15 +395,14 @@ interface RowsAndGenes {
  * (L,R,D,T') rootCode passed into analyzeTEntry's Grandparent Bypass check is complete. */
 async function computeRowsAndGenes(
   canonText: string,
-  children: ChildInfo[],
   dp: DisaPointRef,
   L: number[],
   R: number | null,
   D: number | null,
   rCanon: string | null,
 ): Promise<RowsAndGenes> {
-  const { lChildren, rChild, tChildren } = await classifyChildrenByDisaPoint(canonText, children, dp, rCanon);
-  const Tprime = await computeTprimeGeneFromChildren(canonText, tChildren);
+  const { lChildren, rChild, tChildren } = await classifyChildrenByDisaPoint(canonText, dp, rCanon);
+  const Tprime = await computeTprimeGeneFromChildren(canonText, tChildren, dp);
   const rootCode: DisaGeneticCode = { L, R, D, Tprime };
 
   // T/T' row lists: every classified child, shown as-is (the quick-canon dedup attempt tried here
@@ -495,7 +504,6 @@ async function selectTEntry(t: TEntry): Promise<void> {
 /** Full genetic-code entry for one DisaPoint of an already-analyzed position (the manual-search path). */
 async function computeEntry(
   canonText: string,
-  children: ChildInfo[],
   lives: number,
   dp: DisaPointRef,
   idx: number,
@@ -509,15 +517,7 @@ async function computeEntry(
   const R = rRes && rRes.ok ? rRes.nimber : null;
   const D = dRes.ok ? dRes.nimber : null;
 
-  const { T, TprimeChildren, Tprime, lRows, rRow } = await computeRowsAndGenes(
-    canonText,
-    children,
-    dp,
-    L,
-    R,
-    D,
-    rEnc,
-  );
+  const { T, TprimeChildren, Tprime, lRows, rRow } = await computeRowsAndGenes(canonText, dp, L, R, D, rEnc);
   const dRow = dRes.ok ? buildWitnessRow(dEnc, dRes.nimber, false) : null;
   const bypass = T.length > 0 && T.every(t => t.bypass);
 
@@ -550,9 +550,16 @@ async function fillDetail(entry: Entry): Promise<void> {
     entry.tComputed = true;
     return;
   }
+  // entry.sourceDpIndex is an ordinal into findDisaPoints(parseEncoding(entry.sourceEnc)) -- NOT
+  // necessarily into findDisaPoints(parseEncoding(result.canon)). analyze() re-canonicalizes, which
+  // can reorder regions differently than however sourceEnc's own text happened to be ordered (it
+  // may come straight from GENOME_DB, whose C++ builder never ran it through the live engine's own
+  // canon()). Looking the index up directly against the fresh canon's disaPoints list silently
+  // picked the WRONG DisaPoint whenever that reordering happened -- see relocateDisaPoint.
+  const sourceParsed = parseEncoding(entry.sourceEnc);
+  const sourceDp = findDisaPoints(sourceParsed)[entry.sourceDpIndex];
   const parsed = parseEncoding(result.canon);
-  const disaPoints = findDisaPoints(parsed);
-  const dp = disaPoints[entry.sourceDpIndex];
+  const dp = sourceDp ? await relocateDisaPoint(sourceParsed, sourceDp, result.canon) : null;
   if (!dp) {
     entry.tComputed = true;
     return;
@@ -560,15 +567,7 @@ async function fillDetail(entry: Entry): Promise<void> {
 
   const dEnc = buildReplaceEncoding(parsed, dp);
   const rEnc = await computeR(parsed, dp);
-  const { T, TprimeChildren, lRows, rRow } = await computeRowsAndGenes(
-    result.canon,
-    result.children,
-    dp,
-    entry.L,
-    entry.R,
-    entry.D,
-    rEnc,
-  );
+  const { T, TprimeChildren, lRows, rRow } = await computeRowsAndGenes(result.canon, dp, entry.L, entry.R, entry.D, rEnc);
 
   entry.T = T;
   entry.TprimeChildren = TprimeChildren;
@@ -679,6 +678,17 @@ async function runSearch(raw: string): Promise<void> {
   render();
 
   const { stripped, selected } = extractSelection(trimmed);
+  // `stripped`'s own '3' tokens are still raw (undecompressed) life-count digits at this point --
+  // they only become real DisaPoint structure (a membrane letter + its own detached "2X" pair
+  // region) once decompressed, so findDisaPoints on `stripped` directly always returns []. Decompress
+  // first: decompress() is a pure function of its input, so this reproduces the exact same expansion
+  // (same left-to-right token order, so the Nth '3' in `stripped` is still the Nth DisaPoint found
+  // here) that analyze() performs internally when it builds `result.canon` below -- letting
+  // relocateDisaPoint bridge the two coordinate spaces afterward.
+  const strippedDecompRes = await decompress(stripped);
+  const strippedDisaPoints = strippedDecompRes.ok ? findDisaPoints(parseEncoding(strippedDecompRes.enc)) : [];
+  const selectedIdx = Math.min(Math.max(selected ?? 0, 0), Math.max(strippedDisaPoints.length - 1, 0));
+  const selectedTarget = strippedDisaPoints[selectedIdx];
   const result = await analyze(stripped);
   if (myGen !== searchGen) return;
 
@@ -707,13 +717,27 @@ async function runSearch(raw: string): Promise<void> {
   }
 
   const display = buildDisplayEncoding(parsed, disaPoints);
-  const children: ChildInfo[] = result.children;
 
-  const computed = await Promise.all(disaPoints.map((dp, idx) => computeEntry(result.canon, children, lives, dp, idx, display)));
+  const computed = await Promise.all(disaPoints.map((dp, idx) => computeEntry(result.canon, lives, dp, idx, display)));
   if (myGen !== searchGen) return;
 
   for (let i = computed.length - 1; i >= 0; i--) addToHistory(computed[i]);
-  const pick = computed[Math.min(Math.max((selected ?? 1) - 1, 0), computed.length - 1)];
+  // Which DisaPoint the user actually marked (selectedTarget, found in `stripped`'s OWN decompressed
+  // coordinate space) must be relocated into disaPoints -- analyze()'s canon can reorder regions
+  // differently than that decompression did, so a raw ordinal index doesn't reliably survive
+  // canonicalization (see relocateDisaPoint's doc comment; this used to also carry an off-by-one
+  // against extractSelection's 0-indexed `selected`, on top of the reordering issue).
+  let pickIdx = 0;
+  if (selectedTarget && strippedDecompRes.ok) {
+    const relocated = await relocateDisaPoint(parseEncoding(strippedDecompRes.enc), selectedTarget, result.canon);
+    if (relocated) {
+      const found = disaPoints.findIndex(
+        d => d.component === relocated.component && d.region === relocated.region && d.boundary === relocated.boundary && d.token === relocated.token,
+      );
+      if (found >= 0) pickIdx = found;
+    }
+  }
+  const pick = computed[pickIdx];
   activeLabel = pick.label;
   status = '';
   render();

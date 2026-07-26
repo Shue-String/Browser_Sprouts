@@ -142,6 +142,15 @@ std::vector<std::pair<Position, EdgeTag>> childrenAllTagged(const Position& p);
 // two-endpoint identity to draw.
 std::vector<std::pair<Position, MoveTag>> childrenAllWithMoveTag(const Position& p);
 
+// As childrenAllWithMoveTag, but NOT deduped by canonical result -- one entry per legal move,
+// even when several distinct moves reach canonically-identical children via a genuine structural
+// symmetry (e.g. two-or-more isomorphic DisaPoints). See analyze.cpp's allMovesTrackedJson doc
+// comment for the general pitfall: a caller classifying moves by which TOKEN/REGION each one
+// touches (rather than "list this position's distinct children") can't safely rely on the deduped
+// list, since a symmetry can make an unrelated move dedup-collide with the one that matters,
+// silently dropping it from the output.
+std::vector<std::pair<Position, MoveTag>> childrenAllWithMoveTagRaw(const Position& p);
+
 // Ground-truth "R" move for a DisaPoint: the paper's InteriorPseudo rewrite (3q*)=(q*), applied to
 // the literal compressed DISA token this DisaPoint decompresses from. `pos` must have this
 // DisaPoint still decompressed as a membrane pair (its own inline occurrence at
