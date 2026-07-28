@@ -135,6 +135,23 @@ std::vector<Position> childrenAll(const Position& p);
 // it (dedup keeps the first occurrence, move-class order: interior, enclosure, join).
 std::vector<std::pair<Position, EdgeTag>> childrenAllTagged(const Position& p);
 
+// True if any special-point token (ALPHA, ...; see tokens.hpp::isSpecialPoint) appears anywhere
+// in `p`. The movetype-0 fast path: callers should check this before doing any per-move
+// special-point classification at all, so a position without special points pays nothing.
+bool hasSpecialPoint(const Position& p);
+
+// Sparse (token, movetype) list, one entry per special-point token present in `parent` -- movetype
+// classification for the move that produced `child` (identified by `tag`, e.g. from
+// childrenAllTagged). Only movetypes 3/4/5 are ever returned (1/2, the "outside the game" bucket,
+// are Phase 2b -- blocked on a separate mechanic design, not detectable yet):
+//   3 -- tok is one of this move's own direct endpoints (tag.endpoint1/endpoint2 == tok).
+//   4 -- tok is not a direct endpoint, and cleanup() deleted it as a side-effect isolation (it is
+//        no longer present anywhere in `child`) -- treated exactly like an isolated scab.
+//   5 -- tok is not a direct endpoint, and is still present in `child`, untouched by this move.
+// Empty if hasSpecialPoint(parent) is false.
+std::vector<std::pair<Token, int>> specialPointMovetypes(const Position& parent, const EdgeTag& tag,
+                                                          const Position& child);
+
 // As childrenAllTagged, but paired with the full MoveTag (region/boundary/b1/b2/i/j/mask)
 // instead of the coarser EdgeTag, so a caller can reconstruct which move to draw/play, not
 // just which move class reached the edge. Interior-pseudo moves carry a MoveTag with only

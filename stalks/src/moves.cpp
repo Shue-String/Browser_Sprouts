@@ -137,8 +137,8 @@ bool chopWalk(IWalk& w) {
 }
 
 // Chop, drop empties, decay (membrane alone in a region: the region dies, the other
-// occurrence becomes a scab in place), isolation (scab alone in a region is dead).
-// Iterated to fixpoint.
+// occurrence becomes a scab in place), isolation (a scab -- or a special point, which
+// behaves like one here -- alone in a region is dead). Iterated to fixpoint.
 void cleanup(IComp& c) {
     bool changed = true;
     while (changed) {
@@ -164,7 +164,7 @@ void cleanup(IComp& c) {
             if (reg.size() != 1 || reg[0].size() != 1)
                 continue;
             const Item it = reg[0][0];
-            if (it.tok == SCAB) {  // isolated: dead
+            if (it.tok == SCAB || isSpecialPoint(it.tok)) {  // isolated: dead (scab, or special point)
                 c.regions.erase(c.regions.begin() + static_cast<long long>(r));
                 changed = true;
                 break;
@@ -956,6 +956,51 @@ std::vector<std::pair<Position, EdgeTag>> childrenAllTagged(const Position& p) {
         }
         out.emplace_back(std::move(child), tag);
     }
+    return out;
+}
+
+bool hasSpecialPoint(const Position& p) {
+    for (const auto& c : p.components)
+        for (const auto& reg : c.regions)
+            for (const auto& b : reg)
+                for (Token t : b)
+                    if (isSpecialPoint(t))
+                        return true;
+    return false;
+}
+
+static bool positionHasToken(const Position& p, Token tok) {
+    for (const auto& c : p.components)
+        for (const auto& reg : c.regions)
+            for (const auto& b : reg)
+                for (Token t : b)
+                    if (t == tok)
+                        return true;
+    return false;
+}
+
+// Movetypes 3/4/5 only (see moves.hpp doc comment) -- 1/2 ("outside the game") are Phase 2b,
+// blocked on the user's mechanic design, and never appear here.
+std::vector<std::pair<Token, int>> specialPointMovetypes(const Position& parent, const EdgeTag& tag,
+                                                          const Position& child) {
+    std::vector<std::pair<Token, int>> out;
+    for (const auto& c : parent.components)
+        for (const auto& reg : c.regions)
+            for (const auto& b : reg)
+                for (Token t : b) {
+                    if (!isSpecialPoint(t))
+                        continue;
+                    // Each special-point symbol has at most one occurrence (the "one life"
+                    // rule), so no dedup is needed here.
+                    int movetype;
+                    if (tag.endpoint1 == t || tag.endpoint2 == t)
+                        movetype = 3;
+                    else if (!positionHasToken(child, t))
+                        movetype = 4;
+                    else
+                        movetype = 5;
+                    out.emplace_back(t, movetype);
+                }
     return out;
 }
 

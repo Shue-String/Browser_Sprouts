@@ -238,6 +238,78 @@ void testSpecialPoint() {
     checkEqInt(parsePosition("[0,a]").lives2(), 6, "alpha contributes zero lives2");
 }
 
+void testSpecialPointMovetype() {
+    using namespace stalks;
+
+    // Movetype 0 fast path: no special point in the position at all.
+    CHECK(!hasSpecialPoint(parsePosition("[0,0]")));
+    CHECK(specialPointMovetypes(parsePosition("[0,0]"), EdgeTag{}, parsePosition("[0,0]")).empty());
+    CHECK(hasSpecialPoint(parsePosition("[0,a]")));
+
+    // Movetype 3: a join directly connecting the SPOT and ALPHA boundaries.
+    {
+        const Position parent = parsePosition("[0,a]");
+        bool found = false;
+        for (auto& [child, tag] : childrenAllTagged(parent)) {
+            if (tag.endpoint1 != ALPHA && tag.endpoint2 != ALPHA)
+                continue;
+            found = true;
+            const auto mv = specialPointMovetypes(parent, tag, child);
+            checkEqInt(static_cast<long long>(mv.size()), 1, "movetype3: one special point tracked");
+            if (!mv.empty()) {
+                CHECK(mv[0].first == ALPHA);
+                checkEqInt(mv[0].second, 3, "movetype3: alpha directly connects");
+            }
+            break;
+        }
+        CHECK(found);
+    }
+
+    // Movetype 5: an unrelated join (the two spots) leaves alpha present and untouched.
+    {
+        const Position parent = parsePosition("[0,0,a]");
+        bool found = false;
+        for (auto& [child, tag] : childrenAllTagged(parent)) {
+            if (tag.endpoint1 == ALPHA || tag.endpoint2 == ALPHA)
+                continue;
+            const auto mv = specialPointMovetypes(parent, tag, child);
+            if (mv.empty())
+                continue;  // some unrelated moves may not even reach alpha's component; skip
+            found = true;
+            checkEqInt(static_cast<long long>(mv.size()), 1, "movetype5: one special point tracked");
+            CHECK(mv[0].first == ALPHA);
+            checkEqInt(mv[0].second, 5, "movetype5: alpha present and untouched");
+            CHECK(ser(child).find('a') != std::string::npos);
+            break;
+        }
+        CHECK(found);
+    }
+
+    // Movetype 4: alpha isolated as a side effect of an unrelated enclosure (region1's own AB
+    // membrane pair self-encloses, stranding alpha's boundary without a surviving membrane
+    // connection to the rest of the component) -- deleted just like an isolated scab. This
+    // parent/move pair was found empirically via query_position.exe rather than hand-derived,
+    // per feedback_leverage_the_program_not_hand_simulation.
+    {
+        const Position parent = parsePosition("[ABa|0,AB]");
+        bool found = false;
+        for (auto& [child, tag] : childrenAllTagged(parent)) {
+            if (ser(child) != "[0,2]")
+                continue;
+            found = true;
+            const auto mv = specialPointMovetypes(parent, tag, child);
+            checkEqInt(static_cast<long long>(mv.size()), 1, "movetype4: one special point tracked");
+            if (!mv.empty()) {
+                CHECK(mv[0].first == ALPHA);
+                checkEqInt(mv[0].second, 4, "movetype4: alpha isolated and deleted");
+            }
+            CHECK(stalks::serialize(child).find('a') == std::string::npos);
+            break;
+        }
+        CHECK(found);
+    }
+}
+
 void testPlanarityRule() {
     using namespace stalks;
 
@@ -1591,6 +1663,7 @@ int main() {
         testBoundaryOps();
         testParseSerialize();
         testSpecialPoint();
+        testSpecialPointMovetype();
         testPlanarityRule();
         testDecompression();
         testLives();
