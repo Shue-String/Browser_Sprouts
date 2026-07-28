@@ -88,6 +88,15 @@ Component parseComponent(const std::string& text) {
                     b.push_back(static_cast<Token>(ch - '0'));
                     if (ch == '9')
                         ++membCount;
+                } else if (ch >= 'a' && ch <= 'j') {
+                    b.push_back(charToken(ch));
+                } else if (static_cast<unsigned char>(ch) == 0xCE &&
+                           i + 1 < chunk.size() &&
+                           static_cast<unsigned char>(chunk[i + 1]) == 0xB1) {
+                    // Literal UTF-8 'alpha' (U+03B1, bytes CE B1) -- alternate spelling of the
+                    // 'a' stand-in, index 0 in the special-point block.
+                    b.push_back(ALPHA);
+                    ++i;
                 } else if (ch >= 'A' && ch <= 'Z') {
                     letters.emplace_back(ch, membCount);
                     b.push_back(MEMB);
@@ -182,7 +191,7 @@ std::string serialize(const Component& c, bool agnostic) {
                         out.push_back(letterOfPair[static_cast<size_t>(pi)]);
                     }
                 } else {
-                    out.push_back(static_cast<char>('0' + t));
+                    out.push_back(tokenChar(t));
                 }
             }
         }

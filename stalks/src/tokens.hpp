@@ -10,7 +10,10 @@
 
 namespace stalks {
 
-// Token values match their encoding digits exactly.
+// Token values match their encoding digits exactly, EXCEPT the special-point block
+// [SPECIAL_POINT_BASE, SPECIAL_POINT_BASE + MAX_SPECIAL_POINTS) (see below), which has no digit
+// and instead uses a dedicated lowercase-letter alphabet via tokenChar()/charToken() -- the same
+// way MEMB already gets special-cased letters instead of a raw digit.
 using Token = std::uint8_t;
 
 // A Bnd is a std::basic_string of Tokens so boundary code can use the full string API (rotation
@@ -76,12 +79,38 @@ constexpr Token JOINTSTART = 7;  // joint, first visit on the walk
 constexpr Token JOINTEND   = 8;  // joint, second visit
 constexpr Token MEMB       = 9;  // membrane; cross-region identity lives in Component::pairings
 
+// Special-point block: literal analysis-input-only tokens (never produced by real game-tree
+// moves from an n-spot start). Standard vertex kind, no decompression, one life, cannot
+// self-connect, lives2() contribution 0 (falls through the default case below). Reserved as a
+// contiguous block of 10 so future symbols (beta, gamma, ...) don't need a re-audit of the token
+// space; each gets its own fixed digit position in the base-6 movetype packing (Phase 3).
+constexpr Token SPECIAL_POINT_BASE = 50;
+constexpr int MAX_SPECIAL_POINTS = 10;
+constexpr Token ALPHA = SPECIAL_POINT_BASE;  // index 0
+
 // A boundary: the walk around one side of a connected edge set. Joints are stored
 // positionally in Dyck form (JOINTSTART on first visit, JOINTEND on second).
 using Bnd = std::basic_string<Token, TokenTraits>;
 
 constexpr bool isPseudo(Token t) { return t >= DISA && t <= TRIP; }
 constexpr bool isJoint(Token t)  { return t == JOINTSTART || t == JOINTEND; }
+constexpr bool isSpecialPoint(Token t) {
+    return t >= SPECIAL_POINT_BASE && t < SPECIAL_POINT_BASE + MAX_SPECIAL_POINTS;
+}
+constexpr int specialPointIndex(Token t) { return t - SPECIAL_POINT_BASE; }
+
+// Single-char encoding for a plain (non-membrane) token: digits 0-9 as-is, special points as
+// lowercase 'a'-'j' (mnemonic: 'a' = alpha = index 0). MEMB and joint-visit-order chars are
+// assigned separately by callers (they depend on pairing/visit context, not the token alone).
+inline char tokenChar(Token t) {
+    return isSpecialPoint(t) ? static_cast<char>('a' + specialPointIndex(t))
+                              : static_cast<char>('0' + t);
+}
+inline Token charToken(char ch) {
+    return (ch >= 'a' && ch <= 'j')
+               ? static_cast<Token>(SPECIAL_POINT_BASE + (ch - 'a'))
+               : static_cast<Token>(ch - '0');
+}
 
 // Doubled lives (2L) contributed by one token. Membranes are half-lives, hence the
 // doubling. Pseudo-points count their full organ (interior included), matching the old

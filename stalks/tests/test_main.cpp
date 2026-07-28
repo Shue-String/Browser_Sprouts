@@ -208,11 +208,34 @@ void testParseSerialize() {
     checkThrows([] { parsePosition("[A|A|A,A]"); }, "letter four times rejected");
     checkThrows([] { parsePosition("[A|0]"); }, "unmatched letter rejected");
     checkThrows([] { parsePosition("[AA|0]"); }, "letter twice in one region rejected");
-    checkThrows([] { parsePosition("[0,a]"); }, "lowercase rejected");
+    checkThrows([] { parsePosition("[0,z]"); }, "lowercase outside special-point block rejected");
 
     // Joint misuse inside full positions.
     checkThrows([] { parsePosition("[78]"); }, "joint-as-distal rejected");
     checkThrows([] { parsePosition("[0,717]"); }, "unbalanced joints rejected");
+}
+
+void testSpecialPoint() {
+    using namespace stalks;
+
+    // ALPHA round-trips through its ASCII stand-in 'a' (index 0 of the special-point block).
+    checkEq(ser(parsePosition("[0,a]")), "[0,a]", "alpha ascii stand-in round-trip");
+    CHECK(parsePosition("[0,a]").components[0].regions[0][1][0] == ALPHA);
+
+    // Literal UTF-8 'alpha' (U+03B1, bytes CE B1) is an alternate spelling that normalizes to the
+    // same token and the same ASCII stand-in on output.
+    checkEq(ser(parsePosition("[0,\xCE\xB1]")), "[0,a]", "alpha utf8 normalizes to ascii stand-in");
+
+    // Idempotence alongside ordinary tokens in the same boundary/component.
+    checkEq(ser(parsePosition(ser(parsePosition("[0,a2]")))),
+            ser(parsePosition("[0,a2]")), "alpha idempotent alongside ordinary tokens");
+
+    // Only the reserved block ['a', 'j'] is special-point space; a symbol beyond the reserved
+    // 10-slot block is still an ordinary parse error, not silently accepted.
+    checkThrows([] { parsePosition("[0,k]"); }, "letter past special-point block rejected");
+
+    // lives2: alpha is purely inert (movetype-0 fast path / Phase 2 semantics).
+    checkEqInt(parsePosition("[0,a]").lives2(), 6, "alpha contributes zero lives2");
 }
 
 void testPlanarityRule() {
@@ -879,6 +902,10 @@ void testCanon() {
 
     // Membrane relabeling does not matter.
     checkEq(canonSer("[AB|AB]"), canonSer("[BA|BA]"), "canon invariant under letter swap");
+
+    // Alpha participates in canon like any other plain token: order-invariant and idempotent.
+    checkEq(canonSer("[0,a]"), canonSer("[a,0]"), "canon invariant under boundary order with alpha");
+    checkEq(canonSer("[0,a]"), canonSer(canonSer("[0,a]")), "canon idempotent with alpha");
 
     // Recompression happens inside canon: the decompressed and compressed forms of one
     // position share a canonical form.
@@ -1563,6 +1590,7 @@ int main() {
     try {
         testBoundaryOps();
         testParseSerialize();
+        testSpecialPoint();
         testPlanarityRule();
         testDecompression();
         testLives();

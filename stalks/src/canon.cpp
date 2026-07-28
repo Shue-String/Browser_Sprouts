@@ -245,7 +245,7 @@ std::string bndString(const Bnd& b) {
     std::string s;
     s.reserve(rot.size());
     for (Token t : rot)
-        s.push_back(static_cast<char>('0' + t));
+        s.push_back(tokenChar(t));
     return s;
 }
 
@@ -686,7 +686,7 @@ Component canonMinimal(const Component& c0, bool slackOff, bool recompressFirst 
             const Bnd ab = agnosticBnd(lb);
             std::string s;
             for (Token t : canonicalRotation(ab))
-                s.push_back(static_cast<char>('0' + t));
+                s.push_back(tokenChar(t));
             vals.push_back(numKey(s));
         }
         std::sort(vals.begin(), vals.end());
@@ -735,7 +735,7 @@ Component canonMinimal(const Component& c0, bool slackOff, bool recompressFirst 
                 Bnd canon = canonicalRotation(ab);
                 std::string s;
                 for (Token t : canon)
-                    s.push_back(static_cast<char>('0' + t));
+                    s.push_back(tokenChar(t));
                 agVal[r][b] = std::move(s);
                 if (brute) {
                     std::vector<int> all(lc.regions[r][b].size());
@@ -879,7 +879,7 @@ Component canonMinimal(const Component& c0, bool slackOff, bool recompressFirst 
                         } else if (s.jointId >= 0) {
                             sig.push_back(seenJoint.emplace(s.jointId, true).second ? '7' : '8');
                         } else {
-                            sig.push_back(static_cast<char>('0' + s.tok));
+                            sig.push_back(tokenChar(s.tok));
                         }
                     }
                     sig.push_back('|');
@@ -946,7 +946,7 @@ Component canonMinimal(const Component& c0, bool slackOff, bool recompressFirst 
                         } else if (s.jointId >= 0) {
                             bs.push_back(seenJoint.emplace(s.jointId, true).second ? '7' : '8');
                         } else {
-                            bs.push_back(static_cast<char>('0' + s.tok));
+                            bs.push_back(tokenChar(s.tok));
                         }
                     }
                     chunk += numKey(bs);
@@ -1249,7 +1249,7 @@ std::string structKey(const Component& c) {
                         bs.push_back(letterOfPair[static_cast<std::size_t>(pi)]);
                     }
                 } else {
-                    bs.push_back(static_cast<char>('0' + t));
+                    bs.push_back(tokenChar(t));
                 }
             }
             k += numKey(bs);

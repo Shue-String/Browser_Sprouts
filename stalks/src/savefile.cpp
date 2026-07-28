@@ -82,9 +82,22 @@ int codeOf(char ch) {
 
 char charOf(int code) { return kAlphabet[code & 0x1F]; }
 
+// Special-point tokens (ALPHA and future symbols) encode as lowercase 'a'-'j' (see
+// tokens.hpp::tokenChar), which the 5-bit alphabet below has no code for. Positions containing
+// them are explicitly deferred to a separate save format (not yet designed/implemented) rather
+// than being widened into this one -- special points are analysis-input-only and never appear in
+// a real n-spot game tree, so nothing needs this today.
+bool containsSpecialPoint(const std::string& s) {
+    return std::any_of(s.begin(), s.end(), [](char ch) { return ch >= 'a' && ch <= 'j'; });
+}
+
 // varint length, then the chars packed 5 bits each (little-endian bit order), byte-aligned per
 // string (<1 byte of padding per node -- negligible vs. the size the packing saves).
 void putPackedString(std::ostream& out, const std::string& s) {
+    if (containsSpecialPoint(s))
+        throw std::runtime_error(
+            "savefile: positions containing special-point tokens (alpha, ...) use a deferred "
+            "save format that is not yet implemented");
     putVarint(out, s.size());
     std::uint32_t acc = 0;
     int nbits = 0;
