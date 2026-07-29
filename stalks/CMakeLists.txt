@@ -13,6 +13,7 @@ add_library(stalks_core
     src/collections.cpp
     src/graph.cpp
     src/savefile.cpp
+    src/specfile.cpp
     src/analyze.cpp
 )
 target_include_directories(stalks_core PUBLIC src)
@@ -38,12 +39,18 @@ target_link_libraries(explain_move PRIVATE stalks_core)
 add_executable(query_movetype tools/query_movetype.cpp)
 target_link_libraries(query_movetype PRIVATE stalks_core)
 
+add_executable(debug_spec_order tools/debug_spec_order.cpp)
+target_link_libraries(debug_spec_order PRIVATE stalks_core)
+
+add_executable(save_spec tools/save_spec.cpp)
+target_link_libraries(save_spec PRIVATE stalks_core)
+
 if(MSVC)
-    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers collect_genetics query_position explain_move query_movetype)
+    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers collect_genetics query_position explain_move query_movetype debug_spec_order save_spec)
         target_compile_options(${tgt} PRIVATE /W4 /permissive- /utf-8)
     endforeach()
 else()
-    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers collect_genetics query_position explain_move query_movetype)
+    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers collect_genetics query_position explain_move query_movetype debug_spec_order save_spec)
         target_compile_options(${tgt} PRIVATE -Wall -Wextra)
     endforeach()
 endif()

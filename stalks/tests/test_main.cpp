@@ -9,6 +9,7 @@
 #include "moves.hpp"
 #include "position.hpp"
 #include "savefile.hpp"
+#include "specfile.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -18,6 +19,7 @@
 #include <iostream>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -577,6 +579,67 @@ void testAnalyzeMovetypeJson() {
         CHECK(json.find("\"movetype\":0") != std::string::npos);
         for (int mt = 1; mt <= 5; ++mt)
             CHECK(json.find("\"movetype\":" + std::to_string(mt)) == std::string::npos);
+    }
+}
+
+// .spec save format (specfile.hpp/cpp): a wholly separate format from savefile.hpp's .sprout, built
+// for special-point-bearing positions. Round-trips both values AND movetype topology through an
+// in-memory stream (no disk I/O needed for a fast always-on check, unlike .sprout's opt-in
+// STALKS_SAVE harness which only makes sense at real n-spot-master scale).
+void testSpecFile() {
+    using namespace stalks;
+
+    // Single root: "[0,a]" is small and has known movetypes from testSpecialPointMovetype (Join
+    // direct-connect = 3, External vanish/scab = 1/2).
+    {
+        GameGraph g;
+        Node* root = g.ensure(parsePosition("[0,a]"));
+
+        std::stringstream ss;
+        const std::size_t written = saveSpecGraph(g, {root}, ss);
+        CHECK(written > 0);
+
+        const SpecDB db = loadSpecGraph(ss);
+        checkEqInt(static_cast<long long>(db.size()), static_cast<long long>(written),
+                   "specfile: round-trip node count");
+
+        SpecValue rootVal;
+        CHECK(db.value(parsePosition("[0,a]"), rootVal));
+        checkEqInt(rootVal.nimber, root->nimber, "specfile: round-trip root nimber");
+        checkEqInt(rootVal.minMoves, root->minMoves, "specfile: round-trip root minMoves");
+        checkEqInt(rootVal.maxMoves, root->maxMoves, "specfile: round-trip root maxMoves");
+
+        // Movetype topology round-trips too: the stored node for root's own canonical enc must
+        // carry edges with movetypes 1, 2, and 3 (see testSpecialPointMovetype/testExternalMovetype).
+        const SpecNode* rootNode = db.findMinimal(root->enc);
+        CHECK(rootNode != nullptr);
+        if (rootNode) {
+            std::set<int> movetypes;
+            for (const auto& e : rootNode->edges)
+                movetypes.insert(e.movetype);
+            CHECK(movetypes.count(1) == 1);
+            CHECK(movetypes.count(2) == 1);
+            CHECK(movetypes.count(3) == 1);
+        }
+    }
+
+    // Multi-root combined save: two DIFFERENT special-point positions saved together into ONE
+    // stream (the "combined tree" use case) must contain the union of both subtrees, with each
+    // root's own value still independently recoverable.
+    {
+        GameGraph g;
+        Node* r1 = g.ensure(parsePosition("[0,a]"));
+        Node* r2 = g.ensure(parsePosition("[0,0,a]"));
+
+        std::stringstream ss;
+        saveSpecGraph(g, {r1, r2}, ss);
+        const SpecDB db = loadSpecGraph(ss);
+
+        SpecValue v1, v2;
+        CHECK(db.value(parsePosition("[0,a]"), v1));
+        CHECK(db.value(parsePosition("[0,0,a]"), v2));
+        checkEqInt(v1.nimber, r1->nimber, "specfile: multi-root value 1 round-trips");
+        checkEqInt(v2.nimber, r2->nimber, "specfile: multi-root value 2 round-trips");
     }
 }
 
@@ -1984,6 +2047,7 @@ int main() {
         testPackMovetypes();
         testExternalMovetype();
         testAnalyzeMovetypeJson();
+        testSpecFile();
         testPlanarityRule();
         testDecompression();
         testLives();
