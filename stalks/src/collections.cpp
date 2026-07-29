@@ -154,27 +154,23 @@ std::string regionKey(const std::vector<Bnd>& region) {
 // Crit-finder + left-side extraction (single-crit / single-region scope).
 //
 // A single-crit bridge whose detached chunk is one region is exactly a LEAF region: a region
-// with exactly one membrane occurrence. Cutting that membrane detaches just that region (any
-// second membrane would keep it attached, so the membrane would not be a bridge; any internal
-// membrane would need a second region). This mirrors the DisaPoint case in canon.cpp's
-// allCompressions (a {scab+membrane} leaf), generalized to any leaf whose marked form is a
-// registered collection element. Multi-region detached chunks are left for a later increment;
-// they simply produce no candidate here (and get handled after inner swaps collapse them).
+// with exactly one crit occurrence. Cutting that crit detaches just that region (any second crit
+// would keep it attached, so it would not be a bridge; any internal membrane would need a second
+// region). This mirrors the DisaPoint case in canon.cpp's allCompressions (a {scab+membrane}
+// leaf), generalized to any leaf whose marked form is a registered collection element. Multi-
+// region detached chunks are left for a later increment; they simply produce no candidate here
+// (and get handled after inner swaps collapse them).
+//
+// A "crit occurrence" is either a real membrane paired to a host elsewhere (repointable in
+// surgery), OR a special-point token (ALPHA, ...; see tokens.hpp) -- a special point already
+// stands for "connects to somewhere outside this position," playing the identical structural
+// role a crit membrane plays once its far side is known, so it is treated uniformly as a crit
+// with no host to repoint. This is shared by both the single-crit (S1/S2, below) and double-crit
+// (S3/S4, further down) finders.
 // ---------------------------------------------------------------------------
 
-// Token index of the occ-th MEMB in a boundary, or -1.
-int membPos(const Bnd& b, std::uint32_t occ) {
-    std::uint32_t seen = 0;
-    for (int i = 0; i < static_cast<int>(b.size()); ++i)
-        if (b[static_cast<std::size_t>(i)] == MEMB) {
-            if (seen == occ)
-                return i;
-            ++seen;
-        }
-    return -1;
-}
-
-// Total membrane occurrences in a region.
+// Total membrane occurrences in a region (used only by the separate crit-cell congruity finder
+// further down, which is not special-point-aware -- see its own doc comment).
 int regionMembraneCount(const std::vector<Bnd>& region) {
     int n = 0;
     for (const auto& b : region)
@@ -184,39 +180,70 @@ int regionMembraneCount(const std::vector<Bnd>& region) {
     return n;
 }
 
-// Marked-chunk boundaries for a leaf region: its single membrane occurrence (at boundary pb,
-// occurrence po) becomes the crit port; every other token rides along. (Any stray membrane --
-// impossible for a true leaf -- would render as '9' and never match a roster element.)
-std::vector<Bnd> markedLeaf(const std::vector<Bnd>& region, std::uint32_t pb, std::uint32_t po) {
-    std::vector<Bnd> out;
-    out.reserve(region.size());
-    for (std::uint32_t b = 0; b < region.size(); ++b) {
-        Bnd nb;
-        nb.reserve(region[b].size());
+struct CritSlot {
+    bool special = false;
+    Token tok = 0;     // valid iff special
+    int pairing = -1;  // index into Component::pairings; valid iff !special
+};
+
+// The crit-eligible occurrences of region `I`, in boundary/occurrence order (this is also the
+// port-assignment order markedRegion below uses, so slot i here corresponds to port i there).
+// Eligible only when there are EXACTLY `k` such occurrences, every counted membrane is validly
+// paired (an agnostic membrane is never a crit, and its mere presence disqualifies the region --
+// markedRegion marks every membrane unconditionally, so an unmarked stray one would corrupt the
+// key), and no two real-membrane slots share a pairing (both sides of one pairing sitting in the
+// same region -- a self-pairing, not a valid two-region cut). Nullopt when ineligible.
+std::optional<std::vector<CritSlot>> critSlots(const Component& c,
+                                                const std::vector<std::vector<std::vector<int>>>& idx,
+                                                std::uint32_t I, int k) {
+    std::vector<CritSlot> out;
+    for (std::uint32_t b = 0; b < c.regions[I].size(); ++b) {
         std::uint32_t occ = 0;
-        for (Token t : region[b]) {
-            if (t == MEMB) {
-                nb.push_back(b == pb && occ == po ? PORT0 : MEMB);
-                ++occ;
-            } else {
-                nb.push_back(t);
+        for (Token t : c.regions[I][b]) {
+            if (isSpecialPoint(t)) {
+                out.push_back(CritSlot{true, t, -1});
+            } else if (t == MEMB) {
+                const int pi = idx[I][b][occ++];
+                if (pi < 0)
+                    return std::nullopt;  // agnostic membrane: region ineligible
+                out.push_back(CritSlot{false, 0, pi});
             }
         }
+    }
+    if (static_cast<int>(out.size()) != k)
+        return std::nullopt;
+    for (std::size_t i = 0; i < out.size(); ++i)
+        for (std::size_t j = i + 1; j < out.size(); ++j)
+            if (!out[i].special && !out[j].special && out[i].pairing == out[j].pairing)
+                return std::nullopt;
+    return out;
+}
+
+// Mark every crit occurrence in a region (real membranes AND special points, uniformly) as an
+// ordered port; every other token rides along unchanged. Used to build a region's registry key
+// for both the single- and double-crit finders. The assignment order here is arbitrary --
+// regionKey (above) already minimizes over every port permutation to find the canonical key --
+// only the SET of which occurrences are marked matters, and that set is exactly what critSlots
+// (above) independently validated as this region's crit occurrences.
+std::vector<Bnd> markedRegion(const std::vector<Bnd>& region) {
+    std::vector<Bnd> out;
+    out.reserve(region.size());
+    int port = 0;
+    for (const Bnd& b : region) {
+        Bnd nb;
+        nb.reserve(b.size());
+        for (Token t : b)
+            nb.push_back((t == MEMB || isSpecialPoint(t)) ? static_cast<Token>(PORT0 + port++) : t);
         out.push_back(std::move(nb));
     }
     return out;
 }
 
-// One candidate collections swap: replace the crit membrane in the host region with a DisaPoint
-// and delete the detached leaf region. Carries the left side's canonical key for registry
-// lookup. `hostPos` is the token index of the crit in the host boundary (ready for the
-// applyCompress-style surgery in the swap step).
+// One candidate single-crit collections swap: region `leftRegion`'s one crit occurrence, plus
+// the left side's canonical key for registry lookup.
 struct CritCandidate {
-    std::uint32_t hostRegion = 0;
-    std::uint32_t hostBnd = 0;
-    int hostPos = -1;
     std::uint32_t leftRegion = 0;
-    int pairing = -1;  // index into Component::pairings of the crit membrane
+    CritSlot slot;
     std::string leftKey;
 };
 
@@ -226,38 +253,13 @@ std::vector<CritCandidate> enumerateCrits(const Component& c) {
         return out;
     const auto idx = c.pairIndex();
     for (std::uint32_t I = 0; I < c.regions.size(); ++I) {
-        if (regionMembraneCount(c.regions[I]) != 1)
-            continue;  // leaf regions only
-
-        // Locate the single membrane occurrence in region I and its pairing.
-        std::uint32_t lb = 0, lo = 0;
-        int pi = -1;
-        for (std::uint32_t b = 0; b < c.regions[I].size() && pi < 0; ++b) {
-            std::uint32_t occ = 0;
-            for (Token t : c.regions[I][b]) {
-                if (t == MEMB) {
-                    if (const int p = idx[I][b][occ]; p >= 0) {
-                        pi = p;
-                        lb = b;
-                        lo = occ;
-                    }
-                    break;  // exactly one membrane in a leaf
-                }
-            }
-        }
-        if (pi < 0)
-            continue;  // unpaired (agnostic) membrane: not a crit
-
-        const auto& [ra, rb] = c.pairings[static_cast<std::size_t>(pi)];
-        const MRef host = (ra.region == I) ? rb : ra;
-
+        const auto slots = critSlots(c, idx, I, 1);
+        if (!slots)
+            continue;
         CritCandidate cand;
-        cand.hostRegion = host.region;
-        cand.hostBnd = host.boundary;
-        cand.hostPos = membPos(c.regions[host.region][host.boundary], host.occ);
         cand.leftRegion = I;
-        cand.pairing = pi;
-        cand.leftKey = regionKey(markedLeaf(c.regions[I], lb, lo));
+        cand.slot = (*slots)[0];
+        cand.leftKey = regionKey(markedRegion(c.regions[I]));
         out.push_back(std::move(cand));
     }
     return out;
@@ -277,27 +279,12 @@ std::vector<CritCandidate> enumerateCrits(const Component& c) {
 // the shared rep [2βα/ is likewise absent so a region already in rep form never re-swaps.
 // ---------------------------------------------------------------------------
 
-// Mark every membrane in a region as a distinct ordered port (port i for the i-th membrane in
-// region-traversal order); other tokens ride along. Used for the k>=2 case where the whole set of
-// membranes are the crits (contrast markedLeaf, which marks only the one crit of a leaf).
-std::vector<Bnd> markedRegion(const std::vector<Bnd>& region) {
-    std::vector<Bnd> out;
-    out.reserve(region.size());
-    int port = 0;
-    for (const Bnd& b : region) {
-        Bnd nb;
-        nb.reserve(b.size());
-        for (Token t : b)
-            nb.push_back(t == MEMB ? static_cast<Token>(PORT0 + port++) : t);
-        out.push_back(std::move(nb));
-    }
-    return out;
-}
-
+// One candidate double-crit collections swap: region `region`'s two crit occurrences (each
+// independently real or special, per critSlots above), plus the left side's canonical key.
 struct DoubleCritCandidate {
     std::uint32_t region = 0;
-    int pi1 = -1;  // index into Component::pairings of the first crit
-    int pi2 = -1;  // ... and the second
+    CritSlot slot1;
+    CritSlot slot2;
     std::string leftKey;
 };
 
@@ -307,24 +294,13 @@ std::vector<DoubleCritCandidate> enumerateDoubleCrits(const Component& c) {
         return out;
     const auto idx = c.pairIndex();
     for (std::uint32_t R = 0; R < c.regions.size(); ++R) {
-        if (regionMembraneCount(c.regions[R]) != 2)
-            continue;  // exactly two membranes -> a two-edge cut
-        std::vector<int> pis;
-        for (std::uint32_t b = 0; b < c.regions[R].size(); ++b) {
-            std::uint32_t occ = 0;
-            for (Token t : c.regions[R][b])
-                if (t == MEMB)
-                    pis.push_back(idx[R][b][occ++]);
-        }
-        // Both membranes must be crits (paired) with distinct pairings. Equal indices would mean
-        // the two occurrences are the same pairing (region linked to itself) -- invalid, skip.
-        if (pis.size() != 2 || pis[0] < 0 || pis[1] < 0 || pis[0] == pis[1])
+        const auto slots = critSlots(c, idx, R, 2);
+        if (!slots)
             continue;
-
         DoubleCritCandidate cand;
         cand.region = R;
-        cand.pi1 = pis[0];
-        cand.pi2 = pis[1];
+        cand.slot1 = (*slots)[0];
+        cand.slot2 = (*slots)[1];
         cand.leftKey = regionKey(markedRegion(c.regions[R]));
         out.push_back(std::move(cand));
     }
@@ -356,28 +332,29 @@ namespace {
 // Collection registry + the swap that applies a match.
 // ---------------------------------------------------------------------------
 
-// A matched left side maps to a canonical representative (a pseudo-point token to swap in) and
-// the offset within its Pairing-Theorem pair. For the whole S1/S2 family the rep is the
-// DisaPoint '3' and the surgery is identical; only the offset differs (S1 -> 0, S2 -> 1). The
-// `rep` field carries the future extension point (S3/S4 will use a different representative).
-struct CollectionMatch {
-    int offset = 0;
-    Token rep = DISA;
-};
-
-// leftSideKey -> match. Built once from the authored rosters (canonicalized through the same
+// leftSideKey -> offset. Built once from the authored rosters (canonicalized through the same
 // leftSideKey path as extraction, so the keys line up by construction). Extend by adding rows.
-const std::map<std::string, CollectionMatch>& registry() {
-    static const std::map<std::string, CollectionMatch> reg = [] {
-        std::map<std::string, CollectionMatch> m;
+// Every S1/S2 element swaps to the same shape applyCritSwap below always builds for a k=1 match
+// ([SCAB, crit]); when the crit is a real membrane this is the DECOMPRESSED form of a DisaPoint,
+// which the very next canonicalizeFull pass's existing DisaPoint recompression folds back into a
+// bare DISA token automatically (see canon.cpp::allCompressions) -- so there is no separate `rep`
+// to carry here, unlike an earlier version of this registry.
+const std::map<std::string, int>& registry() {
+    static const std::map<std::string, int> reg = [] {
+        std::map<std::string, int> m;
         auto add = [&](std::initializer_list<const char*> elems, int off) {
             for (const char* e : elems)
-                m[leftSideKey(e)] = CollectionMatch{off, DISA};
+                m[leftSideKey(e)] = off;
         };
-        // S1 (offset 0). Lowest-order element [2a/ is the DisaPoint itself; it is already
-        // handled by canonicalizeFull's DisaPoint compression, and listing it here is a
-        // harmless no-op (the leaf is gone before the collections pass sees it).
-        add({"2a", "2,a", "0,a", "2,2,2,a", "1,2a", "5,2a", "23,2a", "2,2,3,a",
+        // S1 (offset 0). Lowest-order element [2a/ is deliberately OMITTED: it is exactly the
+        // shape applyCritSwap itself builds for any k=1 match ([SCAB, crit]), so a region already
+        // in this rep form must never re-match itself (it would loop with no progress) -- mirrors
+        // why the double-crit registry omits its own rep "2ba" (see doubleCritRegistry below).
+        // For a REAL-membrane crit this was always unreachable anyway (already folded away by
+        // ordinary DisaPoint compression before the collections pass ever sees it), but a
+        // special-point crit's [SCAB, α] does NOT auto-compress (compression only applies to
+        // real membrane pairs), so it stays reachable here and must be excluded explicitly.
+        add({"2,a", "0,a", "2,2,2,a", "1,2a", "5,2a", "23,2a", "2,2,3,a",
              "13a", "23,3a", "22,2a", "2,3,3,a", "1,3a", "3,23,a", "22,3a", "17a8"},
             0);
         // S2 (offset 1).
@@ -392,7 +369,7 @@ const std::map<std::string, CollectionMatch>& registry() {
 // Double-crit S3/S4 rosters (Theorem 1 tables; author 2026-07-05, "..." elements open via the
 // extension theorems). Keyed by the port-permutation-canonical left-side key; value = offset (S3
 // -> 0, S4 -> 1, from the Pairing Theorem G(s3) = G(s4) ^ 1). Every element swaps to the SINGLE
-// shared representative [2βα/ = [SCAB, MEMB, MEMB] (see applyDoubleCritSwap). The rep's own element
+// shared representative [2βα/ = [SCAB, MEMB, MEMB] (see applyCritSwap). The rep's own element
 // [2βα/ ("2ba") is deliberately OMITTED: a region already in rep form must never re-swap (it would
 // loop with no progress), and leaving it out makes the finder skip it. Every listed element has
 // boundary count >= 2 or token count >= 4, so each swap strictly reduces (tokens, boundaries) and
@@ -413,71 +390,29 @@ const std::map<std::string, int>& doubleCritRegistry() {
     return reg;
 }
 
-// Apply a matched swap to a component: replace the crit membrane in the host boundary with the
-// representative pseudo-point, drop the detached leaf region, and repair the remaining pairings
-// (region indices shift past the deleted leaf; membrane occurrences after the crit in the host
-// boundary shift down by one). The leaf's only membrane was the crit, so no surviving pairing
-// references it.
-Component applySwap(const Component& c, const CritCandidate& cand, Token rep) {
-    const std::uint32_t L = cand.leftRegion, hr = cand.hostRegion, hb = cand.hostBnd;
-    const int sp = cand.hostPos;
-
-    std::uint32_t critOcc = 0;
-    for (int i = 0; i < sp; ++i)
-        if (c.regions[hr][hb][static_cast<std::size_t>(i)] == MEMB)
-            ++critOcc;
-
-    std::vector<int> rmap(c.regions.size(), -1);
-    for (std::uint32_t r = 0, nr = 0; r < c.regions.size(); ++r)
-        if (r != L)
-            rmap[r] = static_cast<int>(nr++);
-
-    Component out;
-    for (std::uint32_t r = 0; r < c.regions.size(); ++r) {
-        if (r == L)
-            continue;
-        std::vector<Bnd> region = c.regions[r];
-        if (r == hr)
-            region[hb][static_cast<std::size_t>(sp)] = rep;
-        out.regions.push_back(std::move(region));
-    }
-
-    auto remap = [&](MRef m) {
-        MRef n = m;
-        n.region = static_cast<std::uint32_t>(rmap[m.region]);
-        if (m.region == hr && m.boundary == hb && m.occ > critOcc)
-            n.occ = m.occ - 1;
-        return n;
-    };
-    for (std::size_t pi = 0; pi < c.pairings.size(); ++pi) {
-        if (static_cast<int>(pi) == cand.pairing)
-            continue;
-        out.pairings.push_back({remap(c.pairings[pi].first), remap(c.pairings[pi].second)});
-    }
-    return out;
-}
-
-// Apply a double-crit (S3/S4) content swap: replace the chunk region's whole content with the
-// shared representative [2βα/ -- a single boundary [SCAB, MEMB, MEMB] -- and re-point the two crit
-// pairings at their original hosts. The rep is port-symmetric (its own mirror swaps the two
-// membranes), so which host takes the new occurrence 0 vs 1 is immaterial; canonicalizeFull
-// normalizes it. The region keeps its index and none is deleted, so only region R's own boundary/
-// occurrence coordinates move; host boundaries (and their occurrence indices) are untouched.
-Component applyDoubleCritSwap(const Component& c, const DoubleCritCandidate& cand) {
-    const std::uint32_t R = cand.region;
+// Apply a matched crit swap (k=1 or k=2): replace region R's ENTIRE content with one new
+// boundary [SCAB, slot0, (slot1)]. A special-point slot keeps its own token in place -- it has
+// no separate host, since it already stands for "connects to somewhere outside this position".
+// A real-membrane slot becomes a fresh membrane occurrence, with its ORIGINAL pairing re-pointed
+// onto its new occurrence here (0 for slots[0], 1 for slots[1]) so its host elsewhere is
+// preserved -- exactly the old applyDoubleCritSwap's repoint step, generalized from exactly 2
+// slots to 1 or 2. The region keeps its own index; nothing is ever deleted or reindexed, so
+// there is no separate host-region bookkeeping to repair (unlike the old, now-removed, k=1-only
+// applySwap, which wrote a bare DISA directly into a separate host and deleted the leaf: that
+// direct-compressed result and this decompressed-then-auto-recompressed one are the same final
+// canonical position whenever the sole crit is real, see the registry's doc comment above).
+Component applyCritSwap(const Component& c, std::uint32_t R, const std::vector<CritSlot>& slots) {
+    Bnd newBnd;
+    newBnd.push_back(SCAB);
+    for (const auto& slot : slots)
+        newBnd.push_back(slot.special ? slot.tok : MEMB);
 
     Component out;
     out.dead = c.dead;
     out.regions.reserve(c.regions.size());
-    for (std::uint32_t r = 0; r < c.regions.size(); ++r) {
-        if (r == R)
-            out.regions.push_back(std::vector<Bnd>{Bnd{SCAB, MEMB, MEMB}});
-        else
-            out.regions.push_back(c.regions[r]);
-    }
+    for (std::uint32_t r = 0; r < c.regions.size(); ++r)
+        out.regions.push_back(r == R ? std::vector<Bnd>{newBnd} : c.regions[r]);
 
-    // Re-point a pairing's R-side occurrence (the chunk had exactly two membranes, so exactly one
-    // side of each of pi1/pi2 lies in R) onto the new single boundary.
     auto repoint = [&](std::pair<MRef, MRef> pr, std::uint32_t newOcc) {
         if (pr.first.region == R)
             pr.first = MRef{R, 0u, newOcc};
@@ -487,10 +422,13 @@ Component applyDoubleCritSwap(const Component& c, const DoubleCritCandidate& can
     };
     out.pairings.reserve(c.pairings.size());
     for (int pi = 0; pi < static_cast<int>(c.pairings.size()); ++pi) {
-        if (pi == cand.pi1)
-            out.pairings.push_back(repoint(c.pairings[static_cast<std::size_t>(pi)], 0u));
-        else if (pi == cand.pi2)
-            out.pairings.push_back(repoint(c.pairings[static_cast<std::size_t>(pi)], 1u));
+        int matchedSlot = -1;
+        for (std::size_t i = 0; i < slots.size(); ++i)
+            if (!slots[i].special && slots[i].pairing == pi)
+                matchedSlot = static_cast<int>(i);
+        if (matchedSlot >= 0)
+            out.pairings.push_back(repoint(c.pairings[static_cast<std::size_t>(pi)],
+                                            static_cast<std::uint32_t>(matchedSlot)));
         else
             out.pairings.push_back(c.pairings[static_cast<std::size_t>(pi)]);
     }
@@ -664,16 +602,14 @@ QuickCanonResult quickCanon(const Position& p) {
         };
         for (std::size_t ci = 0; ci < cur.components.size(); ++ci) {
             const Component& comp = cur.components[ci];
-            // Content swaps (S1/S2): host membrane -> DisaPoint, delete the leaf.
+            // Content swaps (S1/S2): reduce a single-crit region to [SCAB, crit].
             for (const auto& cand : enumerateCrits(comp)) {
-                if (cand.hostPos < 0)
-                    continue;
                 const auto it = registry().find(cand.leftKey);
                 if (it == registry().end())
                     continue;
                 Position np = cur;
-                np.components[ci] = applySwap(comp, cand, it->second.rep);
-                consider(std::move(np), it->second.offset);
+                np.components[ci] = applyCritSwap(comp, cand.leftRegion, {cand.slot});
+                consider(std::move(np), it->second);
             }
             // Crit-cell congruity (hollow-cell family, offset 0): merge a k>=2 crit cell to a
             // single boundary. Strictly reduces the boundary count, so the fixpoint still
@@ -691,7 +627,7 @@ QuickCanonResult quickCanon(const Position& p) {
                 if (it == doubleCritRegistry().end())
                     continue;
                 Position np = cur;
-                np.components[ci] = applyDoubleCritSwap(comp, cand);
+                np.components[ci] = applyCritSwap(comp, cand.region, {cand.slot1, cand.slot2});
                 consider(std::move(np), it->second);
             }
         }

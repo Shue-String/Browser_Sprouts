@@ -1408,6 +1408,51 @@ void testCollections() {
 // A 5-spot pass builds two full 5-spot graphs (~30s each) plus a quickCanon per minimal node, so it
 // is gated: by default the check runs to 4 spots (sub-second). Set STALKS_QUICKNIMBER_MAX=5 (or 6,
 // with patience) for the deep pass.
+// Special points participating in Advanced Collections crit-matching (Phase 4): a special point
+// is treated as a crit exactly like a real membrane, except it has no host to repoint (it already
+// stands for "connects to somewhere outside this position"). Four worked examples confirmed with
+// the user (2026-07-29), each checked against the real quickCanon() output rather than hand-
+// derived, per feedback_leverage_the_program_not_hand_simulation.
+void testSpecialPointCollections() {
+    using namespace stalks;
+
+    auto qc = [](const std::string& enc) { return quickCanon(parsePosition(enc)); };
+
+    // [1,ab] (0 real + 2 special crits, matches S4 "1,ba") -> whole region becomes [SCAB,a,b].
+    {
+        const auto r = qc("1,ab");
+        checkEq(ser(r.rep), "[2ab]", "special-point S4: [1,ab] -> [2ab]");
+        checkEqInt(r.offset, 1, "special-point S4: offset 1");
+    }
+    // [1234A|1,Aa] (1 real + 1 special crit in region1, matches S4 "1,ba") -> region1 becomes
+    // [SCAB,A(repointed),a]; region0 unchanged (only A's pairing target moves).
+    {
+        const auto r = qc("1234A|1,Aa");
+        checkEq(ser(r.rep), "[2Aa|1234A]", "special-point S4 with a real crit: region1 reduces");
+        checkEqInt(r.offset, 1, "special-point S4 with a real crit: offset 1");
+    }
+    // [2A|0,Aa]: region0 "2A" is the ordinary [2a/ shape (1 real crit, 0 special) -- plain
+    // structural DisaPoint compression (no Advanced Collections needed) folds it into a bare
+    // DISA at region1's host slot first, giving [0,3a]. THEN region1 (0 real + 1 special crit,
+    // matches S2 "0,3a") reduces to [SCAB,a]. Overall offset is S2's alone (the first step is
+    // plain struct canon, offset 0).
+    {
+        const auto r = qc("2A|0,Aa");
+        checkEq(ser(r.rep), "[2a]", "special-point S2 after ordinary DisaPoint compression");
+        checkEqInt(r.offset, 1, "special-point S2 after ordinary DisaPoint compression: offset 1");
+    }
+    // Negative: [2Ab|0,Aa]. region0 "2Ab" (1 real + 1 special = 2 crits) keys to "2ba" -- the
+    // double-crit REP shape itself (omitted from the registry, already reduced) -- so region0
+    // finds no match and stays put. region1 "0,Aa" (1 real + 1 special, matches S3 "0,ba")
+    // reduces independently to [SCAB,A(repointed),a]. The special point b in region0 is NOT
+    // ignored: nothing may fold it away, so the position stops here (offset 0, S3's own offset).
+    {
+        const auto r = qc("2Ab|0,Aa");
+        checkEq(ser(r.rep), "[2Aa|2Ab]", "special-point negative case: region0's b blocks further reduction");
+        checkEqInt(r.offset, 0, "special-point negative case: offset 0");
+    }
+}
+
 void testQuickNimber() {
     using namespace stalks;
 
@@ -1860,6 +1905,7 @@ int main() {
         testRecompress();
         testCanon();
         testCollections();
+        testSpecialPointCollections();
         testQuickNimber();
         testDriver();
         testRegression();

@@ -21,12 +21,14 @@ struct QuickCanonResult {
     int offset = 0;
 };
 
-// A "left side": the detached chunk left when its k crit membranes are cut, with each crit
-// marked as a distinct, ordered port. Canonicalized to a string key for registry lookup; the
-// crit ports render as reserved sentinels so they never collide with ordinary membranes. The
-// representation is crit-count-generic (k=1 single-crit S1/S2 now; k=2 double-crit S3/S4 is
-// additive later -- only the crit-finder and the "crits on different organs" matcher are
-// crit-count-specific, see notes/advanced_collections_plan.md).
+// A "left side": the detached chunk left when its k crits are cut, with each crit marked as a
+// distinct, ordered port. A crit is either a real membrane paired to a host elsewhere, or a
+// special-point token (ALPHA, ...; see tokens.hpp) -- a special point already stands for
+// "connects to somewhere outside this position," so it plays the identical structural role with
+// no host to repoint. Canonicalized to a string key for registry lookup; the crit ports render
+// as reserved sentinels so they never collide with ordinary content. The representation is
+// crit-count-generic (k=1 single-crit S1/S2, k=2 double-crit S3/S4; the "crits on different
+// organs" multi-region matcher is still deferred, see notes/advanced_collections_plan.md).
 //
 // Membership is decided by the collection registry (S1, S2, ... ; see collections.cpp). Each
 // collection names a canonical representative and an offset within its Pairing-Theorem pair
