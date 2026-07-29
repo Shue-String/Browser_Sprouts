@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
-#include <functional>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <unordered_set>
@@ -56,21 +56,98 @@ std::uint64_t getVarint(std::istream& in) {
     }
 }
 
-// --- Raw (unpacked) strings: no 5-bit alphabet restriction, so special-point letters 'a'-'j' need
-// no special handling at all -- unlike savefile.cpp's putPackedString, which must reject them. ---
+// --- 6-bit packed alphabet ---
+//
+// Widens .sprout's 5-bit alphabet (32 codes: digits/|/,/A-T -- already full) to 6 bits (64 codes),
+// per explicit user decision: this format will never need more than 22 membrane letters (A-V) or
+// more than 4 distinct special-point symbols in one component, so the freed-up capacity is spent as
+// digits(10) + '|' + ',' (2) + A-V (22 membranes) + 4 dedicated special-point codes (conceptually
+// "W,X,Y,Z", the last 4 letters of the alphabet) = 38 of the 64 available codes, comfortably inside
+// one byte's worth of headroom (26 spare codes) without needing a 7th bit.
+constexpr int kMaxMembranes = 22;       // A-V
+constexpr int kMaxSpecialPacked = 4;    // this format's own cap (tighter than tokens.hpp's general
+                                         // MAX_SPECIAL_POINTS=10) -- a 5th+ symbol is rejected below
 
-void putRawString(std::ostream& out, const std::string& s) {
-    putVarint(out, s.size());
-    out.write(s.data(), static_cast<std::streamsize>(s.size()));
+// Char -> 6-bit code, or -1 if outside the packable alphabet (including a 5th+ special-point symbol
+// or a 23rd+ membrane letter -- both explicitly out of scope for this format, see kMax* above).
+int codeOf(char ch) {
+    if (ch >= '0' && ch <= '9')
+        return ch - '0';
+    if (ch == '|')
+        return 10;
+    if (ch == ',')
+        return 11;
+    if (ch >= 'A' && ch < 'A' + kMaxMembranes)
+        return 12 + (ch - 'A');
+    if (ch >= 'a' && ch < 'a' + kMaxSpecialPacked)
+        return 12 + kMaxMembranes + (ch - 'a');
+    return -1;
 }
 
-std::string getRawString(std::istream& in) {
+char charOf(int code) {
+    if (code <= 9)
+        return static_cast<char>('0' + code);
+    if (code == 10)
+        return '|';
+    if (code == 11)
+        return ',';
+    if (code < 12 + kMaxMembranes)
+        return static_cast<char>('A' + (code - 12));
+    return static_cast<char>('a' + (code - 12 - kMaxMembranes));
+}
+
+// varint length (in CHARS, not bytes), then the chars packed 6 bits each (little-endian bit order),
+// byte-aligned per string. Same shape as savefile.cpp's putPackedString/getPackedString, freshly
+// reimplemented at 6 bits -- no shared code path, per the format-separation directive.
+void putPackedString(std::ostream& out, const std::string& s) {
+    putVarint(out, s.size());
+    std::uint32_t acc = 0;
+    int nbits = 0;
+    for (char ch : s) {
+        const int code = codeOf(ch);
+        if (code < 0)
+            throw std::runtime_error(
+                std::string("specfile: character '") + ch +
+                "' is outside the 6-bit alphabet -- this position has more than " +
+                std::to_string(kMaxMembranes) + " membranes or more than " +
+                std::to_string(kMaxSpecialPacked) +
+                " distinct special-point symbols in one component and cannot be saved in this format");
+        acc |= static_cast<std::uint32_t>(code) << nbits;
+        nbits += 6;
+        while (nbits >= 8) {
+            out.put(static_cast<char>(acc & 0xFF));
+            acc >>= 8;
+            nbits -= 8;
+        }
+    }
+    if (nbits > 0)
+        out.put(static_cast<char>(acc & 0xFF));
+}
+
+std::string getPackedString(std::istream& in) {
     const std::uint64_t len = getVarint(in);
     std::string s;
-    s.resize(static_cast<std::size_t>(len));
-    if (len > 0 && !in.read(&s[0], static_cast<std::streamsize>(len)))
-        throw std::runtime_error("specfile: unexpected end of stream reading encoding");
+    s.reserve(static_cast<std::size_t>(len));
+    std::uint32_t acc = 0;
+    int nbits = 0;
+    for (std::uint64_t i = 0; i < len; ++i) {
+        while (nbits < 6) {
+            acc |= static_cast<std::uint32_t>(getByte(in)) << nbits;
+            nbits += 8;
+        }
+        s.push_back(charOf(static_cast<int>(acc & 0x3F)));
+        acc >>= 6;
+        nbits -= 6;
+    }
     return s;
+}
+
+// Count of special-point tokens present in `enc` -- ordering-priority use only (see topoOrderMulti
+// below), not a correctness-critical value. Every special point serializes as one lowercase 'a'-'j'
+// char (tokenChar(), tokens.hpp), so a direct character scan is exact -- no parsing needed.
+int specialCountOf(const std::string& enc) {
+    return static_cast<int>(
+        std::count_if(enc.begin(), enc.end(), [](char ch) { return ch >= 'a' && ch <= 'j'; }));
 }
 
 // The minimal-node component list a child edge points at: the child itself if it is minimal, or the
@@ -82,36 +159,86 @@ std::vector<const Node*> childComponents(const Node* child) {
 }
 
 // .sprout's ascending-lives2() ordering ("every move strictly reduces lives, so a child always
-// precedes its parent") does NOT hold once special points are involved. lives2() deliberately
-// returns 0 for a special-point token in place (Phase 1's locked semantics), but the specific
-// movetype-2 transformation ("becomes a scab") replaces it with a token that DOES carry lives2 --
-// a scab occupying its own standalone one-token boundary was empirically found (via
-// debug_spec_order.exe on "[0,a]") to carry MORE remaining capacity than the special point it
-// replaced, so lives2() can flat-out INCREASE across that one edge. No numeric proxy derived from
-// the encoding is safe to sort by here.
+// precedes its parent") does NOT hold once special points are involved: lives2() deliberately
+// returns 0 for a special-point token in place (Phase 1's locked semantics), but the movetype-2
+// transformation ("becomes a scab") replaces it with a token that DOES carry lives2 -- a scab
+// occupying its own standalone one-token boundary was empirically found (debug_spec_order.exe on
+// "[0,a]") to carry MORE remaining capacity than the special point it replaced, so lives2() can
+// flat-out INCREASE across that one edge. Sorting by any numeric proxy derived from the encoding is
+// therefore unsound on its own (an earlier plain-DFS-post-order version of this function sidestepped
+// the problem instead of solving the underlying ask).
 //
-// The robust fix: don't derive an ordering key from the position at all. Walk the GameGraph's own
-// child/subposition edges in DFS POST-ORDER. The graph is acyclic by construction -- it was built
-// by graph.cpp's memoized recursion, which only terminates because no position is ever revisited as
-// its own ancestor -- so a post-order traversal unconditionally emits every child (and every sum's
-// component parts) strictly before the node that references it, with zero assumptions about what
-// any per-position numeric quantity does. Also serves as the multi-root reachability sweep: a node
-// shared by two roots' subtrees is visited (and written) exactly once.
+// This version keeps the fewest-lives-first SPIRIT while staying provably correct: a priority-driven
+// Kahn's algorithm. Correctness comes from the dependency structure itself (a node is only ever
+// EMITTED once every node it depends on has already been emitted -- true by definition, regardless
+// of what lives2/specialCount do), and "fewest lives first" is applied only as the tie-break for
+// CHOOSING among nodes that are currently eligible: at each step, among all nodes whose every
+// dependency has already been written, emit the one with the smallest (lives2, specialPointCount,
+// enc) key. The graph is guaranteed acyclic (built by graph.cpp's memoized recursion, which only
+// terminates because no position is ever its own ancestor), so this always makes full progress.
 std::vector<const Node*> topoOrderMulti(const std::vector<const Node*>& roots) {
-    std::vector<const Node*> out;
-    std::unordered_set<const Node*> visited;
-    std::function<void(const Node*)> visit = [&](const Node* n) {
-        if (!visited.insert(n).second)
-            return;
+    // Reachability sweep (child + subposition links), same as before -- collects every minimal node
+    // reachable from ANY root, deduped, before any ordering decision is made.
+    std::vector<const Node*> allMin;
+    std::unordered_set<const Node*> seen;
+    {
+        std::vector<const Node*> stack(roots.begin(), roots.end());
+        for (const Node* r : roots)
+            seen.insert(r);
+        while (!stack.empty()) {
+            const Node* n = stack.back();
+            stack.pop_back();
+            if (!n->isSum())
+                allMin.push_back(n);
+            for (const Node* c : n->children)
+                if (seen.insert(c).second)
+                    stack.push_back(c);
+            for (const Node* s : n->subpositions)
+                if (seen.insert(s).second)
+                    stack.push_back(s);
+        }
+    }
+
+    // Each minimal node's DISTINCT dependencies (its children's minimal component parts, deduped --
+    // Kahn's algorithm only needs to know WHICH nodes block it, not how many edges reference each),
+    // plus the reverse map (a dependency -> the nodes waiting on it) used to discover newly-eligible
+    // nodes as their blockers get emitted.
+    std::unordered_map<const Node*, int> remaining;
+    std::unordered_map<const Node*, std::vector<const Node*>> dependents;
+    for (const Node* n : allMin) {
+        std::unordered_set<const Node*> uniqueDeps;
         for (const Node* c : n->children)
-            visit(c);
-        for (const Node* s : n->subpositions)
-            visit(s);
-        if (!n->isSum())
-            out.push_back(n);  // post-order: only after every dependency is already in `out`
+            for (const Node* comp : childComponents(c))
+                uniqueDeps.insert(comp);
+        remaining[n] = static_cast<int>(uniqueDeps.size());
+        for (const Node* d : uniqueDeps)
+            dependents[d].push_back(n);
+    }
+
+    using Key = std::tuple<int, int, std::string>;  // (lives2, specialCount, enc) -- enc is a final
+                                                      // deterministic tiebreak, and already unique.
+    auto keyOf = [](const Node* n) {
+        return Key{parsePosition(n->enc).lives2(), specialCountOf(n->enc), n->enc};
     };
-    for (const Node* r : roots)
-        visit(r);
+
+    std::map<Key, const Node*> ready;  // ordered set-like map; begin() is always the smallest key
+    for (const Node* n : allMin)
+        if (remaining.at(n) == 0)
+            ready.emplace(keyOf(n), n);
+
+    std::vector<const Node*> out;
+    out.reserve(allMin.size());
+    while (!ready.empty()) {
+        const auto it = ready.begin();
+        const Node* n = it->second;
+        ready.erase(it);
+        out.push_back(n);
+        const auto depIt = dependents.find(n);
+        if (depIt != dependents.end())
+            for (const Node* dependent : depIt->second)
+                if (--remaining.at(dependent) == 0)
+                    ready.emplace(keyOf(dependent), dependent);
+    }
     return out;
 }
 
@@ -133,7 +260,7 @@ std::size_t writeMinimalSpec(const GameGraph& g, const std::vector<const Node*>&
 
     for (std::size_t rank = 0; rank < mins.size(); ++rank) {
         const Node* n = mins[rank];
-        putRawString(out, n->enc);
+        putPackedString(out, n->enc);
         putVarint(out, n->children.size());
         for (std::size_t c = 0; c < n->children.size(); ++c) {
             const std::vector<const Node*> comps = childComponents(n->children[c]);
@@ -186,7 +313,7 @@ SpecDB loadSpecGraph(std::istream& in) {
 
     for (std::uint64_t i = 0; i < count; ++i) {
         SpecNode node;
-        node.enc = getRawString(in);
+        node.enc = getPackedString(in);
         const std::uint64_t childCount = getVarint(in);
         node.edges.reserve(static_cast<std::size_t>(childCount));
 

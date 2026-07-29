@@ -641,6 +641,51 @@ void testSpecFile() {
         checkEqInt(v1.nimber, r1->nimber, "specfile: multi-root value 1 round-trips");
         checkEqInt(v2.nimber, r2->nimber, "specfile: multi-root value 2 round-trips");
     }
+
+    // Priority-Kahn's-algorithm sanity: "N" (the dead/terminal component, 0 lives, no dependencies)
+    // must be the very first node emitted -- it's eligible from the start (no children) and has the
+    // globally smallest (lives2, specialCount) key, so nothing can be scheduled ahead of it.
+    {
+        GameGraph g;
+        Node* root = g.ensure(parsePosition("[0,a]"));
+        std::stringstream ss;
+        saveSpecGraph(g, {root}, ss);
+        const SpecDB db = loadSpecGraph(ss);
+        CHECK(!db.nodes().empty());
+        if (!db.nodes().empty())
+            checkEq(db.nodes().front().enc, "N",
+                    "specfile: fewest-lives-first priority picks the terminal node first");
+    }
+
+    // Membrane letters round-trip through the 6-bit packed alphabet too, not just digits/specials --
+    // "aA|A,12" mixes a membrane pair (A) with a special point (a), the same Phase 3 dedup witness
+    // used elsewhere in this file.
+    {
+        GameGraph g;
+        Node* root = g.ensure(parsePosition("aA|A,12"));
+        std::stringstream ss;
+        saveSpecGraph(g, {root}, ss);
+        const SpecDB db = loadSpecGraph(ss);
+        SpecValue v;
+        CHECK(db.value(parsePosition("aA|A,12"), v));
+        checkEqInt(v.nimber, root->nimber, "specfile: membrane-bearing position round-trips");
+    }
+
+    // The 6-bit packed alphabet caps special points at 4 distinct symbols per component (the last 4
+    // codes, "W,X,Y,Z" conceptually) -- a 5th must be rejected with a clear error, not silently
+    // truncated or corrupted.
+    {
+        GameGraph g;
+        Node* root = g.ensure(parsePosition("[0,a,b,c,d,e]"));
+        std::stringstream ss;
+        bool threw = false;
+        try {
+            saveSpecGraph(g, {root}, ss);
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        CHECK(threw);
+    }
 }
 
 void testPlanarityRule() {

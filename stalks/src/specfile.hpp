@@ -19,28 +19,33 @@ namespace stalks {
 //
 // Same big idea as .sprout (nodes emitted in an order where every edge is a back-reference to an
 // already-written node -- no fixup pass, values recomputed on load) but THREE things widen:
-//   1. Encodings are stored as RAW bytes (varint length + raw chars), not 5-bit packed. The .sprout
-//      packable alphabet (digits/|/,/A-T) has no room for the special-point letters 'a'-'j', and
-//      special-point positions are inherently small (analysis-input-only, never a real n-spot game
-//      tree) -- the packing that matters at real n-spot-master scale (thousands to millions of
-//      nodes) buys nothing here.
+//   1. Encodings are 6-BIT packed (not .sprout's 5-bit), by explicit user decision: this format will
+//      never need more than 22 membrane letters (A-V) or more than 4 distinct special-point symbols
+//      in one component, so digits(10) + '|' + ',' (2) + A-V (22) + 4 dedicated special-point codes
+//      (conceptually "W,X,Y,Z", the alphabet's last 4 letters) = 38 codes fit comfortably in the 64
+//      a 6th bit provides. A 5th+ special-point symbol or 23rd+ membrane in one component is rejected
+//      (specfile.cpp::codeOf/kMaxMembranes/kMaxSpecialPacked) -- a save-format-specific cap, tighter
+//      than tokens.hpp's general MAX_SPECIAL_POINTS=10.
 //   2. Every edge additionally carries its PACKED MOVETYPE (moves.hpp::packMovetypes) -- the whole
 //      reason this format exists. Two edges to the same child are NOT collapsed if their movetype
 //      differs (mirrors GameGraph::Node::childMoveTypes; mex/value computation still ignores
 //      movetype and dedups by child value alone, same as the real solver).
-//   3. The topological order is NOT ascending-lives2() (nor any other numeric proxy derived from the
-//      encoding) -- it's a real DFS POST-ORDER over the GameGraph's own child/subposition edges.
+//   3. The topological order is a priority-driven KAHN'S ALGORITHM, not plain ascending-lives2().
 //      .sprout's "a child always has strictly fewer lives than its parent" invariant genuinely
 //      breaks once special points are involved: lives2() deliberately returns 0 for a special-point
 //      token in place (Phase 1's locked semantics), but the movetype-2 transformation ("becomes a
 //      scab") replaces it with a token that DOES carry lives2 -- a scab occupying its own standalone
 //      one-token boundary was empirically found (debug_spec_order.exe on "[0,a]") to carry MORE
 //      remaining capacity than the special point it replaced, so lives2() can flat-out INCREASE
-//      across that one edge. An earlier attempt at a composite (lives2, specialPointCount) key still
-//      failed for the same reason. Post-order sidesteps this entirely: the graph is acyclic by
-//      construction (built by graph.cpp's memoized recursion, which only terminates because no
-//      position is ever its own ancestor), so walking children-before-parent needs no assumption
-//      about what any per-position quantity does.
+//      across that one edge, and no numeric proxy derived from the encoding alone is safe to sort by.
+//      specfile.cpp::topoOrderMulti instead emits nodes one at a time, always choosing -- among
+//      nodes whose every dependency has ALREADY been written -- the one with the smallest
+//      (lives2, specialPointCount, enc). Correctness comes from honoring real dependencies (true by
+//      construction, since the graph is acyclic -- built by graph.cpp's memoized recursion, which
+//      only terminates because no position is ever its own ancestor); "fewest lives first" is then
+//      just the tie-break used to choose among whatever is currently eligible, giving the same
+//      practical ordering .sprout has whenever the topology allows it, without relying on lives2()
+//      monotonicity for correctness.
 // Also supports MULTIPLE roots in one file (e.g. two related starting positions saved together as
 // one combined tree, sharing a persistent GameGraph so common subpositions are stored once): a node
 // reachable from ANY of the given roots is written exactly once.
@@ -48,7 +53,8 @@ namespace stalks {
 // Binary layout (little-endian; integers are LEB128 unsigned varints):
 //   magic "SPEC", u8 version(=1), u8 mode(0=Exact,1=Quick), varint N (minimal-node count)
 //   N node records; record i defines node index i (0-based):
-//     varint encLen, then encLen raw bytes -- the bracketless canonical encoding, verbatim.
+//     varint encLen, then encLen chars packed 6 bits each (ceil(6*encLen/8) bytes) -- the
+//       bracketless canonical encoding.
 //     varint childCount
 //     childCount edges, each:
 //       parity-tagged descriptor varint (same scheme as .sprout: even -> ordinary child, desc>>1 is
