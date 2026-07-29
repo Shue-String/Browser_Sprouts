@@ -1,5 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS  // getenv in the diagnostic harnesses below
 
+#include "analyze.hpp"
 #include "boundary.hpp"
 #include "canon.hpp"
 #include "collections.hpp"
@@ -489,6 +490,93 @@ void testExternalMovetype() {
         const External mv{ExternalTarget{0, 0, 1, 1}, ExternalTarget{0, 0, 2, 1}};
         const Position child = applyExternal(parent, 0, mv);
         checkEq(stalks::serialize(child), "0", "external: same-boundary double-vanish leaves just the spot");
+    }
+}
+
+// Extracts every "movetype":N value from a JSON blob that appears inside an object whose "enc"
+// field equals `enc` (scans for "enc":"<enc>" occurrences, reads the next "movetype": after each).
+// Test-only hand-rolled scanner, mirroring analyze.cpp's own hand-rolled writer -- good enough for
+// locking down known witness JSON shapes without pulling in a JSON parser. Order matches JSON
+// emission order (first move first), not sorted.
+std::vector<int> movetypesForEnc(const std::string& json, const std::string& enc) {
+    std::vector<int> out;
+    const std::string needle = "\"enc\":\"" + enc + "\"";
+    std::size_t pos = 0;
+    while ((pos = json.find(needle, pos)) != std::string::npos) {
+        const std::size_t mtPos = json.find("\"movetype\":", pos);
+        if (mtPos == std::string::npos) break;
+        const std::size_t numStart = mtPos + std::string("\"movetype\":").size();
+        std::size_t numEnd = numStart;
+        while (numEnd < json.size() && std::isdigit(static_cast<unsigned char>(json[numEnd])))
+            ++numEnd;
+        out.push_back(std::atoi(json.substr(numStart, numEnd - numStart).c_str()));
+        pos = numEnd;
+    }
+    return out;
+}
+
+// Phase 5, piece 1: analyze.cpp's writeChild now threads the packed special-point movetype
+// (moves.hpp::packMovetypes) through every JSON child-list function via the new movetypeFor()
+// helper. All four positions below were checked empirically via query_movetype.exe/query_position.exe
+// first (see project_alpha_movetype_feature.md) before being locked in here; movetypeFor is a thin
+// wrapper over already-tested functions (testSpecialPointMovetype/testMovetypeDedupWidening), so
+// this is really testing the JSON-plumbing, not new classification logic.
+void testAnalyzeMovetypeJson() {
+    using namespace stalks;
+
+    // [0,a]: childrenTrackedJson's children get the 4 distinct movetypes -- Enclosure (untouched)
+    // = 5, Join (direct connect) = 3, the two External moves (vanish/scab) = 1/2.
+    {
+        const std::string json = childrenTrackedJson("[0,a]");
+        CHECK(json.find("\"ok\":true") != std::string::npos);
+        const auto mtEnclosure = movetypesForEnc(json, "4,a");
+        checkEqInt(static_cast<long long>(mtEnclosure.size()), 1, "movetype json: 4,a has one edge");
+        if (!mtEnclosure.empty())
+            checkEqInt(mtEnclosure[0], 5, "movetype json: untouched enclosure is 5");
+        const auto mtJoin = movetypesForEnc(json, "12");
+        checkEqInt(static_cast<long long>(mtJoin.size()), 1, "movetype json: 12 has one edge");
+        if (!mtJoin.empty())
+            checkEqInt(mtJoin[0], 3, "movetype json: join direct-connect is 3");
+        const auto mtVanish = movetypesForEnc(json, "0");
+        checkEqInt(static_cast<long long>(mtVanish.size()), 1, "movetype json: vanish-child 0 has one edge");
+        if (!mtVanish.empty())
+            checkEqInt(mtVanish[0], 1, "movetype json: external vanish is 1");
+        const auto mtScab = movetypesForEnc(json, "0,2");
+        checkEqInt(static_cast<long long>(mtScab.size()), 1, "movetype json: scab-child 0,2 has one edge");
+        if (!mtScab.empty())
+            checkEqInt(mtScab[0], 2, "movetype json: external scab is 2");
+    }
+
+    // aA|A,12 (the Phase 3 dedup-widening witness): childrenTrackedJson must keep BOTH edges to
+    // child "12" -- movetypes {3,4} -- not collapse them, mirroring testMovetypeDedupWidening but
+    // through the JSON layer.
+    {
+        const std::string json = childrenTrackedJson("aA|A,12");
+        const auto mt = movetypesForEnc(json, "12");
+        checkEqInt(static_cast<long long>(mt.size()), 2, "movetype json: dedup widening keeps both edges");
+        const std::set<int> s(mt.begin(), mt.end());
+        CHECK(s.count(3) == 1);
+        CHECK(s.count(4) == 1);
+    }
+
+    // ABa|0,AB (the movetype-4 worked example): analyzeFullJson's children carry it too.
+    {
+        const std::string json = analyzeFullJson("ABa|0,AB");
+        CHECK(json.find("\"ok\":true") != std::string::npos);
+        const auto mt = movetypesForEnc(json, "0,2");
+        checkEqInt(static_cast<long long>(mt.size()), 1, "movetype json: analyzeFull carries movetype 4");
+        if (!mt.empty())
+            checkEqInt(mt[0], 4, "movetype json: isolate-and-delete is 4");
+    }
+
+    // Movetype-0 fast path: an ordinary special-point-free position's children all report 0, and
+    // never any nonzero movetype (nothing in the position could produce one).
+    {
+        const std::string json = childrenTrackedJson("[0,0]");
+        CHECK(json.find("\"ok\":true") != std::string::npos);
+        CHECK(json.find("\"movetype\":0") != std::string::npos);
+        for (int mt = 1; mt <= 5; ++mt)
+            CHECK(json.find("\"movetype\":" + std::to_string(mt)) == std::string::npos);
     }
 }
 
@@ -1895,6 +1983,7 @@ int main() {
         testGraphMovetypeEdges();
         testPackMovetypes();
         testExternalMovetype();
+        testAnalyzeMovetypeJson();
         testPlanarityRule();
         testDecompression();
         testLives();

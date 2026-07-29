@@ -23,7 +23,8 @@ export interface LightMeta {
 // v3: added `move` to ChildInfo (move-preview hover feature). Entries cached before that shape
 // change silently lack it, breaking hover-preview with no console error for whatever position
 // happened to already be cached (commonly the game root, since it's looked up first/most often).
-const FULL_KEY = 'sprouts.posCache.v3';
+// v4: added `movetype` to MoveInfo (Alpha movetype feature, Phase 5). Same stale-entry risk as v3.
+const FULL_KEY = 'sprouts.posCache.v4';
 const META_KEY = 'sprouts.posMeta.v1';
 const PARENTS_KEY = 'sprouts.posParents.v1';
 

@@ -69,14 +69,27 @@ Val valueOf(const GameGraph& g, const Position& q) {
     return v;
 }
 
-// {"enc":..,"nimber":..,"subposCount":..,"minMoves":..,"maxMoves":..,"move":{...}[,"quickCanon":..]}
+// Packed special-point movetype (moves.hpp::specialPointMovetypes/packMovetypes) for the move
+// `tag` that produced `child` from `parent`. 0 -- the fast path -- whenever `parent` has no
+// special point at all, matching every other movetype-0 fast path in the engine.
+int movetypeFor(const Position& parent, const MoveTag& tag, const Position& child) {
+    if (!hasSpecialPoint(parent))
+        return 0;
+    return packMovetypes(
+        specialPointMovetypes(parent, edgeTagFromMoveTag(parent.decompressed(), tag), child));
+}
+
+// {"enc":..,"nimber":..,"subposCount":..,"minMoves":..,"maxMoves":..,
+//  "move":{...,"movetype":..}[,"quickCanon":..]}
 // `move` identifies which move on the parent reaches this child: kind, the component it was
-// applied to, the region, and either boundary/i/j/mask (enclosure) or b1/b2/i/j (join). `v` is
+// applied to, the region, and either boundary/i/j/mask (enclosure) or b1/b2/i/j (join), plus the
+// packed special-point movetype for that edge (0 when the parent has no special point). `v` is
 // kUnknownVal (-1 sentinel fields) when the child hasn't been valued -- too expensive to value
 // every child of an oversized position; the frontend renders -1 as "?". `quick`, when non-null, is
 // the child's own quick-canon representative (only populated where a caller needs it per-child).
 void writeChild(std::string& out, const std::string& enc, const Val& v, int nsub,
-                const MoveTag* tag = nullptr, const QuickCanonResult* quick = nullptr) {
+                const MoveTag* tag = nullptr, const QuickCanonResult* quick = nullptr,
+                int movetype = 0) {
     out += "{\"enc\":";
     jsonStr(out, enc);
     out += ",\"nimber\":";
@@ -106,6 +119,8 @@ void writeChild(std::string& out, const std::string& enc, const Val& v, int nsub
         jsonInt(out, tag->i);
         out += ",\"j\":";
         jsonInt(out, tag->j);
+        out += ",\"movetype\":";
+        jsonInt(out, movetype);
         out += "}";
     }
     if (quick) {
@@ -238,7 +253,8 @@ std::optional<std::string> unvaluedChildren(const Position& p) {
         if (!first)
             out += ',';
         first = false;
-        writeChild(out, serialize(kid), kUnknownVal, subposCount(kid), &tag, &qc);
+        writeChild(out, serialize(kid), kUnknownVal, subposCount(kid), &tag, &qc,
+                   movetypeFor(p, tag, kid));
     }
     out += "]";
     return out;
@@ -284,7 +300,8 @@ std::string fullAnalysis(const Position& p, const std::string& canon) {
                 out += ',';
             first = false;
             const Val v = valueOf(g, kid);
-            writeChild(out, serialize(kid), v, subposCount(kid), &tag);
+            writeChild(out, serialize(kid), v, subposCount(kid), &tag, nullptr,
+                       movetypeFor(p, tag, kid));
         }
     }
     out += "]";
@@ -438,7 +455,8 @@ std::string childrenTrackedJson(const std::string& enc) {
                 out += ',';
             first = false;
             const Val v = valueOf(g, kid);
-            writeChild(out, serialize(kid), v, subposCount(kid), &tag);
+            writeChild(out, serialize(kid), v, subposCount(kid), &tag, nullptr,
+                       movetypeFor(p, tag, kid));
         }
         out += "]}";
         return out;
@@ -484,7 +502,8 @@ std::string regionMovesTrackedJson(const std::string& enc, int component, int re
             if (!first)
                 out += ',';
             first = false;
-            writeChild(out, serialize(child), v, subposCount(child), &tag);
+            writeChild(out, serialize(child), v, subposCount(child), &tag, nullptr,
+                       movetypeFor(d, tag, child));
         };
 
         // enclosureMoves/joinMoves enumerate every legal move of the WHOLE component; filter down to
@@ -539,6 +558,14 @@ std::string allMovesTrackedJson(const std::string& enc) {
         exactGraph().ensure(p);
         const GameGraph& g = exactGraph();
 
+        // Decompress before enumerating, same fix and same reason as regionMovesTrackedJson just
+        // above: enclosureMoves/joinMoves throw outright if ANY boundary of the component still holds
+        // a compressed pseudo-point. The caller (analyzeTEntry) is documented to always pass an
+        // already-decompressed `enc`, so this is normally a no-op, but doing it unconditionally here
+        // too costs nothing and removes the same latent failure mode for good. Declared before `emit`
+        // so the lambda can capture it for movetypeFor.
+        const Position d = p.decompressed();
+
         std::string out = "{\"ok\":true,\"children\":[";
         bool first = true;
         auto emit = [&](Position&& raw, const MoveTag& tag) {
@@ -548,7 +575,8 @@ std::string allMovesTrackedJson(const std::string& enc) {
             if (!first)
                 out += ',';
             first = false;
-            writeChild(out, serialize(child), v, subposCount(child), &tag);
+            writeChild(out, serialize(child), v, subposCount(child), &tag, nullptr,
+                       movetypeFor(d, tag, child));
         };
 
         // Every legal Enclosure/Join move of every (non-dead) component, with NO dedup by canonical
@@ -563,13 +591,6 @@ std::string allMovesTrackedJson(const std::string& enc) {
         // (deduped-away) move would have preserved it and, by the same symmetry, matches just as well.
         // See collectGenetics.ts's analyzeTEntry, the caller this exists for (the Grandparent Bypass
         // grandchild retrace).
-        //
-        // Decompress before enumerating, same fix and same reason as regionMovesTrackedJson just
-        // above: enclosureMoves/joinMoves throw outright if ANY boundary of the component still holds
-        // a compressed pseudo-point. The caller (analyzeTEntry) is documented to always pass an
-        // already-decompressed `enc`, so this is normally a no-op, but doing it unconditionally here
-        // too costs nothing and removes the same latent failure mode for good.
-        const Position d = p.decompressed();
         for (std::size_t k = 0; k < d.components.size(); ++k) {
             if (d.components[k].dead)
                 continue;

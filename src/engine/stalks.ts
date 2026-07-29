@@ -19,7 +19,9 @@ export enum MoveKind {
  * Identifies which move on the parent position reaches a given child, in the engine's abstract
  * component/region/boundary index space (not live game VertexIds — see moves.hpp MoveTag).
  * boundary/mask are enclosure-only; b1/b2 are join-only; i/j are used by both. InteriorPseudo
- * moves only populate component/region/boundary/i (the pseudo token's position).
+ * moves only populate component/region/boundary/i (the pseudo token's position). `movetype` is the
+ * packed special-point movetype for this edge (moves.hpp::packMovetypes) -- 0 when the parent has
+ * no special point (ALPHA, ...) at all.
  */
 export interface MoveInfo {
   kind: MoveKind;
@@ -31,6 +33,7 @@ export interface MoveInfo {
   b2: number;
   i: number;
   j: number;
+  movetype: number;
 }
 
 /**

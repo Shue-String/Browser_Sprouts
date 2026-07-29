@@ -31,6 +31,10 @@ int main(int argc, char** argv) {
         std::cout << stalks::regionMovesTrackedJson(enc, comp, region, boundary, token) << "\n";
         return 0;
     }
+    if (argc >= 3 && std::string(argv[2]) == "--all-moves") {
+        std::cout << stalks::allMovesTrackedJson(enc) << "\n";
+        return 0;
+    }
     std::string result = stalks::analyzeFullJson(enc);
     std::cout << result << "\n";
     return 0;
