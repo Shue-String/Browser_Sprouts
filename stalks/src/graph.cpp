@@ -150,6 +150,10 @@ Node* GameGraph::build(const Position& canonical) {
             MoveTag tag{MoveKind::Join, k, mv.region, 0, 0, mv.b1, mv.b2, mv.i, mv.j};
             kids.push_back({resolveChild(applyJoin(d, k, mv)), tag});
         }
+        for (const auto& mv : externalMoves(d.components[k])) {
+            MoveTag tag{MoveKind::External, k, 0, 0, 0, 0, 0, 0, 0, mv};
+            kids.push_back({resolveChild(applyExternal(d, k, mv)), tag});
+        }
     }
     // Distinct edges only (many moves can land on the same child + offset). In Quick mode the
     // same node can be reached with two different offsets -- those are genuinely distinct edges

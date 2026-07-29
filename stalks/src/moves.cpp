@@ -892,6 +892,66 @@ std::vector<Position> joinChildren(const Position& p) {
     return out;
 }
 
+// A movetype-1/2 move: 1-2 special points, each independently resolved to vanish (erased) or
+// become a scab (transmuted in place), applied together in one pass, then cleaned up/normalized
+// exactly as any other move. Scab transmutes happen before removals (index-preserving); removals
+// happen in descending-index order per boundary, so an earlier removal never invalidates a later
+// target's index in the same boundary.
+std::vector<Component> applyExternal(const Component& c, const External& m) {
+    IComp ic = labeled(c, /*allowPseudo=*/false);
+
+    std::vector<ExternalTarget> targets{m.first};
+    if (m.second.outcome != 0)
+        targets.push_back(m.second);
+    if (targets.size() == 2 && targets[0].region == targets[1].region &&
+        targets[0].boundary == targets[1].boundary && targets[0].idx == targets[1].idx)
+        throw EncodingError("external move targets cannot be the same position twice");
+
+    for (const auto& t : targets) {
+        if (t.region >= ic.regions.size())
+            throw EncodingError("external region index out of range");
+        const IRegion& reg = ic.regions[t.region];
+        if (t.boundary >= reg.size())
+            throw EncodingError("external boundary index out of range");
+        const IWalk& w = reg[t.boundary];
+        if (t.idx < 0 || static_cast<std::size_t>(t.idx) >= w.size())
+            throw EncodingError("external token index out of range");
+        if (!isSpecialPoint(w[static_cast<std::size_t>(t.idx)].tok))
+            throw EncodingError("external move target is not a special point");
+        if (t.outcome != 1 && t.outcome != 2)
+            throw EncodingError("external move outcome must be 1 or 2");
+    }
+
+    for (const auto& t : targets)
+        if (t.outcome == 2)
+            ic.regions[t.region][t.boundary][static_cast<std::size_t>(t.idx)] =
+                Item{SCAB, -1, -1};
+
+    std::vector<ExternalTarget> removals;
+    for (const auto& t : targets)
+        if (t.outcome == 1)
+            removals.push_back(t);
+    std::sort(removals.begin(), removals.end(), [](const ExternalTarget& a, const ExternalTarget& b) {
+        if (a.region != b.region)
+            return a.region < b.region;
+        if (a.boundary != b.boundary)
+            return a.boundary < b.boundary;
+        return a.idx > b.idx;
+    });
+    for (const auto& t : removals) {
+        IWalk& w = ic.regions[t.region][t.boundary];
+        w.erase(w.begin() + t.idx);
+    }
+
+    return stripSrc(finishComponent(ic));
+}
+
+Position applyExternal(const Position& p, std::size_t comp, const External& m) {
+    if (comp >= p.components.size())
+        throw EncodingError("component index out of range");
+    return spliceChild(p, comp, applyExternal(p.components[comp], m));
+}
+
 std::vector<Position> interiorPseudoChildren(const Position& p) {
     std::set<std::string> seen;
     std::vector<Position> out;
@@ -946,6 +1006,19 @@ std::vector<std::pair<Position, EdgeTag>> childrenAllTagged(const Position& p) {
             tag.endpoint1 = 0;
             tag.endpoint2 = 0;
             tag.selfConnect = false;
+        } else if (mt.kind == MoveKind::External) {
+            const Component& c = d.components[mt.component];
+            auto tokenAt = [&](const ExternalTarget& t) -> Token {
+                return c.regions[t.region][t.boundary][static_cast<std::size_t>(t.idx)];
+            };
+            tag.externalCount = 1;
+            tag.externalToken1 = tokenAt(mt.external.first);
+            tag.externalOutcome1 = mt.external.first.outcome;
+            if (mt.external.second.outcome != 0) {
+                tag.externalCount = 2;
+                tag.externalToken2 = tokenAt(mt.external.second);
+                tag.externalOutcome2 = mt.external.second.outcome;
+            }
         } else {
             const Component& c = d.components[mt.component];
             const std::uint32_t b1 = mt.kind == MoveKind::Enclosure ? mt.boundary : mt.b1;
@@ -993,14 +1066,53 @@ std::vector<std::pair<Token, int>> specialPointMovetypes(const Position& parent,
                     // Each special-point symbol has at most one occurrence (the "one life"
                     // rule), so no dedup is needed here.
                     int movetype;
-                    if (tag.endpoint1 == t || tag.endpoint2 == t)
+                    if (tag.kind == MoveKind::External) {
+                        if (tag.externalCount >= 1 && tag.externalToken1 == t)
+                            movetype = tag.externalOutcome1;
+                        else if (tag.externalCount >= 2 && tag.externalToken2 == t)
+                            movetype = tag.externalOutcome2;
+                        else
+                            movetype = 5;  // present, not one of this move's targets
+                    } else if (tag.endpoint1 == t || tag.endpoint2 == t) {
                         movetype = 3;
-                    else if (!positionHasToken(child, t))
+                    } else if (!positionHasToken(child, t)) {
                         movetype = 4;
-                    else
+                    } else {
                         movetype = 5;
+                    }
                     out.emplace_back(t, movetype);
                 }
+    return out;
+}
+
+std::vector<External> externalMoves(const Component& c) {
+    std::vector<External> out;
+    if (c.dead)
+        return out;
+    struct Pt {
+        std::uint32_t region;
+        std::uint32_t boundary;
+        int idx;
+    };
+    std::vector<Pt> pts;
+    for (std::uint32_t r = 0; r < c.regions.size(); ++r)
+        for (std::uint32_t b = 0; b < c.regions[r].size(); ++b) {
+            const Bnd& w = c.regions[r][b];
+            for (int i = 0; i < static_cast<int>(w.size()); ++i)
+                if (isSpecialPoint(w[static_cast<std::size_t>(i)]))
+                    pts.push_back({r, b, i});
+        }
+    for (const auto& pt : pts)
+        for (int outcome = 1; outcome <= 2; ++outcome)
+            out.push_back(External{ExternalTarget{pt.region, pt.boundary, pt.idx, outcome},
+                                    ExternalTarget{}});
+    for (std::size_t x = 0; x < pts.size(); ++x)
+        for (std::size_t y = x + 1; y < pts.size(); ++y)
+            for (int o1 = 1; o1 <= 2; ++o1)
+                for (int o2 = 1; o2 <= 2; ++o2)
+                    out.push_back(External{
+                        ExternalTarget{pts[x].region, pts[x].boundary, pts[x].idx, o1},
+                        ExternalTarget{pts[y].region, pts[y].boundary, pts[y].idx, o2}});
     return out;
 }
 
@@ -1056,6 +1168,8 @@ std::vector<std::pair<Position, MoveTag>> childrenAllWithMoveTag(const Position&
         for (const auto& mv : joinMoves(c))
             add(applyJoin(d, k, mv),
                 MoveTag{MoveKind::Join, k, mv.region, 0, 0, mv.b1, mv.b2, mv.i, mv.j});
+        for (const auto& mv : externalMoves(c))
+            add(applyExternal(d, k, mv), MoveTag{MoveKind::External, k, 0, 0, 0, 0, 0, 0, 0, mv});
     }
     return out;
 }

@@ -86,7 +86,9 @@ constexpr Token MEMB       = 9;  // membrane; cross-region identity lives in Com
 // space; each gets its own fixed digit position in the base-6 movetype packing (Phase 3).
 constexpr Token SPECIAL_POINT_BASE = 50;
 constexpr int MAX_SPECIAL_POINTS = 10;
-constexpr Token ALPHA = SPECIAL_POINT_BASE;  // index 0
+constexpr Token ALPHA = SPECIAL_POINT_BASE;      // index 0
+constexpr Token BETA  = SPECIAL_POINT_BASE + 1;  // index 1 (test fixture for the 2-point
+                                                  // movetype-1/2 machinery; no UTF-8 'β' input yet)
 
 // A boundary: the walk around one side of a connected edge set. Joints are stored
 // positionally in Dyck form (JOINTSTART on first visit, JOINTEND on second).

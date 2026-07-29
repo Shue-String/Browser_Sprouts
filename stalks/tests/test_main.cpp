@@ -310,6 +310,109 @@ void testSpecialPointMovetype() {
     }
 }
 
+void testExternalMovetype() {
+    using namespace stalks;
+
+    // Raw enumeration count (before dedup): k special points -> k*2 single-point moves plus
+    // C(k,2)*4 paired moves. k=1: 2. k=2: 4+4=8.
+    {
+        const Component c1 = parsePosition("[0,a]").components[0];
+        checkEqInt(static_cast<long long>(externalMoves(c1).size()), 2, "external: k=1 raw count");
+        const Component c2 = parsePosition("[0,a,b]").components[0];
+        checkEqInt(static_cast<long long>(externalMoves(c2).size()), 8, "external: k=2 raw count");
+    }
+
+    // Single point (alpha), both outcomes, via the tagged/classified path.
+    {
+        const Position parent = parsePosition("[0,a]");
+        int seen1 = 0, seen2 = 0;
+        for (auto& [child, tag] : childrenAllTagged(parent)) {
+            if (tag.kind != MoveKind::External)
+                continue;
+            const auto mv = specialPointMovetypes(parent, tag, child);
+            checkEqInt(static_cast<long long>(mv.size()), 1, "external single: one special point");
+            if (mv.empty())
+                continue;
+            CHECK(mv[0].first == ALPHA);
+            const std::string enc = stalks::serialize(child);
+            CHECK(enc.find('a') == std::string::npos);  // alpha's char never survives
+            if (mv[0].second == 1) {
+                ++seen1;
+                CHECK(enc.find('2') == std::string::npos);  // vanished, no leftover scab
+            } else if (mv[0].second == 2) {
+                ++seen2;
+                CHECK(enc.find('2') != std::string::npos);  // became a scab
+            }
+        }
+        checkEqInt(seen1, 1, "external single: exactly one movetype-1 (vanish) child");
+        checkEqInt(seen2, 1, "external single: exactly one movetype-2 (scab) child");
+    }
+
+    // A special point NOT targeted by a given External move reports movetype 5 (the other
+    // symbol, present and untouched).
+    {
+        const Position parent = parsePosition("[0,a,b]");
+        bool found = false;
+        for (auto& [child, tag] : childrenAllTagged(parent)) {
+            if (tag.kind != MoveKind::External || tag.externalCount != 1)
+                continue;
+            found = true;
+            const auto mv = specialPointMovetypes(parent, tag, child);
+            checkEqInt(static_cast<long long>(mv.size()), 2, "external partial: both symbols tracked");
+            for (const auto& [tok, mt] : mv) {
+                if (tok == tag.externalToken1)
+                    checkEqInt(mt, tag.externalOutcome1, "external partial: targeted symbol's outcome");
+                else
+                    checkEqInt(mt, 5, "external partial: untargeted symbol is movetype 5");
+            }
+        }
+        CHECK(found);
+    }
+
+    // Two points, all 4 raw outcome combinations, applied directly. childrenAllTagged's dedup
+    // legitimately collapses 2 of the 4 into an existing join-produced child (a lone scab looks
+    // the same regardless of which symbol produced it), so this checks the structural
+    // transformation directly rather than fighting that dedup.
+    {
+        const Position parent = parsePosition("[0,a,b]");
+        const Component& c = parent.components[0];
+        int bothVanish = 0, bothScab = 0, mixed = 0;
+        for (const auto& mv : externalMoves(c)) {
+            if (mv.second.outcome == 0)
+                continue;  // single-target move, covered above
+            const Position child = applyExternal(parent, 0, mv);
+            const std::string enc = stalks::serialize(child);
+            CHECK(enc.find('a') == std::string::npos);
+            CHECK(enc.find('b') == std::string::npos);
+            const auto scabCount = std::count(enc.begin(), enc.end(), '2');
+            const bool o1scab = mv.first.outcome == 2, o2scab = mv.second.outcome == 2;
+            if (!o1scab && !o2scab) {
+                ++bothVanish;
+                checkEqInt(scabCount, 0, "external pair: both-vanish leaves no scab");
+            } else if (o1scab && o2scab) {
+                ++bothScab;
+                checkEqInt(scabCount, 2, "external pair: both-scab leaves two scabs");
+            } else {
+                ++mixed;
+                checkEqInt(scabCount, 1, "external pair: mixed leaves exactly one scab");
+            }
+        }
+        checkEqInt(bothVanish, 1, "external pair: exactly one both-vanish combination");
+        checkEqInt(bothScab, 1, "external pair: exactly one both-scab combination");
+        checkEqInt(mixed, 2, "external pair: two mixed combinations");
+    }
+
+    // Index-shift safety: both targets in the SAME boundary ("0ab": idx0=SPOT, idx1=ALPHA,
+    // idx2=BETA), both set to vanish -- descending-index removal must not let the first removal
+    // invalidate the second target's index. Confirmed empirically via query_position.exe first.
+    {
+        const Position parent = parsePosition("[0ab]");
+        const External mv{ExternalTarget{0, 0, 1, 1}, ExternalTarget{0, 0, 2, 1}};
+        const Position child = applyExternal(parent, 0, mv);
+        checkEq(stalks::serialize(child), "0", "external: same-boundary double-vanish leaves just the spot");
+    }
+}
+
 void testPlanarityRule() {
     using namespace stalks;
 
@@ -1664,6 +1767,7 @@ int main() {
         testParseSerialize();
         testSpecialPoint();
         testSpecialPointMovetype();
+        testExternalMovetype();
         testPlanarityRule();
         testDecompression();
         testLives();

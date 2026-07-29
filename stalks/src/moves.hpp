@@ -10,7 +10,7 @@ namespace stalks {
 // CompSrc / GEN_SRC (provenance carrier) live in position.hpp, next to Component.
 
 // How a child edge was reached (per the paper's movetype language, sans crit context).
-enum class MoveKind { Enclosure, Join, InteriorPseudo };
+enum class MoveKind { Enclosure, Join, InteriorPseudo, External };
 
 // An enclosure: both endpoints on one boundary of one region (i == j: self-connection,
 // legal for spots and appendages only). `mask` distributes the region's other
@@ -97,6 +97,38 @@ std::vector<Join> joinMoves(const Component& c);
 // counterpart of enclosureChildren; likewise a test-oriented single-class helper. See moves.cpp.
 std::vector<Position> joinChildren(const Position& p);
 
+// One resolved special point (ALPHA, ...) within an External move: its position, and its
+// outcome -- 1 (vanishes, movetype 1) or 2 (becomes a scab, movetype 2).
+struct ExternalTarget {
+    std::uint32_t region = 0;
+    std::uint32_t boundary = 0;
+    int idx = 0;
+    int outcome = 0;  // 1 or 2; 0 = unused (second slot only)
+};
+
+// A movetype-1/2 move ("outside the game"): 1 or 2 special points, each independently
+// resolved to its own outcome, applied together in one move. `second.outcome == 0` means
+// only `first` is targeted. Requires at least one target (that's what makes it this move
+// kind); never more than two (matches the base-6 movetype-packing cap).
+struct External {
+    ExternalTarget first;
+    ExternalTarget second;
+};
+
+// Apply one External move to a fully paired, decompressed component; result cleaned up and
+// normalized exactly as applyEnclosure/applyJoin. Throws EncodingError on invalid moves.
+std::vector<Component> applyExternal(const Component& c, const External& m);
+
+// Apply one External move to component `comp` of `p`; other components carried over.
+Position applyExternal(const Position& p, std::size_t comp, const External& m);
+
+// Enumerate the valid External moves of one component: every (single special point x outcome)
+// and every (unordered pair of distinct special points x outcome x outcome), per the locked
+// "up to 2 points, each independently resolved to 1 (vanish) or 2 (becomes a scab)" rule. Empty
+// if the component has no special point. Requires a decompressed component (special points
+// aren't pseudo-points, so this holds regardless, matching enclosureMoves/joinMoves's contract).
+std::vector<External> externalMoves(const Component& c);
+
 // Identity of a graph-build move, for callers (GameGraph, analysis JSON) that need to report
 // which move reached a child edge rather than just the child itself. `component` is the index
 // into the decompressed Position's components that the move was applied to. Enclosure fields
@@ -111,6 +143,7 @@ struct MoveTag {
     std::uint32_t b2 = 0;        // join only
     int i = 0;
     int j = 0;
+    External external;           // External only; unused (default-constructed) otherwise
 };
 
 // All children reachable by an interior move on a compressed pseudo-point (paper
@@ -121,10 +154,18 @@ std::vector<Position> interiorPseudoChildren(const Position& p);
 struct EdgeTag {
     MoveKind kind = MoveKind::Enclosure;
     // Endpoint token types before consumption (endpoint2 == MEMB-sentinel unused for
-    // interior moves; endpoint1 holds the pseudo token there).
+    // interior moves; endpoint1 holds the pseudo token there). Unused (0) for External.
     Token endpoint1 = 0;
     Token endpoint2 = 0;
     bool selfConnect = false;  // enclosure endpoint-to-self
+
+    // External only (externalCount is 0 for every other kind): up to 2 directly-resolved
+    // special points and their outcome (1 = vanish, 2 = becomes scab).
+    int externalCount = 0;
+    Token externalToken1 = 0;
+    int externalOutcome1 = 0;
+    Token externalToken2 = 0;
+    int externalOutcome2 = 0;
 };
 
 // Every distinct child of `p` by any move class (interior pseudo on the compressed form,
@@ -142,12 +183,14 @@ bool hasSpecialPoint(const Position& p);
 
 // Sparse (token, movetype) list, one entry per special-point token present in `parent` -- movetype
 // classification for the move that produced `child` (identified by `tag`, e.g. from
-// childrenAllTagged). Only movetypes 3/4/5 are ever returned (1/2, the "outside the game" bucket,
-// are Phase 2b -- blocked on a separate mechanic design, not detectable yet):
-//   3 -- tok is one of this move's own direct endpoints (tag.endpoint1/endpoint2 == tok).
-//   4 -- tok is not a direct endpoint, and cleanup() deleted it as a side-effect isolation (it is
-//        no longer present anywhere in `child`) -- treated exactly like an isolated scab.
-//   5 -- tok is not a direct endpoint, and is still present in `child`, untouched by this move.
+// childrenAllTagged):
+//   1/2 -- tag.kind == MoveKind::External and tok is one of tag.externalToken1/2 -- movetype is
+//          the matching tag.externalOutcome1/2 (1 = vanished, 2 = became a scab).
+//   3   -- tok is one of this move's own direct endpoints (tag.endpoint1/endpoint2 == tok).
+//   4   -- tok is not a direct endpoint, and cleanup() deleted it as a side-effect isolation (it
+//          is no longer present anywhere in `child`) -- treated exactly like an isolated scab.
+//   5   -- tok is present in `child` and not otherwise classified above (untouched by this move,
+//          including special points NOT among an External move's 1-2 targets).
 // Empty if hasSpecialPoint(parent) is false.
 std::vector<std::pair<Token, int>> specialPointMovetypes(const Position& parent, const EdgeTag& tag,
                                                           const Position& child);
