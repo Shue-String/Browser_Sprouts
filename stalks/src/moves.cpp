@@ -693,7 +693,8 @@ std::vector<Enclosure> enclosureMoves(const Component& c) {
 // solver never calls this -- graph.cpp expands moves directly and the analysis path goes through
 // childrenAll -- so it exists mainly to let the tests exercise the enclosure path on its own.
 std::vector<Position> enclosureChildren(const Position& p) {
-    std::set<std::string> seen;
+    const bool special = hasSpecialPoint(p);
+    std::set<std::pair<std::string, int>> seen;
     std::vector<Position> out;
     for (std::size_t k = 0; k < p.components.size(); ++k) {
         if (p.components[k].dead)
@@ -701,7 +702,13 @@ std::vector<Position> enclosureChildren(const Position& p) {
         for (const auto& mv : enclosureMoves(p.components[k])) {
             Position child = canonicalize(applyEnclosure(p, k, mv));
             child.validate();
-            if (seen.insert(serialize(child)).second)
+            int packed = 0;
+            if (special) {
+                const MoveTag mt{MoveKind::Enclosure, k, mv.region, mv.boundary, mv.mask,
+                                  0, 0, mv.i, mv.j};
+                packed = packMovetypes(specialPointMovetypes(p, edgeTagFromMoveTag(p, mt), child));
+            }
+            if (seen.insert({serialize(child), packed}).second)
                 out.push_back(std::move(child));
         }
     }
@@ -877,7 +884,8 @@ std::vector<Join> joinMoves(const Component& c) {
 // joinMoves + applyJoin; likewise off the solver's hot path and used chiefly by the tests to check
 // the join move class in isolation from childrenAll's union.
 std::vector<Position> joinChildren(const Position& p) {
-    std::set<std::string> seen;
+    const bool special = hasSpecialPoint(p);
+    std::set<std::pair<std::string, int>> seen;
     std::vector<Position> out;
     for (std::size_t k = 0; k < p.components.size(); ++k) {
         if (p.components[k].dead)
@@ -885,7 +893,12 @@ std::vector<Position> joinChildren(const Position& p) {
         for (const auto& mv : joinMoves(p.components[k])) {
             Position child = canonicalize(applyJoin(p, k, mv));
             child.validate();
-            if (seen.insert(serialize(child)).second)
+            int packed = 0;
+            if (special) {
+                const MoveTag mt{MoveKind::Join, k, mv.region, 0, 0, mv.b1, mv.b2, mv.i, mv.j};
+                packed = packMovetypes(specialPointMovetypes(p, edgeTagFromMoveTag(p, mt), child));
+            }
+            if (seen.insert({serialize(child), packed}).second)
                 out.push_back(std::move(child));
         }
     }
@@ -953,7 +966,8 @@ Position applyExternal(const Position& p, std::size_t comp, const External& m) {
 }
 
 std::vector<Position> interiorPseudoChildren(const Position& p) {
-    std::set<std::string> seen;
+    const bool special = hasSpecialPoint(p);
+    std::set<std::pair<std::string, int>> seen;
     std::vector<Position> out;
     for (std::size_t k = 0; k < p.components.size(); ++k) {
         if (p.components[k].dead)
@@ -981,7 +995,13 @@ std::vector<Position> interiorPseudoChildren(const Position& p) {
                     }
                     Position child = canonicalize(spliceChild(p, k, stripSrc(finishComponent(ic))));
                     child.validate();
-                    if (seen.insert(serialize(child)).second)
+                    int packed = 0;
+                    if (special) {
+                        const MoveTag mt{MoveKind::InteriorPseudo, k, r, b, 0, 0, 0, pos, 0};
+                        packed =
+                            packMovetypes(specialPointMovetypes(p, edgeTagFromMoveTag(p, mt), child));
+                    }
+                    if (seen.insert({serialize(child), packed}).second)
                         out.push_back(std::move(child));
                 }
             }
@@ -990,45 +1010,52 @@ std::vector<Position> interiorPseudoChildren(const Position& p) {
     return out;
 }
 
-// `EdgeTag` carries only the endpoint token types + selfConnect (no structural indices),
-// while `MoveTag` carries the full structural indices used to apply the move. The two
-// enumerate the exact same child set in the exact same order (interior pseudo, then
-// enclosure/join on the decompressed form), so `childrenAllTagged` is just `EdgeTag`s
-// re-derived from `childrenAllWithMoveTag`'s indices rather than re-walking the move space.
+// `EdgeTag` carries only the endpoint token types + selfConnect (no structural indices), while
+// `MoveTag` carries the full structural indices used to apply the move. `decompressed` must be
+// the same decompressed parent position `mt`'s indices were generated against (component/region/
+// boundary/i/j, or the External targets) -- this is the shared derivation used by both
+// `childrenAllTagged` (below) and, from Phase 3 on, `GameGraph::build()`'s own edge accumulation,
+// so the two never fall out of sync with each other.
+EdgeTag edgeTagFromMoveTag(const Position& decompressed, const MoveTag& mt) {
+    EdgeTag tag;
+    tag.kind = mt.kind;
+    if (mt.kind == MoveKind::InteriorPseudo) {
+        // Uniform tag: the pseudo token itself isn't surfaced here (matches prior behavior).
+        tag.endpoint1 = 0;
+        tag.endpoint2 = 0;
+        tag.selfConnect = false;
+    } else if (mt.kind == MoveKind::External) {
+        const Component& c = decompressed.components[mt.component];
+        auto tokenAt = [&](const ExternalTarget& t) -> Token {
+            return c.regions[t.region][t.boundary][static_cast<std::size_t>(t.idx)];
+        };
+        tag.externalCount = 1;
+        tag.externalToken1 = tokenAt(mt.external.first);
+        tag.externalOutcome1 = mt.external.first.outcome;
+        if (mt.external.second.outcome != 0) {
+            tag.externalCount = 2;
+            tag.externalToken2 = tokenAt(mt.external.second);
+            tag.externalOutcome2 = mt.external.second.outcome;
+        }
+    } else {
+        const Component& c = decompressed.components[mt.component];
+        const std::uint32_t b1 = mt.kind == MoveKind::Enclosure ? mt.boundary : mt.b1;
+        const std::uint32_t b2 = mt.kind == MoveKind::Enclosure ? mt.boundary : mt.b2;
+        tag.endpoint1 = c.regions[mt.region][b1][static_cast<std::size_t>(mt.i)];
+        tag.endpoint2 = c.regions[mt.region][b2][static_cast<std::size_t>(mt.j)];
+        tag.selfConnect = mt.kind == MoveKind::Enclosure && mt.i == mt.j;
+    }
+    return tag;
+}
+
+// `childrenAllTagged` is just `EdgeTag`s re-derived from `childrenAllWithMoveTag`'s indices
+// rather than re-walking the move space (the two enumerate the exact same child set in the exact
+// same order: interior pseudo, then enclosure/join on the decompressed form).
 std::vector<std::pair<Position, EdgeTag>> childrenAllTagged(const Position& p) {
     const Position d = p.decompressed();
     std::vector<std::pair<Position, EdgeTag>> out;
-    for (auto& [child, mt] : childrenAllWithMoveTag(p)) {
-        EdgeTag tag;
-        tag.kind = mt.kind;
-        if (mt.kind == MoveKind::InteriorPseudo) {
-            // Uniform tag: the pseudo token itself isn't surfaced here (matches prior behavior).
-            tag.endpoint1 = 0;
-            tag.endpoint2 = 0;
-            tag.selfConnect = false;
-        } else if (mt.kind == MoveKind::External) {
-            const Component& c = d.components[mt.component];
-            auto tokenAt = [&](const ExternalTarget& t) -> Token {
-                return c.regions[t.region][t.boundary][static_cast<std::size_t>(t.idx)];
-            };
-            tag.externalCount = 1;
-            tag.externalToken1 = tokenAt(mt.external.first);
-            tag.externalOutcome1 = mt.external.first.outcome;
-            if (mt.external.second.outcome != 0) {
-                tag.externalCount = 2;
-                tag.externalToken2 = tokenAt(mt.external.second);
-                tag.externalOutcome2 = mt.external.second.outcome;
-            }
-        } else {
-            const Component& c = d.components[mt.component];
-            const std::uint32_t b1 = mt.kind == MoveKind::Enclosure ? mt.boundary : mt.b1;
-            const std::uint32_t b2 = mt.kind == MoveKind::Enclosure ? mt.boundary : mt.b2;
-            tag.endpoint1 = c.regions[mt.region][b1][static_cast<std::size_t>(mt.i)];
-            tag.endpoint2 = c.regions[mt.region][b2][static_cast<std::size_t>(mt.j)];
-            tag.selfConnect = mt.kind == MoveKind::Enclosure && mt.i == mt.j;
-        }
-        out.emplace_back(std::move(child), tag);
-    }
+    for (auto& [child, mt] : childrenAllWithMoveTag(p))
+        out.emplace_back(std::move(child), edgeTagFromMoveTag(d, mt));
     return out;
 }
 
@@ -1085,6 +1112,18 @@ std::vector<std::pair<Token, int>> specialPointMovetypes(const Position& parent,
     return out;
 }
 
+int packMovetypes(const std::vector<std::pair<Token, int>>& sparse) {
+    int packed = 0;
+    int digit = 1;
+    for (int i = 0; i < MAX_SPECIAL_POINTS; ++i) {
+        for (const auto& [tok, mt] : sparse)
+            if (specialPointIndex(tok) == i)
+                packed += mt * digit;
+        digit *= 6;
+    }
+    return packed;
+}
+
 std::vector<External> externalMoves(const Component& c) {
     std::vector<External> out;
     if (c.dead)
@@ -1117,12 +1156,21 @@ std::vector<External> externalMoves(const Component& c) {
 }
 
 std::vector<std::pair<Position, MoveTag>> childrenAllWithMoveTag(const Position& p) {
-    std::set<std::string> seen;
+    // Computed up front (rather than where the enclosure/join/external loop used to declare it)
+    // so `add` can use it for every move kind, including InteriorPseudo -- edgeTagFromMoveTag's
+    // InteriorPseudo branch never dereferences its `decompressed` argument, so this is safe to
+    // share; see edgeTagFromMoveTag's doc comment.
+    const Position d = p.decompressed();
+    const bool special = hasSpecialPoint(p);
+    std::set<std::pair<std::string, int>> seen;
     std::vector<std::pair<Position, MoveTag>> out;
     auto add = [&](Position&& raw, const MoveTag& tag) {
         Position child = canonicalize(raw);
         child.validate();
-        if (seen.insert(serialize(child)).second)
+        int packed = 0;
+        if (special)
+            packed = packMovetypes(specialPointMovetypes(p, edgeTagFromMoveTag(d, tag), child));
+        if (seen.insert({serialize(child), packed}).second)
             out.emplace_back(std::move(child), tag);
     };
 
@@ -1157,7 +1205,6 @@ std::vector<std::pair<Position, MoveTag>> childrenAllWithMoveTag(const Position&
         }
     }
 
-    const Position d = p.decompressed();
     for (std::size_t k = 0; k < d.components.size(); ++k) {
         if (d.components[k].dead)
             continue;

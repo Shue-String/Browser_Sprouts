@@ -172,6 +172,12 @@ struct EdgeTag {
 // then enclosure and join on the decompressed form), deduped by serialization.
 std::vector<Position> childrenAll(const Position& p);
 
+// Derive an EdgeTag from a MoveTag: reads back the literal endpoint/target token(s) the move
+// touched from `decompressed`, which must be the same decompressed parent position `mt`'s
+// indices were generated against. Shared by childrenAllTagged and GameGraph::build() so both
+// classify moves identically.
+EdgeTag edgeTagFromMoveTag(const Position& decompressed, const MoveTag& mt);
+
 // As childrenAll, but each child is paired with the tag of the first move that reached
 // it (dedup keeps the first occurrence, move-class order: interior, enclosure, join).
 std::vector<std::pair<Position, EdgeTag>> childrenAllTagged(const Position& p);
@@ -194,6 +200,16 @@ bool hasSpecialPoint(const Position& p);
 // Empty if hasSpecialPoint(parent) is false.
 std::vector<std::pair<Token, int>> specialPointMovetypes(const Position& parent, const EdgeTag& tag,
                                                           const Position& child);
+
+// Packs a sparse (token, movetype) list (as returned by specialPointMovetypes) into one
+// canonical, comparable/hashable scalar for dedup keys and other places a single value is
+// needed. Base-6 digit position specialPointIndex(tok) holds tok's movetype (fixed by symbol
+// identity -- alpha is always 6^0, beta always 6^1, ... -- regardless of which subset of symbols
+// is present in a given position; see the locked semantics doc). A symbol absent from the sparse
+// list contributes digit 0, which never collides with a real movetype (1-5; specialPointMovetypes
+// never emits 0 for a symbol it lists), so this is well-defined for partial lists. Returns 0 for
+// an empty list -- the movetype-0 fast path.
+int packMovetypes(const std::vector<std::pair<Token, int>>& sparse);
 
 // As childrenAllTagged, but paired with the full MoveTag (region/boundary/b1/b2/i/j/mask)
 // instead of the coarser EdgeTag, so a caller can reconstruct which move to draw/play, not

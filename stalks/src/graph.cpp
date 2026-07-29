@@ -136,35 +136,60 @@ Node* GameGraph::build(const Position& canonical) {
     struct Candidate {
         ChildLink link;
         MoveTag tag;
+        int packedMovetype = 0;
     };
     std::vector<Candidate> kids;
     const Position d = canonical.decompressed();
+    const bool special = hasSpecialPoint(d);
+    // Classify a candidate move's special-point movetype (0 -- and skipped entirely -- when this
+    // position has no special point, the movetype-0 fast path). `raw` is the move's un-canonicalized
+    // result: fine to classify against, since canonicalization never changes which special-point
+    // tokens are present (see the locked semantics: no decompression/compression code touches them).
+    auto classify = [&](const MoveTag& tag, const Position& raw) -> int {
+        if (!special)
+            return 0;
+        return packMovetypes(specialPointMovetypes(d, edgeTagFromMoveTag(d, tag), raw));
+    };
     for (std::size_t k = 0; k < d.components.size(); ++k) {
         if (d.components[k].dead)
             continue;
         for (const auto& mv : enclosureMoves(d.components[k])) {
             MoveTag tag{MoveKind::Enclosure, k, mv.region, mv.boundary, mv.mask, 0, 0, mv.i, mv.j};
-            kids.push_back({resolveChild(applyEnclosure(d, k, mv)), tag});
+            Position raw = applyEnclosure(d, k, mv);
+            const int packed = classify(tag, raw);
+            kids.push_back({resolveChild(raw), tag, packed});
         }
         for (const auto& mv : joinMoves(d.components[k])) {
             MoveTag tag{MoveKind::Join, k, mv.region, 0, 0, mv.b1, mv.b2, mv.i, mv.j};
-            kids.push_back({resolveChild(applyJoin(d, k, mv)), tag});
+            Position raw = applyJoin(d, k, mv);
+            const int packed = classify(tag, raw);
+            kids.push_back({resolveChild(raw), tag, packed});
         }
         for (const auto& mv : externalMoves(d.components[k])) {
             MoveTag tag{MoveKind::External, k, 0, 0, 0, 0, 0, 0, 0, mv};
-            kids.push_back({resolveChild(applyExternal(d, k, mv)), tag});
+            Position raw = applyExternal(d, k, mv);
+            const int packed = classify(tag, raw);
+            kids.push_back({resolveChild(raw), tag, packed});
         }
     }
-    // Distinct edges only (many moves can land on the same child + offset). In Quick mode the
-    // same node can be reached with two different offsets -- those are genuinely distinct edges
-    // (distinct game values), so we dedup on the (node, offset) pair, not the node alone. Sort is
-    // stable so the first move (candidate order above) reaching each edge keeps its tag.
+    // Distinct edges only (many moves can land on the same child + offset + movetype). In Quick
+    // mode the same node can be reached with two different offsets -- those are genuinely distinct
+    // edges (distinct game values) -- and two moves reaching the same (node, offset) with different
+    // packed movetype are likewise distinct edges (same child position, different special-point
+    // classification; see moves.hpp::specialPointMovetypes), so we dedup on the full (node, offset,
+    // packedMovetype) triple, not the node alone. Sort is stable so the first move (candidate order
+    // above) reaching each edge keeps its tag.
     std::stable_sort(kids.begin(), kids.end(), [](const Candidate& a, const Candidate& b) {
-        return a.link.node != b.link.node ? a.link.node < b.link.node : a.link.offset < b.link.offset;
+        if (a.link.node != b.link.node)
+            return a.link.node < b.link.node;
+        if (a.link.offset != b.link.offset)
+            return a.link.offset < b.link.offset;
+        return a.packedMovetype < b.packedMovetype;
     });
     kids.erase(std::unique(kids.begin(), kids.end(),
                            [](const Candidate& a, const Candidate& b) {
-                               return a.link.node == b.link.node && a.link.offset == b.link.offset;
+                               return a.link.node == b.link.node && a.link.offset == b.link.offset &&
+                                      a.packedMovetype == b.packedMovetype;
                            }),
                kids.end());
 
@@ -176,6 +201,10 @@ Node* GameGraph::build(const Position& canonical) {
         return n;
     }
 
+    // mex/minMoves/maxMoves are game-value quantities and depend only on (node, offset) -- movetype
+    // never affects them, so duplicate (node, offset) pairs (now possible when their movetype
+    // differs) contribute redundantly here but harmlessly: `vals` is a set, and repeating the same
+    // node's minMoves/maxMoves into std::min/std::max is a no-op.
     std::set<int> vals;
     int mn = kids.front().link.node->minMoves;
     int mx = kids.front().link.node->maxMoves;
@@ -186,6 +215,8 @@ Node* GameGraph::build(const Position& canonical) {
         n->childMoves.push_back(c.tag);
         if (storeOffsets)
             n->childOffsets.push_back(ch.offset);
+        if (special)
+            n->childMoveTypes.push_back(c.packedMovetype);
         ch.node->parents.push_back(n);
         vals.insert(ch.node->nimber ^ ch.offset);  // offset is 0 in Exact mode
         mn = std::min(mn, ch.node->minMoves);

@@ -54,10 +54,24 @@ struct Node {
     // where every move maps to its child's true structural value. See GameGraph::Mode.
     std::vector<int> childOffsets;
 
+    // Per-child-edge packed movetype (moves.hpp::packMovetypes), parallel to `children`. Only
+    // populated when this node's position has a special point (ALPHA, ...) -- the movetype-0
+    // fast path, independent of Mode. Two edges can now share the same (node, offset) here: a
+    // move touching a special point and an unrelated move that happens to land on the same child
+    // are DISTINCT edges when their movetype differs (see moves.hpp::specialPointMovetypes), even
+    // though they contribute the same value to this node's mex (mex/minMoves/maxMoves still dedup
+    // by (node, offset) alone -- movetype does not affect game value, only which edges are kept).
+    std::vector<int> childMoveTypes;
+
     bool isSum() const { return !subpositions.empty(); }
 
     // Offset on the edge to children[i] (0 when offsets are not stored, i.e. exact mode).
     int childOffset(std::size_t i) const { return childOffsets.empty() ? 0 : childOffsets[i]; }
+
+    // Packed movetype on the edge to children[i] (0 when not stored, i.e. no special point here).
+    int childMoveType(std::size_t i) const {
+        return childMoveTypes.empty() ? 0 : childMoveTypes[i];
+    }
 };
 
 // The game graph reachable from an n-spot start, built in ONE pass: as the tree is grown,

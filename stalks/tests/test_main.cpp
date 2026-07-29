@@ -310,6 +310,85 @@ void testSpecialPointMovetype() {
     }
 }
 
+void testMovetypeDedupWidening() {
+    using namespace stalks;
+
+    // Found empirically via a scratch search over childrenAllWithMoveTagRaw (Phase 3): two
+    // structurally different moves from this parent both land on canonical child "12", but
+    // classify alpha with different movetypes (3 vs 4). Before Phase 3's dedup widening, only
+    // the first-generated move would have survived childrenAllWithMoveTag's
+    // serialize(child)-only dedup, silently dropping the other as a duplicate. After widening,
+    // both must survive as separate edges (same encoding, different movetype -> different
+    // children, per the locked semantics).
+    const Position parent = parsePosition("aA|A,12");
+    const Position d = parent.decompressed();
+    std::set<int> movetypesForChild12;
+    int occurrences = 0;
+    for (auto& [child, mt] : childrenAllWithMoveTag(parent)) {
+        if (serialize(child) != "12")
+            continue;
+        ++occurrences;
+        const EdgeTag tag = edgeTagFromMoveTag(d, mt);
+        const auto mv = specialPointMovetypes(parent, tag, child);
+        checkEqInt(static_cast<long long>(mv.size()), 1, "dedup widening: alpha tracked");
+        if (!mv.empty()) {
+            CHECK(mv[0].first == ALPHA);
+            movetypesForChild12.insert(mv[0].second);
+        }
+    }
+    checkEqInt(occurrences, 2, "dedup widening: both edges to child \"12\" survive");
+    CHECK(movetypesForChild12.count(3) == 1);
+    CHECK(movetypesForChild12.count(4) == 1);
+}
+
+void testGraphMovetypeEdges() {
+    using namespace stalks;
+
+    // Same witness parent as testMovetypeDedupWidening, now through the real solver
+    // (GameGraph::build(), not the moves.cpp test helpers) -- confirms the widened edge dedup in
+    // graph.cpp actually produces two separate (same Node*, different childMoveType) edges rather
+    // than collapsing them, and that a real Node* can legitimately repeat in `children`.
+    {
+        GameGraph g;
+        Node* n = g.ensure(parsePosition("aA|A,12"));
+        bool foundDuplicateEdge = false;
+        for (std::size_t i = 0; i < n->children.size() && !foundDuplicateEdge; ++i)
+            for (std::size_t j = i + 1; j < n->children.size(); ++j)
+                if (n->children[i] == n->children[j] && n->childMoveType(i) != n->childMoveType(j)) {
+                    foundDuplicateEdge = true;
+                    break;
+                }
+        CHECK(foundDuplicateEdge);
+        // mex ignores movetype (dedups by (node, offset) alone -- see graph.cpp build()), so the
+        // duplicate edge doesn't break nimber computation.
+        CHECK(n->nimber >= 0);
+    }
+
+    // Movetype-0 fast path: an ordinary special-point-free graph stores no childMoveTypes at all
+    // (not just all-zero -- genuinely empty, so the common case pays nothing extra).
+    {
+        GameGraph g(3);
+        for (const auto& node : g.nodes())
+            CHECK(node.childMoveTypes.empty());
+    }
+}
+
+void testPackMovetypes() {
+    using namespace stalks;
+
+    checkEqInt(packMovetypes({}), 0, "packMovetypes: empty list is the movetype-0 fast path");
+    checkEqInt(packMovetypes({{ALPHA, 3}}), 3, "packMovetypes: single alpha digit");
+    checkEqInt(packMovetypes({{BETA, 5}}), 5 * 6, "packMovetypes: single beta digit at 6^1");
+
+    // Worked example from the locked-semantics doc: 1 on alpha + 2 on gamma (index 2, no named
+    // constant yet) packs to 1*6^0 + 2*6^2 = 73, skipping the absent beta/6^1 slot.
+    const Token gamma = SPECIAL_POINT_BASE + 2;
+    checkEqInt(packMovetypes({{ALPHA, 1}, {gamma, 2}}), 73, "packMovetypes: worked example");
+
+    // Order of the sparse list must not matter -- same packed value either way.
+    checkEqInt(packMovetypes({{gamma, 2}, {ALPHA, 1}}), 73, "packMovetypes: order-independent");
+}
+
 void testExternalMovetype() {
     using namespace stalks;
 
@@ -1767,6 +1846,9 @@ int main() {
         testParseSerialize();
         testSpecialPoint();
         testSpecialPointMovetype();
+        testMovetypeDedupWidening();
+        testGraphMovetypeEdges();
+        testPackMovetypes();
         testExternalMovetype();
         testPlanarityRule();
         testDecompression();
