@@ -394,13 +394,24 @@ const std::map<std::string, int>& doubleCritRegistry() {
 // boundary [SCAB, slot0, (slot1)]. A special-point slot keeps its own token in place -- it has
 // no separate host, since it already stands for "connects to somewhere outside this position".
 // A real-membrane slot becomes a fresh membrane occurrence, with its ORIGINAL pairing re-pointed
-// onto its new occurrence here (0 for slots[0], 1 for slots[1]) so its host elsewhere is
-// preserved -- exactly the old applyDoubleCritSwap's repoint step, generalized from exactly 2
-// slots to 1 or 2. The region keeps its own index; nothing is ever deleted or reindexed, so
-// there is no separate host-region bookkeeping to repair (unlike the old, now-removed, k=1-only
-// applySwap, which wrote a bare DISA directly into a separate host and deleted the leaf: that
-// direct-compressed result and this decompressed-then-auto-recompressed one are the same final
-// canonical position whenever the sole crit is real, see the registry's doc comment above).
+// onto its new occurrence here so its host elsewhere is preserved -- exactly the old
+// applyDoubleCritSwap's repoint step, generalized from exactly 2 slots to 1 or 2. The region
+// keeps its own index; nothing is ever deleted or reindexed, so there is no separate host-region
+// bookkeeping to repair (unlike the old, now-removed, k=1-only applySwap, which wrote a bare DISA
+// directly into a separate host and deleted the leaf: that direct-compressed result and this
+// decompressed-then-auto-recompressed one are the same final canonical position whenever the sole
+// crit is real, see the registry's doc comment above).
+//
+// The new occurrence index passed to `repoint` must be the slot's rank among ONLY the
+// non-special (real-membrane) slots -- i.e. its occurrence position within `newBnd` counting real
+// MEMB tokens alone -- NOT its raw index within `slots`, since `slots` can mix special-point and
+// real-membrane entries and Component::pairIndex()'s occurrence numbering (see position.cpp) only
+// ever counts actual MEMB tokens in a boundary, never special points. Using the raw slots-index
+// happened to be correct whenever the real membrane came first (occurrence 0 either way) or when
+// there was only ever one real membrane at slots[0], which is why this went unnoticed for plain
+// double-membrane (S3/S4) swaps -- it broke the moment a special-point slot preceded a
+// real-membrane slot (e.g. region "a,2A": alpha then a membrane), producing an out-of-range
+// membrane-occurrence reference that crashed downstream in serialize()/pairIndex() consumers.
 Component applyCritSwap(const Component& c, std::uint32_t R, const std::vector<CritSlot>& slots) {
     Bnd newBnd;
     newBnd.push_back(SCAB);
@@ -423,9 +434,14 @@ Component applyCritSwap(const Component& c, std::uint32_t R, const std::vector<C
     out.pairings.reserve(c.pairings.size());
     for (int pi = 0; pi < static_cast<int>(c.pairings.size()); ++pi) {
         int matchedSlot = -1;
-        for (std::size_t i = 0; i < slots.size(); ++i)
-            if (!slots[i].special && slots[i].pairing == pi)
-                matchedSlot = static_cast<int>(i);
+        int membOcc = 0;  // rank among non-special (real-membrane) slots only
+        for (std::size_t i = 0; i < slots.size(); ++i) {
+            if (slots[i].special)
+                continue;
+            if (slots[i].pairing == pi)
+                matchedSlot = membOcc;
+            ++membOcc;
+        }
         if (matchedSlot >= 0)
             out.pairings.push_back(repoint(c.pairings[static_cast<std::size_t>(pi)],
                                             static_cast<std::uint32_t>(matchedSlot)));

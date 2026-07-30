@@ -1,7 +1,9 @@
 // Ad-hoc debug tool: analyze a single position encoding and dump its children.
 // Usage: query_position "<encoding>" [--decompress]
 #include "analyze.hpp"
+#include "collections.hpp"
 #include "encoding.hpp"
+#include "graph.hpp"
 #include "position.hpp"
 #include <cstdio>
 #include <iostream>
@@ -33,6 +35,24 @@ int main(int argc, char** argv) {
     }
     if (argc >= 3 && std::string(argv[2]) == "--all-moves") {
         std::cout << stalks::allMovesTrackedJson(enc) << "\n";
+        return 0;
+    }
+    if (argc >= 3 && std::string(argv[2]) == "--canon-only") {
+        std::cout << stalks::canonOnly(enc) << "\n";
+        return 0;
+    }
+    if (argc >= 3 && std::string(argv[2]) == "--quick-canon-only") {
+        stalks::Position p = stalks::canonicalize(stalks::parsePosition(enc));
+        const stalks::QuickCanonResult qc = stalks::quickCanon(p);
+        std::cout << stalks::serialize(qc.rep) << " offset=" << qc.offset << "\n";
+        return 0;
+    }
+    if (argc >= 3 && std::string(argv[2]) == "--graph-ensure-only") {
+        stalks::Position p = stalks::canonicalize(stalks::parsePosition(enc));
+        stalks::GameGraph g;
+        const stalks::Node* root = g.ensure(p);
+        std::cout << "nimber=" << root->nimber << " minMoves=" << root->minMoves
+                   << " maxMoves=" << root->maxMoves << "\n";
         return 0;
     }
     std::string result = stalks::analyzeFullJson(enc);

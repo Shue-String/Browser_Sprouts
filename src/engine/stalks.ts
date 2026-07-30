@@ -48,6 +48,9 @@ export interface ChildInfo {
   subposCount: number;
   minMoves: number;
   maxMoves: number;
+  /** The child's own lives count (Position::lives2()/2 in the engine) -- a structural property,
+   * cheap regardless of whether the child was valued. */
+  lives: number;
   move?: MoveInfo;
   quickCanon?: QuickCanon;
 }
@@ -86,6 +89,10 @@ export interface AnalysisOk {
   minMoves: number;
   maxMoves: number;
   subposCount: number;
+  /** This position's own lives count (Position::lives2()/2 in the engine). Optional since
+   * reconstructed AnalysisOk values (e.g. positionBrowser.ts's cache-backed path) don't always have
+   * it on hand; real engine results always populate it. */
+  lives?: number;
   nimberBreakdown: number[];
   children: ChildInfo[];
   quickCanon: QuickCanon;

@@ -79,7 +79,7 @@ int movetypeFor(const Position& parent, const MoveTag& tag, const Position& chil
         specialPointMovetypes(parent, edgeTagFromMoveTag(parent.decompressed(), tag), child));
 }
 
-// {"enc":..,"nimber":..,"subposCount":..,"minMoves":..,"maxMoves":..,
+// {"enc":..,"nimber":..,"subposCount":..,"minMoves":..,"maxMoves":..,"lives":..,
 //  "move":{...,"movetype":..}[,"quickCanon":..]}
 // `move` identifies which move on the parent reaches this child: kind, the component it was
 // applied to, the region, and either boundary/i/j/mask (enclosure) or b1/b2/i/j (join), plus the
@@ -87,7 +87,10 @@ int movetypeFor(const Position& parent, const MoveTag& tag, const Position& chil
 // kUnknownVal (-1 sentinel fields) when the child hasn't been valued -- too expensive to value
 // every child of an oversized position; the frontend renders -1 as "?". `quick`, when non-null, is
 // the child's own quick-canon representative (only populated where a caller needs it per-child).
-void writeChild(std::string& out, const std::string& enc, const Val& v, int nsub,
+// `lives` is the child's own lives count (Position::lives2()/2) -- cheap regardless of whether the
+// child was valued, since it's a structural property, not a game-tree one; used by the Collect
+// feature's genome recursion to cap how deep it expands T witnesses (see collectAlpha.ts).
+void writeChild(std::string& out, const std::string& enc, const Val& v, int nsub, int lives,
                 const MoveTag* tag = nullptr, const QuickCanonResult* quick = nullptr,
                 int movetype = 0) {
     out += "{\"enc\":";
@@ -100,6 +103,8 @@ void writeChild(std::string& out, const std::string& enc, const Val& v, int nsub
     jsonInt(out, v.minMoves);
     out += ",\"maxMoves\":";
     jsonInt(out, v.maxMoves);
+    out += ",\"lives\":";
+    jsonInt(out, lives);
     if (tag) {
         out += ",\"move\":{\"kind\":";
         jsonInt(out, static_cast<int>(tag->kind));
@@ -253,7 +258,7 @@ std::optional<std::string> unvaluedChildren(const Position& p) {
         if (!first)
             out += ',';
         first = false;
-        writeChild(out, serialize(kid), kUnknownVal, subposCount(kid), &tag, &qc,
+        writeChild(out, serialize(kid), kUnknownVal, subposCount(kid), kid.lives2() / 2, &tag, &qc,
                    movetypeFor(p, tag, kid));
     }
     out += "]";
@@ -277,6 +282,8 @@ std::string fullAnalysis(const Position& p, const std::string& canon) {
     jsonInt(out, root->maxMoves);
     out += ",\"subposCount\":";
     jsonInt(out, subposCount(root));
+    out += ",\"lives\":";
+    jsonInt(out, p.lives2() / 2);
 
     // Per-subposition nimber breakdown, in canon (component) order.
     out += ",\"nimberBreakdown\":[";
@@ -300,7 +307,7 @@ std::string fullAnalysis(const Position& p, const std::string& canon) {
                 out += ',';
             first = false;
             const Val v = valueOf(g, kid);
-            writeChild(out, serialize(kid), v, subposCount(kid), &tag, nullptr,
+            writeChild(out, serialize(kid), v, subposCount(kid), kid.lives2() / 2, &tag, nullptr,
                        movetypeFor(p, tag, kid));
         }
     }
@@ -455,7 +462,7 @@ std::string childrenTrackedJson(const std::string& enc) {
                 out += ',';
             first = false;
             const Val v = valueOf(g, kid);
-            writeChild(out, serialize(kid), v, subposCount(kid), &tag, nullptr,
+            writeChild(out, serialize(kid), v, subposCount(kid), kid.lives2() / 2, &tag, nullptr,
                        movetypeFor(p, tag, kid));
         }
         out += "]}";
@@ -502,7 +509,7 @@ std::string regionMovesTrackedJson(const std::string& enc, int component, int re
             if (!first)
                 out += ',';
             first = false;
-            writeChild(out, serialize(child), v, subposCount(child), &tag, nullptr,
+            writeChild(out, serialize(child), v, subposCount(child), child.lives2() / 2, &tag, nullptr,
                        movetypeFor(d, tag, child));
         };
 
@@ -575,7 +582,7 @@ std::string allMovesTrackedJson(const std::string& enc) {
             if (!first)
                 out += ',';
             first = false;
-            writeChild(out, serialize(child), v, subposCount(child), &tag, nullptr,
+            writeChild(out, serialize(child), v, subposCount(child), child.lives2() / 2, &tag, nullptr,
                        movetypeFor(d, tag, child));
         };
 

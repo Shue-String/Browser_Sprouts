@@ -262,6 +262,29 @@ struct GeneticCode {
 // the L one, the T move (and any T'-shape it has) vanishes with nothing left to classify. Since the
 // output here is a std::set<int> of nimbers, iterating every raw move (rather than one per distinct
 // canonical child) costs a few redundant insertions, not incorrect results.
+// True iff `tag` is an L move for `dp` -- a move touching dp's own live token directly. Shared by
+// computeTPrime and computeAllBypass, which both need to exclude L moves from their T-move scan.
+bool isLMoveFor(const DisaRef& dp, const MoveTag& tag) {
+    return tag.kind == MoveKind::Enclosure
+        ? (tag.component == dp.component && tag.region == dp.region && tag.boundary == dp.boundary &&
+           (tag.i == static_cast<int>(dp.token) || tag.j == static_cast<int>(dp.token)))
+        : (tag.component == dp.component && tag.region == dp.region &&
+           ((tag.b1 == dp.boundary && tag.i == static_cast<int>(dp.token)) ||
+            (tag.b2 == dp.boundary && tag.j == static_cast<int>(dp.token))));
+}
+
+// R's canonical text (the InteriorPseudo rewrite's result), or nullopt if disaPointRMove doesn't
+// apply. Shared by fullGenomeAt and computeAllBypass, both of which need it to exclude R's
+// coincidental re-appearance from a T-move scan (see computeAllBypass's doc comment, point 2).
+std::optional<std::string> computeRCanonText(const Position& pos, const DisaRef& dp) {
+    try {
+        return serialize(disaPointRMove(pos, dp.component, static_cast<std::uint32_t>(dp.region),
+                                         static_cast<std::uint32_t>(dp.boundary), dp.token));
+    } catch (const EncodingError&) {
+        return std::nullopt;
+    }
+}
+
 std::set<int> computeTPrime(const Position& pos, const ParsedPosition& parsed, const DisaRef& dp,
                              const std::optional<std::string>& rCanonText, const Lookup& lookup) {
     std::set<int> out;
@@ -269,23 +292,13 @@ std::set<int> computeTPrime(const Position& pos, const ParsedPosition& parsed, c
     for (const auto& comp : parsed) {
         if (isTrivialDeadPair(comp)) ++rootTrivial;
     }
-    bool rExcluded = false;
 
     for (const auto& [kid, tag] : childrenAllWithMoveTagRaw(pos)) {
         if (tag.kind == MoveKind::InteriorPseudo) continue;
-        const bool isL = tag.kind == MoveKind::Enclosure
-            ? (tag.component == dp.component && tag.region == dp.region && tag.boundary == dp.boundary &&
-               (tag.i == static_cast<int>(dp.token) || tag.j == static_cast<int>(dp.token)))
-            : (tag.component == dp.component && tag.region == dp.region &&
-               ((tag.b1 == dp.boundary && tag.i == static_cast<int>(dp.token)) ||
-                (tag.b2 == dp.boundary && tag.j == static_cast<int>(dp.token))));
-        if (isL) continue;
+        if (isLMoveFor(dp, tag)) continue;
 
         const std::string childText = serialize(kid);
-        if (!rExcluded && rCanonText.has_value() && childText == *rCanonText) {
-            rExcluded = true;
-            continue;
-        }
+        if (rCanonText.has_value() && childText == *rCanonText) continue;
 
         ParsedPosition childParsed = parseText(childText);
         std::vector<std::size_t> trivialIdx;
@@ -353,12 +366,7 @@ std::optional<GeneticCode> fullGenomeAt(const Position& pos, const DisaRef& dp, 
     const std::optional<int> r = computeRGroundTruth(pos, dp, lookup);
     if (!r.has_value()) return std::nullopt;
     code.R = *r;
-    std::optional<std::string> rCanonText;
-    try {
-        rCanonText = serialize(disaPointRMove(pos, dp.component, static_cast<std::uint32_t>(dp.region),
-                                               static_cast<std::uint32_t>(dp.boundary), dp.token));
-    } catch (const EncodingError&) {}
-    code.Tprime = computeTPrime(pos, parsed, dp, rCanonText, lookup);
+    code.Tprime = computeTPrime(pos, parsed, dp, computeRCanonText(pos, dp), lookup);
     return code;
 }
 
@@ -452,8 +460,11 @@ bool tMoveBypasses(const TrackedCanon& step1, const Lookup& lookup, const Geneti
 //   2. The R move's coincidental re-appearance -- R is really an InteriorPseudo rewrite on a
 //      recompressed DISA token (see disaPointRMove) and structurally can't be an ordinary
 //      enclosure/join child, EXCEPT the rare coincidence where some unrelated move's result lands
-//      on the exact same canonical text; classifyChildrenByDisaPoint excludes only the FIRST such
-//      coincidental match (by canonical-text equality against R's own result), same as here.
+//      on the exact same canonical text; classifyChildrenByDisaPoint excludes EVERY such
+//      coincidental match (by canonical-text equality against R's own result), same as here --
+//      excluding only the first (as an earlier version of both did) could leave a second,
+//      genuinely-distinct T move misclassified as a duplicate of R whenever a structural
+//      automorphism made two different moves land on R's canonical text.
 //   3. T'-shaped children -- the count of trivial [22] dead-pair components goes up relative to the
 //      root (the same structural signal computeTPrime already uses; see its doc comment for why
 //      this is exact for the common single-DisaPoint case) -- these are the T' row's own children,
@@ -468,14 +479,7 @@ bool tMoveBypasses(const TrackedCanon& step1, const Lookup& lookup, const Geneti
 bool computeAllBypass(const Position& pos, const DisaRef& dp, const GeneticCode& rootCode,
                        const Lookup& lookup) {
     const auto psrc = buildTrackedSrc(pos, dp);
-
-    std::optional<std::string> rCanonText;
-    try {
-        rCanonText = serialize(disaPointRMove(pos, dp.component, static_cast<std::uint32_t>(dp.region),
-                                               static_cast<std::uint32_t>(dp.boundary), dp.token));
-    } catch (const EncodingError&) {
-    }
-    bool rExcluded = false;
+    const std::optional<std::string> rCanonText = computeRCanonText(pos, dp);
 
     int rootTrivial = 0;
     for (const auto& comp : parseText(serialize(pos)))
@@ -486,19 +490,10 @@ bool computeAllBypass(const Position& pos, const DisaRef& dp, const GeneticCode&
 
     for (const auto& [child, tag] : childrenAllWithMoveTagRaw(pos)) {
         if (tag.kind == MoveKind::InteriorPseudo) continue;  // never occurs on fully-decompressed input
-        const bool isL = tag.kind == MoveKind::Enclosure
-            ? (tag.component == dp.component && tag.region == dp.region && tag.boundary == dp.boundary &&
-               (tag.i == static_cast<int>(dp.token) || tag.j == static_cast<int>(dp.token)))
-            : (tag.component == dp.component && tag.region == dp.region &&
-               ((tag.b1 == dp.boundary && tag.i == static_cast<int>(dp.token)) ||
-                (tag.b2 == dp.boundary && tag.j == static_cast<int>(dp.token))));
-        if (isL) continue;
+        if (isLMoveFor(dp, tag)) continue;
 
         const std::string childText = serialize(child);
-        if (!rExcluded && rCanonText.has_value() && childText == *rCanonText) {
-            rExcluded = true;
-            continue;
-        }
+        if (rCanonText.has_value() && childText == *rCanonText) continue;
 
         int childTrivial = 0;
         for (const auto& comp : parseText(childText))
@@ -640,15 +635,7 @@ int main(int argc, char** argv) {
             std::optional<int> rNimber = computeRGroundTruth(compressedPos, disaPointsCompressed[i], lookup);
             if (!rNimber.has_value() || !hasD) continue;
             code.R = *rNimber;
-            std::optional<std::string> rCanonText;
-            try {
-                rCanonText = serialize(disaPointRMove(compressedPos,
-                                                       disaPointsCompressed[i].component,
-                                                       static_cast<std::uint32_t>(disaPointsCompressed[i].region),
-                                                       static_cast<std::uint32_t>(disaPointsCompressed[i].boundary),
-                                                       disaPointsCompressed[i].token));
-            } catch (const EncodingError&) {}
-            code.Tprime = computeTPrime(pos, parsed, dp, rCanonText, lookup);
+            code.Tprime = computeTPrime(pos, parsed, dp, computeRCanonText(compressedPos, disaPointsCompressed[i]), lookup);
             ++genomeHits;
             const bool allBypass = computeAllBypass(pos, dp, code, lookup);
             byGenome[genomeKey(code)].push_back({decText, i, lives, allBypass});

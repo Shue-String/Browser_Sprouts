@@ -11,42 +11,65 @@ interface GuideTopic {
 
 const TOPICS: GuideTopic[] = [
   {
+    id: 'how-to-play',
+    title: 'How to Play?',
+    html: `
+      <h3>How to Play?</h3>
+      <p>Click "New Game" in the top right to start a game with 1-20 spots (Or you can start
+      your first game with the default 6).
+      
+      Players take turns clicking and dragging to draw a line between two points (or from a 
+      point to itself).  Once the line is drawn, a new point will be added along that line.</p>
+
+      <p>Each drawn line must obey two rules:</p>
+      <ul>
+        <li>A line may never cross itself, another line, or pass through another point.</li>
+        <li>No point may ever have more than three lines coming out of it. (Connecting a point
+        to itself is considered to be adding two new lines).</li>
+      </ul>
+      <p>The last player able to make a legal move wins.</p>
+    `,
+  },
+  {
     id: 'what-is-sprouts',
     title: 'What is Sprouts?',
     html: `
       <h3>What is Sprouts?</h3>
       <p>Sprouts is a pencil-and-paper game for two players, invented in 1967 by John Conway
-      and Michael Paterson. It starts with a handful of dots ("spots") on a sheet of paper.
-      Players take turns drawing a line between two spots (or from a spot to itself), then
-      adding a new spot somewhere along that line. Two rules constrain every move:</p>
-      <ul>
-        <li>A line may never cross itself, another line, or pass through another spot.</li>
-        <li>No spot may ever have more than three lines coming out of it.</li>
-      </ul>
-      <p>The last player able to make a legal move wins. Despite the simple rules, the game
-      is topologically rich — this app renders it on a sphere rather than flat paper, which
-      makes some of the underlying structure easier to see and manipulate.</p>
+      and Michael Paterson. Despite its simple rules, the game is staggeringly hard to 
+      understand using mathematics.  The last player able to make a legal move wins. Despite
+      the simple rules, the game is a mathematical nightmare- nobody has managed to find any
+      sort of strategy to win.</p>
+
+      <p>Though the game is typically played on a flat surface, the rules of the game dictate
+      that the game be planar, which means that its topology is the same if put on a sphere.
+      This turns out to be a useful feature when studying the game, so we've implemented it
+      in our app.</p>
+      
       <p>This app is a companion to an in-progress math paper analyzing the game's structure
       (see <code>README.txt</code> for background). Use the Position Browser to explore the
       game tree analytically, or hit Play to draw moves by hand.</p>
     `,
   },
   {
-    id: 'keyboard',
-    title: 'Keyboard commands',
+    id: 'controls',
+    title: 'Controls',
     html: `
+      <h3>Mouse Controls</h3>
+      <table>
+        <tr><td><code>Left-Click and drag point</code></td><td>Draw a move (connect to a second point and/or back to the original).</td></tr>
+        <tr><td><code>Right-Click and drag point</code></td><td>Drag the point around.</td></tr>
+        <tr><td><code>Left-Click and drag (empty space)</code></td><td>Rotate the projected sphere</td></tr>
+        <tr><td><code>Double-Left-Click anywhere</code></td><td>Center the projection that location.</td></tr>
+        <tr><td><code>Double-Right-Click anywhere</code></td><td>Center on the antipode of that location.</td></tr>
+      </table>
+      
       <h3>Keyboard commands</h3>
       <table>
-        <tr><th>Key</th><th>Action</th></tr>
         <tr><td><code>Ctrl/Cmd + Z</code></td><td>Undo the last move</td></tr>
-        <tr><td><code>Space</code></td><td>Pause / resume Recreate playback</td></tr>
-        <tr><td><code>Enter</code></td><td>Confirm a candidate move preview, or force-commit
-          the proposed arc during manual-draw fallback</td></tr>
-        <tr><td><code>Escape</code></td><td>Clear a locked move preview, or close an open
+        <tr><td><code>Escape</code></td><td>Close an open
           dialog (Position Browser, Guide, etc.)</td></tr>
       </table>
-      <p>Dragging with the right mouse button repositions a vertex; the left button draws a
-      move stroke, or rotates the sphere when started away from any spot.</p>
     `,
   },
   {
