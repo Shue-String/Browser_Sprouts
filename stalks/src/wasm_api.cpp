@@ -298,50 +298,14 @@ std::string quickCanonOf(std::string enc) {
     }
 }
 
-// Ground-truth DisaPoint R move (see moves.hpp's disaPointRMove doc comment): the paper's
-// InteriorPseudo rewrite (3q*)=(q*) run through the real engine, rather than collectGenetics.ts's
-// old buildRemoveEncoding text splice (which silently produced a structurally wrong result whenever
-// removing the DisaPoint's membrane merges two regions together -- see stalks/tools/
-// collect_genetics.cpp's header comment). `enc` must have this DisaPoint still decompressed as a
-// membrane pair, matching every other DisaPointRef coordinate this codebase already uses (region/
-// boundary/token index into enc's own components[component].regions[region][boundary]).
-//
-// Success shape: {"ok":true,"enc":"<canonical child>"}. Failure shape (bad coordinates, or the
-// resulting encoding isn't in fact a paired membrane): {"ok":false,"reason":"...","message":"..."}.
-std::string disaPointRMoveJson(std::string enc, int component, int region, int boundary, int token) {
-    try {
-        const stalks::Position p = stalks::parsePosition(enc);
-        if (component < 0 || static_cast<std::size_t>(component) >= p.components.size())
-            return jsonError("bad-move", "component index out of range");
-        const stalks::Position child = stalks::disaPointRMove(
-            p, static_cast<std::size_t>(component), static_cast<std::uint32_t>(region),
-            static_cast<std::uint32_t>(boundary), static_cast<std::size_t>(token));
-        std::string out = "{\"ok\":true,\"enc\":\"";
-        out += stalks::serialize(child);
-        out += "\"}";
-        return out;
-    } catch (const stalks::EncodingError& e) {
-        return jsonError("engine-error", e.what());
-    } catch (const std::exception& e) {
-        return jsonError("engine-error", e.what());
-    } catch (...) {
-        return jsonError("engine-error", "unknown");
-    }
-}
-
 }  // namespace
 
 EMSCRIPTEN_BINDINGS(stalks_module) {
     emscripten::function("analyze", &stalks::analyzeJson);
     emscripten::function("analyzeFull", &stalks::analyzeFullJson);
     emscripten::function("analyzeNimber", &stalks::analyzeNimberJson);
-    emscripten::function("childrenTracked", &stalks::childrenTrackedJson);
-    emscripten::function("regionMovesTracked", &stalks::regionMovesTrackedJson);
-    emscripten::function("allMovesTracked", &stalks::allMovesTrackedJson);
     emscripten::function("canon", &canonSafe);
     emscripten::function("applyMoveTracked", &applyMoveTracked);
     emscripten::function("canonicalizeTrackedProvenance", &canonicalizeTrackedProvenance);
-    emscripten::function("decompressed", &stalks::decompressedJson);
     emscripten::function("quickCanonOf", &quickCanonOf);
-    emscripten::function("disaPointRMove", &disaPointRMoveJson);
 }

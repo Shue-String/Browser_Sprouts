@@ -223,7 +223,6 @@ as a list of encodings. Keep the concept; renumber cleanly in rewrite.
 - DisaPoints bolted on (DISAPOINT tuple sentinel spread across all remap functions).
 - HOLL/TRIP only recognized on their own component.
 - Error handling = print + exit() → proper exceptions/Result types.
-- Duplicated enclosure templates (TODO in enclosureConstruction).
 - GameClass `self = allGames[...]` re-assignment hack (Python anti-pattern; objects must be
   interned via a factory instead).
 - `boundaryCompressions` default-pairing trick and base62 boundary chars → replaced by new

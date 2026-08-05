@@ -27,9 +27,6 @@ target_link_libraries(dump_master_meta PRIVATE stalks_core)
 add_executable(dump_child_nimbers tools/dump_child_nimbers.cpp)
 target_link_libraries(dump_child_nimbers PRIVATE stalks_core)
 
-add_executable(collect_genetics tools/collect_genetics.cpp)
-target_link_libraries(collect_genetics PRIVATE stalks_core)
-
 add_executable(query_position tools/query_position.cpp)
 target_link_libraries(query_position PRIVATE stalks_core)
 
@@ -51,12 +48,15 @@ target_link_libraries(verify_spec_count PRIVATE stalks_core)
 add_executable(collect_alpha_genetics tools/collect_alpha_genetics.cpp)
 target_link_libraries(collect_alpha_genetics PRIVATE stalks_core)
 
+add_executable(dump_collections_roster tools/dump_collections_roster.cpp)
+target_link_libraries(dump_collections_roster PRIVATE stalks_core)
+
 if(MSVC)
-    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers collect_genetics query_position explain_move query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics)
+    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers query_position explain_move query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics dump_collections_roster)
         target_compile_options(${tgt} PRIVATE /W4 /permissive- /utf-8)
     endforeach()
 else()
-    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers collect_genetics query_position explain_move query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics)
+    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers query_position explain_move query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics dump_collections_roster)
         target_compile_options(${tgt} PRIVATE -Wall -Wextra)
     endforeach()
 endif()

@@ -12,23 +12,6 @@ export interface StalksModule {
   analyzeFull(enc: string): string;
   /** On-demand quick-canon nimber up to 16 lives; returns a QuickAnalysis JSON (see stalks.ts). */
   analyzeNimber(enc: string): string;
-  /**
-   * Children of `enc`'s LITERAL parsed structure (no canonicalize() pre-step, unlike analyze) --
-   * see childrenTrackedJson in analyze.cpp / stalks.ts. `enc` must already be decompressed.
-   */
-  childrenTracked(enc: string): string;
-  /**
-   * Every legal move of `enc`'s component `component` touching the token at (region, boundary,
-   * token), valued the same way -- see regionMovesTrackedJson in analyze.cpp / stalks.ts. `enc`
-   * must already be decompressed.
-   */
-  regionMovesTracked(enc: string, component: number, region: number, boundary: number, token: number): string;
-  /**
-   * Every legal move of `enc`'s ENTIRE position, across every component, valued the same way --
-   * unlike childrenTracked, NOT deduped by canonical result. See allMovesTrackedJson in
-   * analyze.cpp / stalks.ts. `enc` must already be decompressed.
-   */
-  allMovesTracked(enc: string): string;
   /** Canonicalize an encoding; returns the bracketless canonical serialization ("" on parse error). */
   canon(enc: string): string;
   /**
@@ -57,25 +40,11 @@ export interface StalksModule {
    */
   canonicalizeTrackedProvenance(enc: string): string;
   /**
-   * Fully decompress an encoding (expand every Hollow/Split/Triplet/DisaPoint pseudo-point into
-   * raw tokens) and return its literal serialization -- see decompressedJson in analyze.cpp /
-   * stalks.ts. Not canonicalized/reordered otherwise.
-   */
-  decompressed(enc: string): string;
-  /**
    * Standalone quick-canon (Advanced Collections) lookup for an arbitrary encoding -- not just a
    * position's own children (see quickCanonOf in wasm_api.cpp / stalks.ts). Returns
    * {"ok":true,"enc":"<rep>","offset":0|1} or a parse/engine error.
    */
   quickCanonOf(enc: string): string;
-  /**
-   * Ground-truth DisaPoint R move: the paper's InteriorPseudo rewrite (3q*)=(q*) run through the
-   * real engine (see disaPointRMove in moves.hpp/wasm_api.cpp / stalks.ts), not a hand-spliced text
-   * edit. `enc` must have the target DisaPoint still decompressed as a membrane pair; (component,
-   * region, boundary, token) index its inline occurrence. Returns
-   * {"ok":true,"enc":"<canonical child>"} or an engine error.
-   */
-  disaPointRMove(enc: string, component: number, region: number, boundary: number, token: number): string;
 }
 
 /** Async factory: instantiates the WASM and resolves to the module. */

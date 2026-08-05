@@ -89,7 +89,7 @@ int movetypeFor(const Position& parent, const MoveTag& tag, const Position& chil
 // the child's own quick-canon representative (only populated where a caller needs it per-child).
 // `lives` is the child's own lives count (Position::lives2()/2) -- cheap regardless of whether the
 // child was valued, since it's a structural property, not a game-tree one; used by the Collect
-// feature's genome recursion to cap how deep it expands T witnesses (see collectAlpha.ts).
+// feature's genome recursion to cap how deep it expands T-children (see collectAlpha.ts).
 void writeChild(std::string& out, const std::string& enc, const Val& v, int nsub, int lives,
                 const MoveTag* tag = nullptr, const QuickCanonResult* quick = nullptr,
                 int movetype = 0) {
@@ -425,20 +425,6 @@ std::string quickAnalysis(const Position& p, const std::string& canon) {
 
 std::string canonOnly(const std::string& enc) {
     return serialize(canonicalize(parsePosition(enc)));
-}
-
-std::string decompressedJson(const std::string& enc) {
-    try {
-        std::string out = "{\"ok\":true,\"enc\":";
-        jsonStr(out, serialize(parsePosition(enc).decompressed()));
-        out += "}";
-        return out;
-    } catch (const EncodingError& e) {
-        std::string err = "{\"ok\":false,\"reason\":\"parse-error\",\"message\":";
-        jsonStr(err, e.what());
-        err += "}";
-        return err;
-    }
 }
 
 std::string childrenTrackedJson(const std::string& enc) {
