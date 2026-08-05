@@ -20,18 +20,18 @@
 // move and at most one become-scab move for a lone special point), {L}/{T'} are deduped nimber
 // sets. [T] (the list of untouched-alpha children) is NOT part of the bucket key, same as the old
 // T column -- exact semantics of its own brackets are still TBD, so this only records the raw
-// (enc, nimber) witnesses for now.
+// (enc, nimber) T-children for now.
 //
-// Every stored position (the entry's own enc and each T witness) ALSO carries its quick-canon
+// Every stored position (the entry's own enc and each T-child) ALSO carries its quick-canon
 // (Advanced Collections) display form -- quickEnc/quickOffset, true-nimber(x) = nimber(quickEnc) ^
 // quickOffset -- alongside the real exact `enc`. Per the user's request to surface the more compact
 // quick-canon form rather than the raw structural encoding. The exact `enc` is kept as the
 // authoritative identity/re-analysis key (never replaced by the quick-canon rep): a quick-canon rep
 // is only proven nimber-equivalent (up to the offset) to the real position, not proven to have the
-// SAME genome under further movetype classification, so re-deriving a witness's own genome (e.g.
+// SAME genome under further movetype classification, so re-deriving a T-child's own genome (e.g.
 // clicking a T row) must still analyze the real position, not its quick-canon stand-in -- quickEnc
-// is display-only. T witnesses are deduped by (quickEnc, quickOffset), mirroring
-// stalks.ts's QuickChildInfo convention -- two witnesses sharing that pair are, by construction,
+// is display-only. T-children are deduped by (quickEnc, quickOffset), mirroring
+// stalks.ts's QuickChildInfo convention -- two T-children sharing that pair are, by construction,
 // the exact same position (their true nimbers must therefore also agree; not re-checked here).
 //
 // Usage: collect_alpha_genetics <out.json> <spec1.spec> [spec2.spec ...]
@@ -68,7 +68,7 @@ QuickDisp quickDisp(const Position& p) {
     return {serialize(qc.rep), qc.offset};
 }
 
-struct TWitness {
+struct TChild {
     std::string enc;
     QuickDisp quick;
     int nimber = 0;
@@ -81,19 +81,24 @@ struct Entry {
     int R = 0, D = 0;
     std::set<int> L;
     std::set<int> Tprime;
-    std::vector<TWitness> T;
+    std::vector<TChild> T;
 };
 
-std::string setStr(const std::set<int>& s) {
-    std::string out = "{";
+// Comma-joined values, no wrapping braces/brackets -- for embedding directly inside a JSON array
+// literal (setStr below wraps this in "{...}" for the human-facing genome-bucket key text).
+std::string setStrBare(const std::set<int>& s) {
+    std::string out;
     bool first = true;
     for (int v : s) {
         if (!first) out += ",";
         first = false;
         out += std::to_string(v);
     }
-    out += "}";
     return out;
+}
+
+std::string setStr(const std::set<int>& s) {
+    return "{" + setStrBare(s) + "}";
 }
 
 std::string genomeKey(int R, int D, const std::set<int>& L, const std::set<int>& Tprime) {
@@ -159,7 +164,7 @@ int main(int argc, char** argv) {
             e.lives = p.lives2() / 2;
             std::optional<int> R, D;
             bool warned = false;
-            std::set<std::pair<std::string, int>> seenTWitness;
+            std::set<std::pair<std::string, int>> seenTChild;
 
             for (const auto& [child, tag] : childrenAllWithMoveTag(p)) {
                 const EdgeTag et = edgeTagFromMoveTag(d, tag);
@@ -200,7 +205,7 @@ int main(int argc, char** argv) {
                         break;
                     case 5: {
                         const QuickDisp qd = quickDisp(childCanon);
-                        if (seenTWitness.insert({qd.enc, qd.offset}).second)
+                        if (seenTChild.insert({qd.enc, qd.offset}).second)
                             e.T.push_back({childEnc, qd, val.nimber});
                         break;
                     }
@@ -235,7 +240,17 @@ int main(int argc, char** argv) {
     }
     // The Stalks encoding alphabet (letters/digits/'|'/','/'+') never contains a quote or
     // backslash, so enc strings need no JSON escaping.
-    f << "{";
+    //
+    // Top-level shape: {"genomes": <same bucket-grouped structure as before, keyed by "(R,D,{L},
+    // {T'})">, "byEnc": <every qualifying position ONCE, keyed by its real enc, with its own R/D/L/
+    // T'/T -- no T-child ever repeats another position's data inline>}. `byEnc` exists purely so the
+    // Collect pane's Advanced-Collection ("!!") check can look up ANY T-child/T-grandchild's own
+    // genome by a single map lookup instead of a fresh engine call OR (the first attempt at this)
+    // embedding each T-child's data redundantly inline every place it's referenced -- with heavy
+    // fan-in among common low-order T-children, that inline approach blew the file up ~1000x (500MB+
+    // for what should be a couple MB), so `byEnc` trades a SECOND full-size pass of the same byEnc
+    // map (this file's OWN internal structure) for a flat, non-duplicated JSON section instead.
+    f << "{\"genomes\":{";
     bool firstGenome = true;
     for (const auto& [key, entries] : byGenome) {
         if (!firstGenome) f << ",";
@@ -248,7 +263,7 @@ int main(int argc, char** argv) {
               << "\",\"quickOffset\":" << e.quick.offset << ",\"lives\":" << e.lives << ",\"T\":[";
             for (std::size_t j = 0; j < e.T.size(); ++j) {
                 if (j) f << ",";
-                const TWitness& t = e.T[j];
+                const TChild& t = e.T[j];
                 f << "{\"enc\":\"" << t.enc << "\",\"quickEnc\":\"" << t.quick.enc
                   << "\",\"quickOffset\":" << t.quick.offset << ",\"nimber\":" << t.nimber << "}";
             }
@@ -256,7 +271,22 @@ int main(int argc, char** argv) {
         }
         f << "]";
     }
-    f << "}";
+    f << "},\"byEnc\":{";
+    bool firstEnc = true;
+    for (const auto& [enc, e] : byEnc) {
+        if (!firstEnc) f << ",";
+        firstEnc = false;
+        f << "\"" << enc << "\":{\"R\":" << e.R << ",\"D\":" << e.D << ",\"L\":[" << setStrBare(e.L)
+          << "],\"Tprime\":[" << setStrBare(e.Tprime) << "],\"lives\":" << e.lives << ",\"T\":[";
+        for (std::size_t j = 0; j < e.T.size(); ++j) {
+            if (j) f << ",";
+            const TChild& t = e.T[j];
+            f << "{\"enc\":\"" << t.enc << "\",\"quickEnc\":\"" << t.quick.enc
+              << "\",\"quickOffset\":" << t.quick.offset << ",\"nimber\":" << t.nimber << "}";
+        }
+        f << "]}";
+    }
+    f << "}}";
 
     return 0;
 }

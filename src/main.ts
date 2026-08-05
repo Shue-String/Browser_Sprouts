@@ -1037,7 +1037,6 @@ function unlockDebugMode(): void {
   debugUnlocked = true;
   debugMenuWrap.style.display = '';
   recreateBtn.style.display = '';
-  collectBtn.style.display = '';
   updateMoveSeq();
 }
 

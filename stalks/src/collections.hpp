@@ -58,4 +58,20 @@ std::string leftSideKey(const std::string& leftSideEncoding);
 // position as given (no canonicalization). Each key is registry-lookup ready.
 std::vector<std::string> detachableLeftSideKeys(const Position& p);
 
+// One authored Advanced-Collection roster, exposed for UI/tooling sync -- see
+// tools/dump_collections_roster.cpp, which writes this out for the Collect pane's Collections
+// panel (src/data/collectionsRoster.json) so a change here is reflected there automatically,
+// with no hand-copied duplicate list to drift out of sync.
+struct CollectionRoster {
+    std::string name;                  // e.g. "S_1", "S_2", "S_3", "S_4" -- extend as more are registered
+    int offset = 0;                    // 0 or 1 (Pairing Theorem)
+    std::vector<std::string> elements; // authored left-side encodings, exactly as written in the registry (pre-canonicalization), e.g. "2,a"
+    std::string rep;                   // this collection's own shared reduction target (same left-side encoding convention, e.g. "2a"); empty when it shares its pair-partner's rep instead of having its own (S_1's offset-1 sibling shares S_1's; S_4 shares S_3's)
+};
+
+// Every currently-registered Advanced Collection, in the SAME authored (pre-canonicalization)
+// form used to build the internal matching registries in collections.cpp -- single source of
+// truth, so this can never drift from what quickCanon() actually matches.
+std::vector<CollectionRoster> allCollectionRosters();
+
 } // namespace stalks

@@ -12,6 +12,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -307,6 +308,302 @@ std::vector<DoubleCritCandidate> enumerateDoubleCrits(const Component& c) {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// Multi-region ("crits on different organs") left sides -- k=1 scope. A multi-region left
+// side is >=2 regions joined by their OWN internal real membranes (never crits themselves),
+// detachable from the rest of the position by cutting exactly ONE crit membrane. Unlike the
+// single-region path above (which has no internal membranes to canonicalize -- a lone
+// region's every membrane is necessarily a crit, since a membrane can't pair a region to
+// itself), a multi-region chunk's canonical key genuinely needs region/boundary
+// ordering+rotation+chirality search THAT ALSO respects internal pairing identity across
+// regions -- exactly the problem canon.cpp's canonMinimal/canonicalizeFull already solve for
+// whole positions. Rather than duplicate that search here, a chunk is built as an ordinary
+// stand-alone Component (internal membranes as real Component::pairings; the one crit
+// membrane simply left OUT of pairings, so it renders as agnostic '9' via the existing
+// serialize()/pairIndex() path -- no new sentinel token needed) and run through the real
+// canonicalizeFull/serialize pipeline. This is additive and independent of the single-/
+// double-crit machinery above: a separate registry (multiRegistry), separate finder
+// (enumerateMultiCrits, a bridge search over the region-adjacency graph -- cutting a BRIDGE
+// membrane is exactly "detach a connected region-set with no other outside connection"), and
+// a separate swap (applyMultiCritSwap, which -- unlike applyCritSwap -- must delete the
+// chunk's extra regions and reindex every reference to them, since a multi-region chunk
+// collapses to a SINGLE new region at its family's rep).
+// ---------------------------------------------------------------------------
+
+// Cap on chunk size worth attempting: every authored multi-region roster element is tiny (<=3
+// regions, a handful of tokens), and a bridge's "other" side is typically most of the position
+// -- this cheap pre-filter (checked before the expensive canonicalizeFull call) skips it
+// immediately rather than canonicalizing something that could never match a registry entry.
+constexpr std::size_t MAX_MULTI_REGIONS = 3;
+constexpr std::size_t MAX_MULTI_TOKENS = 12;
+
+// A chunk's canonical registry key: wrap it as a stand-alone one-component Position and run it
+// through the real structural canon + serializer (see the section doc comment above). Prefixed
+// "M" so a multi-region key can never collide with a single-/double-crit regionKey (which never
+// contains '|' and so never round-trips through serialize() the same way) purely by convention;
+// belt-and-suspenders, not load-bearing, since the two are looked up in separate registries.
+std::string multiChunkKey(const std::vector<std::vector<Bnd>>& regions,
+                           const std::vector<std::pair<MRef, MRef>>& internalPairings) {
+    Component chunk;
+    chunk.regions = regions;
+    chunk.pairings = internalPairings;
+    chunk.dead = false;
+    Position p;
+    p.components.push_back(std::move(chunk));
+    return "M" + serialize(canonicalizeFull(p));
+}
+
+// Parse a multi-region left-side encoding, e.g. "2CD|2a,CD": '|' separates regions, ',' still
+// separates boundaries within a region, digits/ports as in parseLeftSide, and 'A'-'Z' are
+// INTERNAL membrane labels -- each must occur exactly twice, in two different regions (the
+// pairing partner is found by scanning, not authored positionally). Exactly one port ('a'-'z')
+// total is required (k=1 scope; no multi-region roster needs k>=2 yet).
+std::pair<std::vector<std::vector<Bnd>>, std::vector<std::pair<MRef, MRef>>>
+parseChunkEncoding(const std::string& enc) {
+    std::vector<std::vector<Bnd>> regions;
+    std::vector<Bnd> curRegion;
+    Bnd curBnd;
+    std::uint32_t membOcc = 0;  // count of MEMB tokens seen so far in curBnd (pairIndex's
+                                 // occurrence numbering counts membranes only, not all tokens)
+    std::map<char, std::vector<MRef>> letterLocs;
+    int portCount = 0;
+    auto flushBnd = [&]() {
+        if (curBnd.empty())
+            throw EncodingError("empty boundary in chunk left side: '" + enc + "'");
+        curRegion.push_back(curBnd);
+        curBnd.clear();
+        membOcc = 0;
+    };
+    auto flushRegion = [&]() {
+        flushBnd();
+        regions.push_back(curRegion);
+        curRegion.clear();
+    };
+    for (char ch : enc) {
+        if (ch == '|') {
+            flushRegion();
+        } else if (ch == ',') {
+            flushBnd();
+        } else if (ch >= '0' && ch <= '8') {
+            curBnd.push_back(static_cast<Token>(ch - '0'));
+        } else if (ch >= 'a' && ch <= 'z') {
+            curBnd.push_back(MEMB);
+            ++membOcc;
+            ++portCount;
+        } else if (ch >= 'A' && ch <= 'Z') {
+            letterLocs[ch].push_back(MRef{static_cast<std::uint32_t>(regions.size()),
+                                          static_cast<std::uint32_t>(curRegion.size()), membOcc});
+            curBnd.push_back(MEMB);
+            ++membOcc;
+        } else if (ch == '[' || ch == ']' || ch == '/' || ch == ' ' || ch == '\t') {
+            continue;
+        } else if (ch == '9') {
+            throw EncodingError("agnostic membrane '9' has no meaning in a chunk left side: '" +
+                                enc + "'");
+        } else {
+            throw EncodingError(std::string("unexpected character '") + ch +
+                                "' in chunk left side");
+        }
+    }
+    flushRegion();
+    if (portCount != 1)
+        throw EncodingError("multi-region left side must have exactly one crit port: '" + enc + "'");
+    if (regions.size() < 2)
+        throw EncodingError("multi-region left side must have at least two regions: '" + enc + "'");
+
+    std::vector<std::pair<MRef, MRef>> pairings;
+    for (const auto& [letter, locs] : letterLocs) {
+        if (locs.size() != 2)
+            throw EncodingError(std::string("internal membrane '") + letter +
+                                "' must appear exactly twice: '" + enc + "'");
+        if (locs[0].region == locs[1].region)
+            throw EncodingError(std::string("internal membrane '") + letter +
+                                "' must connect two different regions: '" + enc + "'");
+        pairings.push_back({locs[0], locs[1]});
+    }
+    return {std::move(regions), std::move(pairings)};
+}
+
+std::string multiLeftSideKey(const std::string& enc) {
+    const auto [regions, pairings] = parseChunkEncoding(enc);
+    return multiChunkKey(regions, pairings);
+}
+
+// One candidate multi-region swap: the chunk's original region indices (>=2, sorted), the
+// original pairing index of its single crossing (crit) membrane, and its canonical key.
+struct MultiCritCandidate {
+    std::vector<std::uint32_t> regions;
+    int crossPairing = -1;
+    std::string leftKey;
+};
+
+// Bridge search over a Component's region-adjacency graph (nodes = regions, edges = real
+// membrane pairings -- every pairing connects two DIFFERENT regions, Component::validate()'s "no
+// region linking to itself" rule). A bridge membrane's removal splits the graph; each side is a
+// candidate multi-region left side (its ONLY connection to the rest is that one membrane) PROVIDED
+// it has zero special points (else its true crit count exceeds 1) and stays within the size cap.
+// Graphs here are tiny (a handful of regions at n<=6), so the naive O(P*(R+P)) trial-removal scan
+// is simplest and fast enough; no need for a linear-time bridge algorithm.
+std::vector<MultiCritCandidate> enumerateMultiCrits(const Component& c) {
+    std::vector<MultiCritCandidate> out;
+    if (c.dead)
+        return out;
+    const std::size_t R = c.regions.size();
+    struct Edge {
+        std::uint32_t other;
+        int pairingIdx;
+    };
+    std::vector<std::vector<Edge>> adj(R);
+    for (int pi = 0; pi < static_cast<int>(c.pairings.size()); ++pi) {
+        const auto& [a, b] = c.pairings[static_cast<std::size_t>(pi)];
+        adj[a.region].push_back({b.region, pi});
+        adj[b.region].push_back({a.region, pi});
+    }
+    auto reachableExcluding = [&](std::uint32_t start, int excl) {
+        std::vector<char> seen(R, 0);
+        std::vector<std::uint32_t> stack{start}, order;
+        seen[start] = 1;
+        while (!stack.empty()) {
+            const std::uint32_t u = stack.back();
+            stack.pop_back();
+            order.push_back(u);
+            for (const auto& e : adj[u]) {
+                if (e.pairingIdx == excl)
+                    continue;
+                if (!seen[e.other]) {
+                    seen[e.other] = 1;
+                    stack.push_back(e.other);
+                }
+            }
+        }
+        return order;
+    };
+    const auto idx = c.pairIndex();
+    auto tryAdd = [&](const std::vector<std::uint32_t>& side, int excl) {
+        if (side.size() < 2 || side.size() > MAX_MULTI_REGIONS)
+            return;
+        std::size_t tokenCount = 0, specials = 0;
+        for (std::uint32_t r : side)
+            for (const auto& b : c.regions[r]) {
+                tokenCount += b.size();
+                for (Token t : b)
+                    if (isSpecialPoint(t))
+                        ++specials;
+            }
+        if (tokenCount > MAX_MULTI_TOKENS || specials != 0)
+            return;
+        // Guard: a pre-existing agnostic (truly unpaired) membrane inside the side would be
+        // indistinguishable from the crit port and corrupt the count -- bail (mirrors critSlots'
+        // single-region agnostic guard). Never fires on real game-tree positions.
+        // idx[r][b] is sized to the MEMBRANE COUNT of boundary b (Component::pairIndex()), not its
+        // total token count -- must index by membrane-occurrence-so-far, not raw token position
+        // (an earlier version of this loop used the token position directly and read past the end
+        // of idx[r][b] whenever a boundary mixed a membrane with non-membrane tokens, e.g. "2C" --
+        // undefined behavior, observed as the quickCanon fixpoint flip-flopping between two
+        // different results across repeated runs of the same input).
+        for (std::uint32_t r : side)
+            for (std::uint32_t b = 0; b < c.regions[r].size(); ++b) {
+                std::uint32_t membOcc = 0;
+                for (std::uint32_t o = 0; o < c.regions[r][b].size(); ++o)
+                    if (c.regions[r][b][o] == MEMB) {
+                        if (idx[r][b][membOcc] < 0)
+                            return;
+                        ++membOcc;
+                    }
+            }
+
+        std::vector<std::uint32_t> sorted = side;
+        std::sort(sorted.begin(), sorted.end());
+        std::map<std::uint32_t, std::uint32_t> remap;
+        for (std::size_t i = 0; i < sorted.size(); ++i)
+            remap[sorted[i]] = static_cast<std::uint32_t>(i);
+
+        std::vector<std::vector<Bnd>> newRegions;
+        newRegions.reserve(sorted.size());
+        for (std::uint32_t r : sorted)
+            newRegions.push_back(c.regions[r]);
+
+        std::vector<std::pair<MRef, MRef>> newPairings;
+        for (int pi = 0; pi < static_cast<int>(c.pairings.size()); ++pi) {
+            if (pi == excl)
+                continue;
+            const auto& [a, b] = c.pairings[static_cast<std::size_t>(pi)];
+            const auto ia = remap.find(a.region), ib = remap.find(b.region);
+            if (ia != remap.end() && ib != remap.end())
+                newPairings.push_back({{ia->second, a.boundary, a.occ},
+                                       {ib->second, b.boundary, b.occ}});
+        }
+
+        MultiCritCandidate cand;
+        cand.regions = std::move(sorted);
+        cand.crossPairing = excl;
+        cand.leftKey = multiChunkKey(newRegions, newPairings);
+        out.push_back(std::move(cand));
+    };
+    for (int pi = 0; pi < static_cast<int>(c.pairings.size()); ++pi) {
+        const auto& [a, b] = c.pairings[static_cast<std::size_t>(pi)];
+        const auto sideA = reachableExcluding(a.region, pi);
+        if (std::find(sideA.begin(), sideA.end(), b.region) != sideA.end())
+            continue;  // not a bridge
+        tryAdd(sideA, pi);
+        tryAdd(reachableExcluding(b.region, pi), pi);
+    }
+    return out;
+}
+
+// Apply a matched multi-region swap: collapse EVERY region in `sideRegions` into ONE new region
+// at the lowest of their original indices, containing exactly [head..., crit] (single-crit
+// scope, matching applyCritSwap's k=1 shape); the other side regions are deleted and every
+// pairing's region reference is reindexed accordingly. The chunk's internal pairings (both ends
+// in sideRegions) are simply dropped -- their content is gone, replaced wholesale by the rep.
+// The crossing pairing is repointed: its side-end becomes the new merged region's sole
+// occurrence, its host-end just gets its region index remapped, preserving the host's link.
+Component applyMultiCritSwap(const Component& c, const std::vector<std::uint32_t>& sideRegions,
+                             int crossPairing, const std::vector<Token>& head) {
+    auto inSide = [&](std::uint32_t r) {
+        return std::find(sideRegions.begin(), sideRegions.end(), r) != sideRegions.end();
+    };
+    const std::uint32_t keepRegion = *std::min_element(sideRegions.begin(), sideRegions.end());
+
+    Bnd newBnd;
+    for (Token t : head)
+        newBnd.push_back(t);
+    newBnd.push_back(MEMB);
+
+    // Sentinel (not 0) for deleted-region slots: if the "exactly one crossing edge" invariant
+    // were ever violated, a stray read of an unset entry surfaces immediately as an out-of-range
+    // EncodingError from pairIndex() instead of silently aliasing onto real region 0.
+    std::vector<std::uint32_t> oldToNew(c.regions.size(), static_cast<std::uint32_t>(-1));
+    Component out;
+    out.dead = c.dead;
+    std::uint32_t next = 0;
+    for (std::uint32_t r = 0; r < c.regions.size(); ++r) {
+        if (inSide(r) && r != keepRegion)
+            continue;  // deleted -- absorbed into keepRegion's rep
+        oldToNew[r] = next++;
+        out.regions.push_back(r == keepRegion ? std::vector<Bnd>{newBnd} : c.regions[r]);
+    }
+
+    out.pairings.reserve(c.pairings.size());
+    for (int pi = 0; pi < static_cast<int>(c.pairings.size()); ++pi) {
+        auto pr = c.pairings[static_cast<std::size_t>(pi)];
+        if (pi == crossPairing) {
+            MRef& sideEnd = inSide(pr.first.region) ? pr.first : pr.second;
+            MRef& hostEnd = inSide(pr.first.region) ? pr.second : pr.first;
+            hostEnd.region = oldToNew[hostEnd.region];
+            sideEnd = MRef{oldToNew[keepRegion], 0u, 0u};
+            out.pairings.push_back(pr);
+            continue;
+        }
+        if (inSide(pr.first.region) && inSide(pr.second.region))
+            continue;  // internal to the collapsed chunk
+        pr.first.region = oldToNew[pr.first.region];
+        pr.second.region = oldToNew[pr.second.region];
+        out.pairings.push_back(pr);
+    }
+    return out;
+}
+
 }  // namespace
 
 std::string leftSideKey(const std::string& leftSideEncoding) {
@@ -332,66 +629,194 @@ namespace {
 // Collection registry + the swap that applies a match.
 // ---------------------------------------------------------------------------
 
-// leftSideKey -> offset. Built once from the authored rosters (canonicalized through the same
-// leftSideKey path as extraction, so the keys line up by construction). Extend by adding rows.
-// Every S1/S2 element swaps to the same shape applyCritSwap below always builds for a k=1 match
-// ([SCAB, crit]); when the crit is a real membrane this is the DECOMPRESSED form of a DisaPoint,
-// which the very next canonicalizeFull pass's existing DisaPoint recompression folds back into a
-// bare DISA token automatically (see canon.cpp::allCompressions) -- so there is no separate `rep`
-// to carry here, unlike an earlier version of this registry.
-const std::map<std::string, int>& registry() {
-    static const std::map<std::string, int> reg = [] {
-        std::map<std::string, int> m;
-        auto add = [&](std::initializer_list<const char*> elems, int off) {
-            for (const char* e : elems)
-                m[leftSideKey(e)] = off;
-        };
-        // S1 (offset 0). Lowest-order element [2a/ is deliberately OMITTED: it is exactly the
-        // shape applyCritSwap itself builds for any k=1 match ([SCAB, crit]), so a region already
-        // in this rep form must never re-match itself (it would loop with no progress) -- mirrors
-        // why the double-crit registry omits its own rep "2ba" (see doubleCritRegistry below).
-        // For a REAL-membrane crit this was always unreachable anyway (already folded away by
-        // ordinary DisaPoint compression before the collections pass ever sees it), but a
-        // special-point crit's [SCAB, α] does NOT auto-compress (compression only applies to
-        // real membrane pairs), so it stays reachable here and must be excluded explicitly.
-        add({"2,a", "0,a", "2,2,2,a", "1,2a", "5,2a", "23,2a", "2,2,3,a",
-             "13a", "23,3a", "22,2a", "2,3,3,a", "1,3a", "3,23,a", "22,3a", "17a8"},
-            0);
-        // S2 (offset 1).
-        add({"1a", "1,a", "5a", "5,a", "2,2a", "22a", "2,2,a", "27a8",
-             "2,3a", "23a", "2,3,a", "37a8", "3,2a", "0,2a", "0,3a"},
-            1);
+// One authored roster group: a collection's name, its Pairing-Theorem offset, and its member
+// left-side encodings exactly as written (pre-canonicalization). Single source of truth for BOTH
+// the internal matching maps below (registry()/doubleCritRegistry()) AND the public
+// allCollectionRosters() introspection API (see collections.hpp) -- so a roster edited here can
+// never drift from what the Collect pane's Collections panel displays (regenerated via
+// tools/dump_collections_roster.cpp).
+struct RosterGroup {
+    const char* name;
+    int offset;
+    // A std::initializer_list's OWN backing array is a temporary whose lifetime is NOT extended
+    // when it's nested inside another object stored long-term (a static const std::vector<
+    // RosterGroup>, here) -- only binding it directly to a variable/reference does that. A
+    // std::vector, unlike initializer_list, copies its elements into owned storage, so it's safe
+    // to keep around. (The const char* pointees themselves are fine either way -- string literals
+    // have static storage duration; it was only the initializer_list's pointer+size VIEW that
+    // would have gone dangling.)
+    std::vector<const char*> elements;
+};
+
+// A family of collections sharing one swap target ("rep"): a fixed head of ordinary tokens
+// (e.g. just SCAB for S1/S2's "2a"; DISA for C_3's "3a"; APPE+SCAB for S_5's "12a") followed by
+// the k crit port(s). Every element across every group in a family swaps to THIS SAME rep --
+// applyCritSwap below builds [head..., crit...] directly, so introducing a new family is just
+// adding an entry here with its own repEncoding, no code change to the swap machinery itself.
+// `repEncoding` is authored in the SAME left-side convention as `elements` (parsed once via
+// headOfRep, below, to derive the actual Token head) -- so the rep can never drift from what
+// applyCritSwap actually produces, and it's also what allCollectionRosters() reports for the
+// Collect pane's Collections panel.
+struct CritFamily {
+    const char* repEncoding;
+    std::vector<RosterGroup> groups;
+};
+
+// This family's own shared reduction target, as Tokens (everything in `repEncoding` except the
+// trailing crit port(s) -- reps here are always exactly one boundary). Parsed via the same
+// parseLeftSide path used to extract/match left sides, so the head can never disagree with what
+// `repEncoding` actually denotes.
+std::vector<Token> headOfRep(const char* repEncoding) {
+    const std::vector<Bnd> parsed = parseLeftSide(repEncoding);
+    std::vector<Token> head;
+    for (Token t : parsed.at(0))
+        if (!isPort(t))
+            head.push_back(t);
+    return head;
+}
+
+// Single-crit (k=1) families. S1/S2 share rep "2a" ([SCAB, crit]); when the crit is a real
+// membrane this is the DECOMPRESSED form of a DisaPoint, which the very next canonicalizeFull
+// pass's existing DisaPoint recompression folds back into a bare DISA token automatically (see
+// canon.cpp::allCompressions). Each family's lowest-order/rep element itself is deliberately
+// OMITTED from its own offset-0 group: it is exactly the shape applyCritSwap builds for that
+// family's head, so a region already in rep form must never re-match itself (it would loop with
+// no progress). For a REAL-membrane crit this is usually unreachable anyway (already folded away
+// by ordinary structural compression before the collections pass ever sees it), but a
+// special-point crit's [head, alpha] does NOT auto-compress (compression only applies to real
+// membrane pairs), so it stays reachable and must be excluded explicitly.
+//
+// C_3 ("3a" = [DISA, crit]), C_4 ("4a" = [HOLL, crit]), and S_5 ("12a" = [APPE, SCAB, crit]) are
+// newly authored (2026-08-03) and, unlike S1/S2, currently have only a single (offset-0) group
+// each -- no Pairing-Theorem "+1" sibling has been identified for them yet. Verified sound via
+// testQuickNimber up to n=5 (STALKS_QUICKNIMBER_MAX=5): every minimal position's quick-canon
+// value still matches its true nimber with these three families active, exercised naturally
+// through real-membrane crits arising in ordinary n<=5-spot play (special-point crits use the
+// identical swap code path -- see testSpecialPointCollections for a couple of worked alpha
+// examples -- so this sweep is sound evidence for the alpha case too, not just real membranes).
+const std::vector<CritFamily>& singleCritFamilies() {
+    static const std::vector<CritFamily> families = {
+        {"2a",
+         {{"S_1", 0,
+           {"2,a", "0,a", "2,2,2,a", "1,2a", "5,2a", "23,2a", "2,2,3,a",
+            "13a", "23,3a", "22,2a", "2,3,3,a", "1,3a", "3,23,a", "22,3a", "17a8", "377a88"}},
+          {"S_2", 1,
+           {"1a", "1,a", "5a", "5,a", "2,2a", "22a", "2,2,a", "27a8",
+            "2,3a", "23a", "2,3,a", "37a8", "3,2a", "0,2a", "0,3a"}}}},
+        {"3a", {{"C_3", 0, {"3,a"}}}},
+        {"4a", {{"C_4", 0, {"4,a"}}}},
+        {"12a", {{"S_5", 0, {"2,3,2a", "3,27a8", "25a", "2738a"}}}},
+    };
+    return families;
+}
+
+// Double-crit (k=2) families. S3/S4 share rep "2ba" ([SCAB, crit, crit]) -- see the k=1 doc
+// comment above for the shared-rep/omitted-lowest-order-element rationale, which applies
+// identically here. Every listed element has boundary count >= 2 or token count >= 4, so each
+// swap strictly reduces (tokens, boundaries) and the quickCanon fixpoint still terminates.
+const std::vector<CritFamily>& doubleCritFamilies() {
+    static const std::vector<CritFamily> families = {
+        {"2ba",
+         {{"S_3", 0, {"0,ba", "b7a8", "2,ba", "b,2a", "2,b,a"}},
+          {"S_4", 1, {"1,ba", "22,ba", "5,ba", "23,ba", "3b,2a"}}}},
+    };
+    return families;
+}
+
+// Multi-region ("crits on different organs") families -- k=1 scope, see the multi-region section
+// doc comment above (parseChunkEncoding/multiChunkKey/enumerateMultiCrits/applyMultiCritSwap).
+// Deliberately kept SEPARATE from singleCritFamilies() (own registry, own finder, own swap)
+// rather than merged into it: the single-region path is proven sound to 6-spot and untouched by
+// this addition, so a bug in the new multi-region machinery can't regress it. Each family here
+// reuses an EXISTING single-region family's repEncoding verbatim (via headOfRep), so a
+// multi-region element swaps to the exact same rep its single-region siblings do -- these are
+// additional elements of S_1/C_4, not new collections. Elements authored 2026-08-03 (user-
+// provided). S_5's given multi-region example `[2C|2CDα/` had membrane D appearing only once
+// (region0 written as just "2C"); confirmed with the user that D belongs in region0 too, i.e. the
+// element is `[2CD|2CDα/` (both C and D connect the same two regions, mirroring S_1's element).
+const std::vector<CritFamily>& multiCritFamilies() {
+    static const std::vector<CritFamily> families = {
+        {"2a", {{"S_1", 0, {"2CD|2a,CD"}}}},
+        {"4a", {{"C_4", 0, {"3C|Ca", "3C|C,a", "3,C|Ca", "3,C|C,a"}}}},
+        {"12a", {{"S_5", 0, {"2CD|2CDa"}}}},
+    };
+    return families;
+}
+
+// leftSideKey -> {offset, head}, built from singleCritFamilies() (canonicalized through the same
+// leftSideKey path as extraction, so the keys line up by construction). Fails loudly (rather than
+// silently overwriting) if two families' rosters ever produce the same canonical key -- every
+// element must belong to exactly one family.
+struct CritMatch {
+    int offset;
+    std::vector<Token> head;
+};
+
+const std::map<std::string, CritMatch>& registry() {
+    static const std::map<std::string, CritMatch> reg = [] {
+        std::map<std::string, CritMatch> m;
+        for (const auto& fam : singleCritFamilies()) {
+            const std::vector<Token> head = headOfRep(fam.repEncoding);
+            for (const auto& g : fam.groups)
+                for (const char* e : g.elements) {
+                    const std::string key = leftSideKey(e);
+                    if (!m.emplace(key, CritMatch{g.offset, head}).second)
+                        throw std::logic_error("collections registry: duplicate left-side key '" +
+                                                key + "' (from element '" + e + "')");
+                }
+        }
         return m;
     }();
     return reg;
 }
 
-// Double-crit S3/S4 rosters (Theorem 1 tables; author 2026-07-05, "..." elements open via the
-// extension theorems). Keyed by the port-permutation-canonical left-side key; value = offset (S3
-// -> 0, S4 -> 1, from the Pairing Theorem G(s3) = G(s4) ^ 1). Every element swaps to the SINGLE
-// shared representative [2βα/ = [SCAB, MEMB, MEMB] (see applyCritSwap). The rep's own element
-// [2βα/ ("2ba") is deliberately OMITTED: a region already in rep form must never re-swap (it would
-// loop with no progress), and leaving it out makes the finder skip it. Every listed element has
-// boundary count >= 2 or token count >= 4, so each swap strictly reduces (tokens, boundaries) and
-// the quickCanon fixpoint still terminates.
-const std::map<std::string, int>& doubleCritRegistry() {
-    static const std::map<std::string, int> reg = [] {
-        std::map<std::string, int> m;
-        auto add = [&](std::initializer_list<const char*> elems, int off) {
-            for (const char* e : elems)
-                m[leftSideKey(e)] = off;
-        };
-        // S3 (offset 0): [0,βα/, [β7α8/, [2,βα/, [β,2α/, [2,β,α/. ([2βα/ omitted -- it is the rep.)
-        add({"0,ba", "b7a8", "2,ba", "b,2a", "2,b,a"}, 0);
-        // S4 (offset 1): [1,βα/, [22,βα/, [5,βα/, [23,βα/, [3β,2α/.
-        add({"1,ba", "22,ba", "5,ba", "23,ba", "3b,2a"}, 1);
+// multiLeftSideKey -> {offset, head}, built from multiCritFamilies() -- same construction as
+// registry(), see its own doc comment; a separate map since multi-region keys are computed by a
+// different canonicalizer (multiChunkKey, not leftSideKey) and matched against a different
+// finder (enumerateMultiCrits, not enumerateCrits).
+const std::map<std::string, CritMatch>& multiRegistry() {
+    static const std::map<std::string, CritMatch> reg = [] {
+        std::map<std::string, CritMatch> m;
+        for (const auto& fam : multiCritFamilies()) {
+            const std::vector<Token> head = headOfRep(fam.repEncoding);
+            for (const auto& g : fam.groups)
+                for (const char* e : g.elements) {
+                    const std::string key = multiLeftSideKey(e);
+                    if (!m.emplace(key, CritMatch{g.offset, head}).second)
+                        throw std::logic_error(
+                            "collections multiRegistry: duplicate left-side key '" + key +
+                            "' (from element '" + e + "')");
+                }
+        }
+        return m;
+    }();
+    return reg;
+}
+
+// leftSideKey -> {offset, head}, built from doubleCritFamilies() -- same construction as
+// registry(), see its own doc comment.
+const std::map<std::string, CritMatch>& doubleCritRegistry() {
+    static const std::map<std::string, CritMatch> reg = [] {
+        std::map<std::string, CritMatch> m;
+        for (const auto& fam : doubleCritFamilies()) {
+            const std::vector<Token> head = headOfRep(fam.repEncoding);
+            for (const auto& g : fam.groups)
+                for (const char* e : g.elements) {
+                    const std::string key = leftSideKey(e);
+                    if (!m.emplace(key, CritMatch{g.offset, head}).second)
+                        throw std::logic_error("collections doubleCritRegistry: duplicate left-side key '" +
+                                                key + "' (from element '" + e + "')");
+                }
+        }
         return m;
     }();
     return reg;
 }
 
 // Apply a matched crit swap (k=1 or k=2): replace region R's ENTIRE content with one new
-// boundary [SCAB, slot0, (slot1)]. A special-point slot keeps its own token in place -- it has
+// boundary [head..., slot0, (slot1)] -- `head` is the matched family's own fixed prefix (see
+// CritFamily/registry()/doubleCritRegistry() -- SCAB for S1/S2/S3/S4, but DISA/HOLL/APPE+SCAB for
+// the newer single-crit families). A special-point slot keeps its own token in place -- it has
 // no separate host, since it already stands for "connects to somewhere outside this position".
 // A real-membrane slot becomes a fresh membrane occurrence, with its ORIGINAL pairing re-pointed
 // onto its new occurrence here so its host elsewhere is preserved -- exactly the old
@@ -412,9 +837,11 @@ const std::map<std::string, int>& doubleCritRegistry() {
 // double-membrane (S3/S4) swaps -- it broke the moment a special-point slot preceded a
 // real-membrane slot (e.g. region "a,2A": alpha then a membrane), producing an out-of-range
 // membrane-occurrence reference that crashed downstream in serialize()/pairIndex() consumers.
-Component applyCritSwap(const Component& c, std::uint32_t R, const std::vector<CritSlot>& slots) {
+Component applyCritSwap(const Component& c, std::uint32_t R, const std::vector<Token>& head,
+                         const std::vector<CritSlot>& slots) {
     Bnd newBnd;
-    newBnd.push_back(SCAB);
+    for (Token t : head)
+        newBnd.push_back(t);
     for (const auto& slot : slots)
         newBnd.push_back(slot.special ? slot.tok : MEMB);
 
@@ -618,14 +1045,15 @@ QuickCanonResult quickCanon(const Position& p) {
         };
         for (std::size_t ci = 0; ci < cur.components.size(); ++ci) {
             const Component& comp = cur.components[ci];
-            // Content swaps (S1/S2): reduce a single-crit region to [SCAB, crit].
+            // Content swaps (single-crit families -- S1/S2, C_3, C_4, S_5, ...): reduce a
+            // single-crit region to its family's own [head..., crit] rep.
             for (const auto& cand : enumerateCrits(comp)) {
                 const auto it = registry().find(cand.leftKey);
                 if (it == registry().end())
                     continue;
                 Position np = cur;
-                np.components[ci] = applyCritSwap(comp, cand.leftRegion, {cand.slot});
-                consider(std::move(np), it->second);
+                np.components[ci] = applyCritSwap(comp, cand.leftRegion, it->second.head, {cand.slot});
+                consider(std::move(np), it->second.offset);
             }
             // Crit-cell congruity (hollow-cell family, offset 0): merge a k>=2 crit cell to a
             // single boundary. Strictly reduces the boundary count, so the fixpoint still
@@ -643,8 +1071,21 @@ QuickCanonResult quickCanon(const Position& p) {
                 if (it == doubleCritRegistry().end())
                     continue;
                 Position np = cur;
-                np.components[ci] = applyCritSwap(comp, cand.region, {cand.slot1, cand.slot2});
-                consider(std::move(np), it->second);
+                np.components[ci] = applyCritSwap(comp, cand.region, it->second.head, {cand.slot1, cand.slot2});
+                consider(std::move(np), it->second.offset);
+            }
+            // Multi-region content swaps ("crits on different organs" -- S_1, C_4, ... additional
+            // elements): collapse a >=2-region chunk, detached by a single bridge crit membrane,
+            // to its family's single-region rep. Strictly reduces region count (>=2 regions merge
+            // into 1), so the fixpoint still terminates.
+            for (const auto& cand : enumerateMultiCrits(comp)) {
+                const auto it = multiRegistry().find(cand.leftKey);
+                if (it == multiRegistry().end())
+                    continue;
+                Position np = cur;
+                np.components[ci] =
+                    applyMultiCritSwap(comp, cand.regions, cand.crossPairing, it->second.head);
+                consider(std::move(np), it->second.offset);
             }
         }
         if (!found)
@@ -653,6 +1094,35 @@ QuickCanonResult quickCanon(const Position& p) {
         offset ^= bestOff;
     }
     return {cur, offset};
+}
+
+std::vector<CollectionRoster> allCollectionRosters() {
+    std::vector<CollectionRoster> out;
+    auto addFamily = [&](const CritFamily& fam) {
+        bool repShown = false;
+        for (const auto& g : fam.groups) {
+            out.push_back({g.name, g.offset, {g.elements.begin(), g.elements.end()},
+                            repShown ? std::string() : fam.repEncoding});
+            repShown = true;  // only the family's first-listed group carries the rep; a paired
+                               // sibling (S_2 sharing S_1's; S_4 sharing S_3's) shares it instead
+        }
+    };
+    for (const auto& fam : singleCritFamilies())
+        addFamily(fam);
+    for (const auto& fam : doubleCritFamilies())
+        addFamily(fam);
+    // Multi-region families reuse an existing single-/double-crit family's name (they're
+    // additional elements of the SAME collection, not new ones) -- append their elements onto
+    // the already-emitted roster entry of that name rather than emitting a second entry, so the
+    // Collect pane's JSON dump still has exactly one object per collection name.
+    for (const auto& fam : multiCritFamilies())
+        for (const auto& g : fam.groups)
+            for (auto& r : out)
+                if (r.name == g.name) {
+                    r.elements.insert(r.elements.end(), g.elements.begin(), g.elements.end());
+                    break;
+                }
+    return out;
 }
 
 }  // namespace stalks
