@@ -4,6 +4,7 @@
 #include "position.hpp"
 
 #include <deque>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -14,6 +15,14 @@ namespace stalks {
 // The n-spot start encoding, "[0,0,...,0]" (n spots). The single source for every caller,
 // test, or diagnostic harness that needs a fresh game's root.
 std::string startEncoding(int spots);
+
+// Every structural-canonical position reachable from the n-spot start, via a BFS over
+// childrenAll (real enclosure/join/external moves), deduped by canonical serialization. Unlike
+// GameGraph (which solver-prunes: sum positions link to their subposition nodes rather than
+// being expanded by moves), this walks the FULL raw game tree -- every position along the way,
+// not just minimal ones. Used by diagnostics that need that full footprint (e.g. the quick-canon
+// reduction-count report; see collections.hpp's quickReductionCounts).
+std::set<std::string> reachablePositions(int spots);
 
 // One position in the game graph. The node OWNS its canonical encoding (`enc`); every link
 // is a non-owning pointer into the owning GameGraph's node storage, whose addresses are

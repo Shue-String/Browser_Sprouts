@@ -517,12 +517,28 @@
         flex-direction: column;
       }
       .guide-layout { display: flex; flex: 1; min-height: 0; gap: 14px; }
-      .guide-topics {
+      .guide-topics-col {
         flex: none;
         width: 170px;
-        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
         border-right: 1px solid #ddd;
         padding-right: 10px;
+      }
+      #guide-search {
+        flex: none;
+        margin-bottom: 8px;
+        padding: 5px 7px;
+        font: 12px system-ui, sans-serif;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      #guide-search:focus { outline: none; border-color: #4a90d9; }
+      .guide-topics {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
       }
       .guide-topic-btn {
         display: block;
@@ -539,6 +555,7 @@
       }
       .guide-topic-btn:hover { background: #eee; color: #333; }
       .guide-topic-btn.active { background: #4a90d9; color: #fff; }
+      .guide-no-results { padding: 7px 8px; font: 12px system-ui, sans-serif; color: #999; font-style: italic; }
       .guide-content {
         flex: 1;
         min-width: 0;
@@ -547,11 +564,32 @@
         color: #444;
       }
       .guide-content h3 { margin: 0 0 8px; font-size: 15px; color: #333; }
+      .guide-content h4 { margin: 14px 0 6px; font-size: 13px; color: #333; }
       .guide-content p { margin: 0 0 10px; }
       .guide-content ul, .guide-content table { margin: 0 0 10px; }
       .guide-content table { border-collapse: collapse; font-size: 12px; }
       .guide-content th, .guide-content td { border: 1px solid #ddd; padding: 3px 8px; text-align: left; }
       .guide-content code { background: #eee; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+      .guide-diagram { display: block; width: 100%; max-width: 340px; margin: 6px 0 12px; }
+      .guide-jump {
+        background: none; border: none; padding: 0; margin: 0;
+        font: inherit; color: #4a90d9; text-decoration: underline;
+        cursor: pointer;
+      }
+      .guide-jump:hover { color: #2f6fb3; }
+      .guide-hint {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 15px; height: 15px; flex: none;
+        margin-left: 2px;
+        border-radius: 50%;
+        border: 1px solid #bbb;
+        background: #fff;
+        color: #888;
+        font: 10px/1 system-ui, sans-serif;
+        cursor: pointer;
+        padding: 0;
+      }
+      .guide-hint:hover { border-color: #4a90d9; color: #4a90d9; }
 
       /* Collect dialog: same two-pane shape as Guide (list left, detail right), sized for a
          genetic-code table instead of prose. */
@@ -566,7 +604,7 @@
         transition: width 0.15s ease;
       }
       #collect-dialog.collections-open {
-        width: 1120px;
+        width: 1150px;
       }
       #collect-search-input {
         flex: none;
@@ -616,7 +654,7 @@
       .collect-collections-panel {
         display: none;
         flex: none;
-        width: 250px;
+        width: 280px;
         overflow-y: auto;
         border-left: 1px solid #ddd;
         padding-left: 10px;
@@ -633,6 +671,19 @@
         list-style: revert;
       }
       .collect-coll-group > summary:hover { background: #eee; }
+      .collect-coll-header-row { display: flex; align-items: baseline; gap: 8px; }
+      .collect-coll-name { flex: none; }
+      .collect-coll-header-genome {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: right;
+        font: 11px/1.3 monospace;
+        font-weight: normal;
+        color: #999;
+      }
       .collect-coll-count { font-weight: normal; color: #999; }
       .collect-coll-member {
         padding: 3px 4px 3px 18px;
@@ -730,7 +781,8 @@
          lists they control (positioned into #pb-body at render time, below the divider) */
       #pb-toggles { display: flex; justify-content: flex-end; gap: 16px; margin: 0 0 8px; }
       /* "Sync to game" sits at the far left; the display toggles cluster on the right. */
-      #pb-toggles .sync-toggle { margin-right: auto; }
+      #pb-toggles .sync-toggle-wrap { margin-right: auto; }
+      .pb-toggle-wrap { display: inline-flex; align-items: center; gap: 4px; }
       .pb-toggle {
         display: flex; align-items: center; gap: 6px;
         font: 12px/1 system-ui, sans-serif; color: #555;
@@ -1271,11 +1323,14 @@
     <div id="guide-overlay">
       <div id="guide-dialog">
         <div class="pb-header">
-          <span>Guide - AI-Produced Placeholder</span>
+          <span>Guide</span>
           <button id="guide-close">Close</button>
         </div>
         <div class="guide-layout">
-          <div class="guide-topics" id="guide-topics"></div>
+          <div class="guide-topics-col">
+            <input type="text" id="guide-search" placeholder="Search topics..." autocomplete="off" spellcheck="false" />
+            <div class="guide-topics" id="guide-topics"></div>
+          </div>
           <div class="guide-content" id="guide-content"></div>
         </div>
       </div>
@@ -1311,13 +1366,14 @@
           <button id="pb-back" title="Back" disabled>◀</button>
           <button id="pb-forward" title="Forward" disabled>▶</button>
           <input id="pb-address" type="text" spellcheck="false" placeholder="Enter a position encoding, e.g. [0,0,0]" />
+          <button type="button" class="guide-hint" data-guide-topic="position-browser" title="Guide: Position Browser">?</button>
           <button id="pb-close">Close</button>
         </div>
         <div id="pb-toggles">
-          <label class="pb-toggle sync-toggle" title="On: the panel is locked to the live game — back/forward undo/redo the game, double-clicking a child plays that move, and manual entry / parent navigation are off. Off: free-browse the position tree by hand."><input type="checkbox" id="pb-tog-sync" /><span class="pb-switch"></span>Sync to game</label>
-          <label class="pb-toggle" title="On: group positions that are equivalent under known nimber-preserving collections, shrinking the tree (each grouped position carries a ⊕0/⊕1 offset). Off: exact structural canonical form, no grouping."><input type="checkbox" id="pb-tog-quick" /><span class="pb-switch"></span>Quick-Canon</label>
-          <label class="pb-toggle" title="Highlight the child move(s) that win (leave the opponent with a losing position) in green."><input type="checkbox" id="pb-tog-winning" checked /><span class="pb-switch"></span>Highlight Winning</label>
-          <label class="pb-toggle" title="Show each position's Grundy value (nimber)."><input type="checkbox" id="pb-tog-nimbers" checked /><span class="pb-switch"></span>Nimbers</label>
+          <span class="pb-toggle-wrap sync-toggle-wrap"><label class="pb-toggle sync-toggle" title="On: the panel is locked to the live game — back/forward undo/redo the game, double-clicking a child plays that move, and manual entry / parent navigation are off. Off: free-browse the position tree by hand."><input type="checkbox" id="pb-tog-sync" /><span class="pb-switch"></span>Sync to game</label></span>
+          <span class="pb-toggle-wrap"><label class="pb-toggle" title="On: group positions that are equivalent under known nimber-preserving collections, shrinking the tree (each grouped position carries a ⊕0/⊕1 offset). Off: exact structural canonical form, no grouping."><input type="checkbox" id="pb-tog-quick" /><span class="pb-switch"></span>Quick-Canon</label></span>
+          <span class="pb-toggle-wrap"><label class="pb-toggle" title="Highlight the child move(s) that win (leave the opponent with a losing position) in green."><input type="checkbox" id="pb-tog-winning" checked /><span class="pb-switch"></span>Highlight Winning</label></span>
+          <span class="pb-toggle-wrap"><label class="pb-toggle" title="Show each position's Grundy value (nimber)."><input type="checkbox" id="pb-tog-nimbers" checked /><span class="pb-switch"></span>Nimbers</label><button type="button" class="guide-hint" data-guide-topic="nimbers" title="Guide: What are Nimbers?">?</button></span>
         </div>
         <div id="pb-body"></div>
         <div id="pb-notify-area">

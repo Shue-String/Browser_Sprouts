@@ -1,6 +1,7 @@
 #pragma once
 #include "position.hpp"
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -46,6 +47,18 @@ bool collectionsEnabled();
 // '3'). quickCanon ALWAYS reduces; the STALKS_COLLECTIONS toggle is applied by the caller,
 // which selects between quickCanon and the exact canonicalize pipeline (see collectionsEnabled).
 QuickCanonResult quickCanon(const Position& p);
+
+// Instrumentation: tallies how many times quickCanon's fixpoint loop actually APPLIED each
+// distinct reduction (not merely considered it -- only the lexicographically-least candidate
+// each round is applied, see quickCanon's tier-1 loop). Keyed by the reduced left side's own
+// bracket/slash text, e.g. "[1a/" (S_2's own element, folds to S_1/S_2's shared rep "[2a/") or
+// "[0,a/" (also S_2, a different element sharing the same rep); the crit-cell/scab-cell boundary-
+// merge congruity (e.g. "[a,b/" -> "[ab/", and the k=3 variants "[a,bc/"/"[a,b,c/") is tracked the
+// same way, keyed by its own (registry-free) canonical left-side text. Global and cumulative
+// across calls -- callers doing a fresh count (e.g. one CSV per n) must resetQuickReductionCounts()
+// first.
+void resetQuickReductionCounts();
+const std::map<std::string, long long>& quickReductionCounts();
 
 // Canonical registry key for a left side authored as an encoding string (e.g. "2a", "0,a",
 // "12,a", or the double-crit "0,ba" -- the text between '[' and '/', crit membranes written as

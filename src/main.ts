@@ -33,7 +33,7 @@ import type { SaveFileV1 } from './model/saveState';
 import { openPositionBrowser, ensureWired as ensureBrowserWired, notifyLivePosition, isShowingLive, currentBrowsedCanon, onNavigated, setMoveCallbacks, setSyncCallbacks, onSyncModeChange, isSyncMode, setSyncMode, setSyncToggleEnabled, updateNavButtons } from './ui/positionBrowser';
 import { TrackedGame } from './engine/trackedGame';
 import type { MovePreviewTarget } from './ui/positionBrowser';
-import { initGuide } from './ui/guide';
+import { openGuide, closeGuide, isGuideOpen } from './ui/guide';
 import { initCollect } from './ui/collect';
 import { canon as canonEncoding, preloadModule, canonicalizeTrackedProvenanceSync, canonSync } from './engine/stalks';
 import { recordEdge, loadMasterSeed } from './model/positionCache';
@@ -585,6 +585,10 @@ document.addEventListener('keydown', e => {
   }
   // In manual-draw mode with a proposed arc, Enter force-commits that arc as a
   // proper edge without token verification (best-effort for blocked enclosures).
+  if (e.key === 'Escape') {
+    if (isGuideOpen()) { closeGuide(); return; }
+    if (collectOverlay.classList.contains('visible')) { collectOverlay.classList.remove('visible'); return; }
+  }
   if (e.key === 'Enter' && manualAwait && proposedArc) {
     e.preventDefault();
     const arc = proposedArc;
@@ -1051,12 +1055,19 @@ const browserBtn    = document.getElementById('browser-btn')      as HTMLButtonE
 
 guideBtn.addEventListener('click', e => {
   e.stopPropagation();
-  initGuide();
-  guideOverlay.classList.add('visible');
+  openGuide();
 });
-guideClose.addEventListener('click', () => guideOverlay.classList.remove('visible'));
+guideClose.addEventListener('click', () => closeGuide());
 guideOverlay.addEventListener('click', e => {
-  if (e.target === guideOverlay) guideOverlay.classList.remove('visible');
+  if (e.target === guideOverlay) closeGuide();
+});
+
+document.querySelectorAll<HTMLButtonElement>('.guide-hint').forEach(btn => {
+  btn.addEventListener('click', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    openGuide(btn.dataset.guideTopic);
+  });
 });
 
 // Collect (top bar).

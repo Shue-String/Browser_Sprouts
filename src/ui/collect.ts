@@ -38,6 +38,7 @@ import {
   GENOME_NAMES,
   KNOWN_COLLECTION_MEMBERS,
   NAMED_FAMILIES,
+  NAMED_FAMILY_GENOME_TEXT,
   computeAlphaGenome,
   expandGenomeShorthand,
   genomeKey,
@@ -118,6 +119,28 @@ let quickGenome = true;
 
 const HISTORY_STORAGE_KEY = 'sprouts-collect-alpha-v2';
 
+/** Coalesces render() calls triggered by async completions (acMarker/relevancyMarker resolving) --
+ * NOT for direct user-triggered calls (search, toggle, select), which still call render()
+ * immediately. Without this, a genome search with N hits whose classification isn't cached yet
+ * (e.g. S_1's 1000+-entry bucket) fires up to N separate completions, EACH doing a full history-
+ * list DOM rebuild (render() calls innerHTML='' + rebuilds every row) -- O(N^2) DOM work that hangs
+ * the tab. A plain microtask (queueMicrotask) under-batches here: each completion is itself the
+ * end of its own await chain, so consecutive completions land in different microtask turns, not
+ * the same one. A macrotask (setTimeout 0) waits for the CURRENT burst of already-settled promise
+ * callbacks to fully drain first, coalescing far more of them into each render. Deliberately NOT
+ * requestAnimationFrame -- rAF never fires in an off-screen/non-compositing tab (see
+ * reference_browser_preview_verification memory), which would hang this exact code path during
+ * headless verification even though it'd work fine in a real, visible browser window. */
+let renderScheduled = false;
+function scheduleRender(): void {
+  if (renderScheduled) return;
+  renderScheduled = true;
+  setTimeout(() => {
+    renderScheduled = false;
+    render();
+  }, 0);
+}
+
 function saveHistory(): void {
   try {
     localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
@@ -153,10 +176,15 @@ function loadHistory(): void {
   history = [];
 }
 
-/** Record a variation at the front of history (most-recent-first, deduped by label). */
-function addToHistory(entry: Entry): void {
+/** Record a variation at the front of history (most-recent-first, deduped by label). `persist`
+ * false skips the localStorage write -- for loadGenome's bulk-load loop, which would otherwise
+ * call saveHistory() (a full JSON.stringify + localStorage.setItem of the WHOLE list) once per
+ * hit, making an N-hit genome load O(N^2) -- fine at the old ~150-hit scale, but genuinely hangs
+ * the tab now that a bucket can have 1000+ hits (confirmed: S_1 went 138->1439 after adding the
+ * 3-spot .spec source). Callers doing a single add still default to persist=true. */
+function addToHistory(entry: Entry, persist = true): void {
   history = [entry, ...history.filter(h => h.label !== entry.label)];
-  saveHistory();
+  if (persist) saveHistory();
 }
 
 const AC_STORAGE_KEY = 'sprouts-collect-alpha-ac-v1';
@@ -425,7 +453,7 @@ function relevancyMarker(rootEnc: string, rootGenome: AlphaGenome | FourGeneGeno
     void computeRelevancy(rootGenome, t).then(result => {
       relevancyPending.delete(key);
       relevancyCache.set(key, formatRelevancy(result));
-      render();
+      scheduleRender();
     });
   }
   return '';
@@ -515,7 +543,7 @@ function acMarker(enc: string, known?: AlphaGenome | FourGeneGenome): string {
     acPending.add(enc);
     void isInAdvancedCollection(enc, known).then(result => {
       acPending.delete(enc);
-      if (result) render();
+      if (result) scheduleRender();
     });
   }
   return '';
@@ -607,8 +635,9 @@ async function loadGenome(raw: string): Promise<void> {
   // exact genome (anything looked at afterward re-appends normally).
   history = [];
   for (let i = hits.length - 1; i >= 0; i--) {
-    addToHistory(buildGenomeEntry(hits[i], parsed.R, parsed.D, parsed.L, parsed.Tprime));
+    addToHistory(buildGenomeEntry(hits[i], parsed.R, parsed.D, parsed.L, parsed.Tprime), false);
   }
+  saveHistory();
   // history[0] is the most recently added, which is hits[0] (lowest lives) -- open that one.
   status = '';
   statusIsError = false;
@@ -811,16 +840,19 @@ function exportEncoding(enc: string): string {
   return toLatexSymbols(bracketDisplaySlash(markAlpha(shiftMembraneLetters(enc))));
 }
 
-/** A T-child/T-grandchild's own quick-canon label, formatted for export the same way as
- * exportEncoding, plus its ⊕1 offset suffix as \oplus 1 instead of the on-screen "⊕ 1". */
-function exportQuickLabel(ref: PositionRef): string {
-  const base = exportEncoding(ref.quickEnc);
-  return ref.quickOffset ? `${base} \\oplus 1` : base;
+/** A T-child/T-grandchild's own real (canon) structural encoding, formatted for export the same
+ * way as exportEncoding -- the exact position reached, not the quick-canon rep (which is only
+ * proven nimber-equivalent up to quickOffset, per PositionRef's doc comment -- see
+ * feedback_prefer_quickcanon_display's caveat), per the user's request that the export table's T
+ * columns show real encodings. No offset suffix is needed here: that offset describes the
+ * quick-canon rep's own approximation of this position, not the position itself. */
+function exportCanonLabel(ref: PositionRef): string {
+  return exportEncoding(ref.enc);
 }
 
 function formatRelevancyExport(v: RelevancyVerdict): string {
   if (v.kind === 'name') return toLatexSymbols(v.name);
-  if (v.kind === 'position') return exportQuickLabel(v.ref);
+  if (v.kind === 'position') return exportCanonLabel(v.ref);
   return 'none';
 }
 
@@ -856,7 +888,7 @@ async function buildExportLatex(entry: Entry): Promise<string> {
   const rightRows: { child: string; relevancy: string }[] = [];
   for (const t of genome.T) {
     const verdict = await computeRelevancy(genome, t);
-    rightRows.push({ child: exportQuickLabel(t), relevancy: formatRelevancyExport(verdict) });
+    rightRows.push({ child: exportCanonLabel(t), relevancy: formatRelevancyExport(verdict) });
   }
 
   const rowCount = Math.max(leftRows.length, rightRows.length, 1);
@@ -869,7 +901,7 @@ async function buildExportLatex(entry: Entry): Promise<string> {
   for (let i = 0; i < rowCount; i++) {
     const l = leftRows[i];
     const r = rightRows[i];
-    const leftText = l ? `${l.mt} & $${exportEncoding(l.enc)}$ & $${l.nimber}$` : ' & & ';
+    const leftText = l ? `$${l.mt}$ & $${exportEncoding(l.enc)}$ & $${l.nimber}$` : ' & & ';
     const rightText = r
       ? `$${r.child}$ & ${r.relevancy === 'none' ? 'none' : `$${r.relevancy}$`}`
       : EXPORT_PAD;
@@ -925,8 +957,15 @@ function renderCollectionGroup(name: string, members: Entry[]): string {
   );
   const allItems = [...memberItems, ...staticItems];
   const items = allItems.length === 0 ? '<div class="collect-coll-empty">(none)</div>' : allItems.join('');
+  // Only names in NAMED_GENOME_DEFS (S_1, S_1⊕1, C_3, C_4, S_5, S_7) actually stand for a real
+  // single-alpha genome tuple -- S_3/S_4 (roster-only, two-crit) and "Other" have no entry, so no
+  // genome text is shown for them.
+  const genomeText = NAMED_FAMILY_GENOME_TEXT[name];
+  const genomeHtml = genomeText
+    ? `<span class="collect-coll-header-genome" title="${escapeHtml(genomeText)}">${escapeHtml(genomeText)}</span>`
+    : '';
   return `<details class="collect-coll-group" open>
-    <summary>${escapeHtml(name)} <span class="collect-coll-count">(${members.length + staticLabels.length})</span></summary>
+    <summary><span class="collect-coll-header-row"><span class="collect-coll-name">${escapeHtml(name)} <span class="collect-coll-count">(${members.length + staticLabels.length})</span></span>${genomeHtml}</span></summary>
     ${items}
   </details>`;
 }

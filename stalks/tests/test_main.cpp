@@ -858,33 +858,19 @@ int decompNimber(const stalks::Position& p, std::map<std::string, int>& memo) {
 }
 
 std::set<std::string> treeSet(int spots, bool decompressed = false) {
+    if (!decompressed)
+        return stalks::reachablePositions(spots);
     const std::string start = startEncoding(spots);
     std::set<std::string> visited;
-    if (decompressed) {
-        const stalks::Position root =
-            stalks::canonicalizeDecompressed(stalks::parsePosition(start));
-        std::vector<stalks::Position> stack{root};
-        visited.insert(ser(root));
-        while (!stack.empty()) {
-            const stalks::Position p = std::move(stack.back());
-            stack.pop_back();
-            for (auto& child : decompChildren(p))
-                if (visited.insert(ser(child)).second)
-                    stack.push_back(std::move(child));
-        }
-        return visited;
-    }
-    const stalks::Position root = stalks::canonicalize(stalks::parsePosition(start));
+    const stalks::Position root = stalks::canonicalizeDecompressed(stalks::parsePosition(start));
     std::vector<stalks::Position> stack{root};
     visited.insert(ser(root));
     while (!stack.empty()) {
         const stalks::Position p = std::move(stack.back());
         stack.pop_back();
-        for (auto& child : stalks::childrenAll(p)) {
-            child.validate();
+        for (auto& child : decompChildren(p))
             if (visited.insert(ser(child)).second)
                 stack.push_back(std::move(child));
-        }
     }
     return visited;
 }
@@ -1579,14 +1565,21 @@ void testCollections() {
 
     // A single-region 2-crit chunk is found and, for an S3 element, reduced to the shared rep
     // [2βα/. [2,βα/ (two boundaries) and [2βα/ (one boundary) are both S3, so both collapse to one
-    // rep with equal offset. The hosts are the leaf [12α/ (explicitly NOT in any collection), so
-    // the only reduction is the double-crit swap itself and the offset is exactly S3's 0.
+    // rep with equal offset. The lone hosts [12α/ are each individually NOT in any single-region
+    // collection, but as of the 2026-08-21 S_2 multi-region element "12C|2Ca" (CSV-sourced,
+    // user-confirmed), the bridge chunk {host, this region's OTHER host} now ALSO matches
+    // "12C|2Ca" (offset 1) -- e.g. cutting membrane A here leaves {region0's "2,B" part, region2
+    // "12B"} as a 2-region chunk matching that shape. So the total offset is S3's 0 XOR S_2
+    // multi's 1 = 1, not S3's bare 0 as before this element existed. Verified sound: zero
+    // quick-nimber mismatches through the n=5 sweep (17,252 minimal positions) with this element
+    // active, so this is a genuine additional reduction, not a regression -- see
+    // [[project_advanced_collections]].
     {
         const auto a = quickCanon(parsePosition("[2,AB|12A|12B]"));
         const auto b = quickCanon(parsePosition("[2AB|12A|12B]"));
         checkEq(ser(a.rep), ser(b.rep), "S3 double-crit: [2,βα/ and [2βα/ share one rep");
         checkEqInt(a.offset, b.offset, "S3 double-crit: partitions share one offset");
-        checkEqInt(a.offset, 0, "S3 double-crit swap keeps offset 0");
+        checkEqInt(a.offset, 1, "S3 double-crit + S_2 multi (12C|2Ca) combine to offset 1");
     }
 }
 
@@ -1676,10 +1669,17 @@ void testQuickNimber() {
         return it->second;
     };
 
-    // The quick-canon 2-spot count is 19 (author 2026-07-06: the historical 18 folded in an
-    // unjustified ad-hoc merge of distinct equal-nimber subpositions -- nimbers already handle
-    // those). S3/S4 double-crit (2026-07-07) drops 3/4/5-spot to 139/1262/13816. The Lemoine-Viennot
-    // old baseline is reported for cross-checking.
+    // The quick-canon 2-spot count is 18 (author 2026-08-17: the scab-cell rule -- merging a
+    // region of k=2 or k=3 lone scabs to one boundary, the scab analogue of the crit-cell merge --
+    // folds [2,2] through [22] to [1]. This is NOT the unjustified ad-hoc merge the 2026-07-06 fix
+    // rejected (which reintroduced the historical 18 via a nimber-lookup shortcut with no
+    // structural argument): a pure-scab region has zero membranes, so it is always a fully
+    // disconnected, standalone component (regions only connect via shared membrane pairings) --
+    // its nimber has no "right side y" dependence at all, so by Sprague-Grundy it is
+    // unconditionally interchangeable with any equal-nimber standalone component, in any sum. Zero
+    // quick-nimber mismatches through n=5 (17252 minimal positions; see testQuickNimber's
+    // soundness loop). S3/S4 double-crit (2026-07-07) drops 3/4/5-spot to 139/1262/13816 before the
+    // scab-cell rule; the Lemoine-Viennot old baseline is reported for cross-checking.
     static const std::map<int, long long> lvBaseline = {
         {2, 18}, {3, 157}, {4, 1796}, {5, 24784}, {6, 393103}};
 
@@ -1727,7 +1727,7 @@ void testQuickNimber() {
             std::cout << "; LV baseline " << lv->second;
         std::cout << "\n";
         if (n == 2)
-            checkEqInt(static_cast<long long>(qset.size()), 19, "2-spot quick-canon count");
+            checkEqInt(static_cast<long long>(qset.size()), 18, "2-spot quick-canon count");
     }
 }
 

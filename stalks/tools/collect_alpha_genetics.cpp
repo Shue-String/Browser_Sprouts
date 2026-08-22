@@ -233,6 +233,16 @@ int main(int argc, char** argv) {
     std::cerr << "distinct single-alpha positions " << byEnc.size() << ", distinct genomes "
               << byGenome.size() << "\n";
 
+    // Lives distribution -- no filtering happens here (this tool always emits the FULL scanned
+    // set); a separate downstream step decides what subset actually ships to the Collect pane
+    // (see tools/filter_collect_alpha_lives.js). Printed so the full backend data's shape is
+    // visible without having to load the (potentially tens-of-MB) JSON just to check it.
+    std::map<int, int> livesHist;
+    for (const auto& [enc, e] : byEnc) ++livesHist[e.lives];
+    std::cerr << "lives distribution:";
+    for (const auto& [lives, count] : livesHist) std::cerr << " " << lives << ":" << count;
+    std::cerr << "\n";
+
     std::ofstream f(outPath, std::ios::binary);
     if (!f) {
         std::cerr << "cannot open output file: " << outPath << "\n";

@@ -19,6 +19,23 @@ std::string startEncoding(int spots) {
     return s;
 }
 
+std::set<std::string> reachablePositions(int spots) {
+    std::set<std::string> visited;
+    const Position root = canonicalize(parsePosition(startEncoding(spots)));
+    std::vector<Position> stack{root};
+    visited.insert(serialize(root));
+    while (!stack.empty()) {
+        const Position p = std::move(stack.back());
+        stack.pop_back();
+        for (auto& child : childrenAll(p)) {
+            child.validate();
+            if (visited.insert(serialize(child)).second)
+                stack.push_back(std::move(child));
+        }
+    }
+    return visited;
+}
+
 GameGraph::GameGraph(int spots, Mode mode) : mode_(mode) {
     const QuickCanonResult r = identityForm(parsePosition(startEncoding(spots)));
     rootOffset_ = r.offset;

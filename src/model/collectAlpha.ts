@@ -383,6 +383,16 @@ export const COLLECTION_ROSTER_FOLDER_NAMES: string[] = COLLECTION_ROSTERS.map(r
 
 export const GENOME_NAMES: Record<string, string> = withCompactKeys(NAMED_GENOME_DEFS);
 
+/** Inverse of NAMED_GENOME_DEFS: each named family's own assigned genome tuple text (folded form --
+ * nested named T-children shown as their own names, e.g. C_4's "[S_1]" rather than S_1's full
+ * tuple), keyed by the family name. Used by the Collect pane's Collections panel to show which
+ * genome shape a pre-defined folder (S_1, S_1⊕1, C_3, C_4, S_5, S_7) actually stands for, right on
+ * its header -- S_3/S_4 (roster-only, two-crit, no single-alpha genome at all) simply have no entry
+ * here, same as they have none in NAMED_GENOME_DEFS. */
+export const NAMED_FAMILY_GENOME_TEXT: Record<string, string> = Object.fromEntries(
+  Object.entries(NAMED_GENOME_DEFS).map(([key, name]) => [name, key]),
+);
+
 /** A named genome's identity for Advanced-Collection membership testing: its (R,D,{L},{T'}) core
  * (the compact-form key text, e.g. "(0,1,{0,2},{})") plus the folded-plain names of its own
  * lowest-order T-children (e.g. S_5's ["C_4","S_1⊕1"]). A bigger, non-lowest-order position
