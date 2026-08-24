@@ -722,7 +722,17 @@ const std::vector<CritFamily>& singleCritFamilies() {
          {{"S_1", 0,
            {"2,a", "0,a", "2,2,2,a", "1,2a", "5,2a", "23,2a", "2,2,3,a",
             "13a", "23,3a", "22,2a", "2,3,3,a", "1,3a", "3,23,a", "22,3a", "17a8", "377a88",
-            "57a8", "33,2a"}},
+            "57a8", "33,2a",
+            // 10 elements added 2026-08-23 (user-provided). Each verified via
+            // tools/verify_left_side.cpp: direct exact-nimber comparison against rep "2a" across
+            // 8 plain hosts + 4 joint-bearing hosts (incl. "0,0,17Z8", the exact shape that
+            // caught the 277a88/S_7 bug) -- offset 0 held on every host tried for all ten,
+            // including the partition-sensitive ones ("13,a" vs the already-registered "13a";
+            // "3,5a" vs "35a" -- distinct boundary partitions of the same tokens, per the
+            // 2026-07-06 "12,a"-vs-"1,2a" lesson that partition is significant and must not be
+            // assumed from a similar-looking sibling).
+            "3,1a", "1,3,a", "13,a", "3,37a8", "3,3,2a", "3,5a", "3738a", "337a8", "35a",
+            "1,12,2a"}},
           {"S_2", 1,
            {"1a", "1,a", "5a", "5,a", "2,2a", "22a", "2,2,a", "27a8",
             "2,3a", "23a", "2,3,a", "37a8", "3,2a", "0,2a", "0,3a", "22,a", "23,a"}}}},
@@ -733,7 +743,7 @@ const std::vector<CritFamily>& singleCritFamilies() {
         // that caught the 277a88 bug) finding zero discrepancies -- evidence pointed to it being
         // sound, but user wanted it out of the registry anyway; see
         // [[project_advanced_collections]] if this needs revisiting.
-        {"12a", {{"S_5", 0, {"3,27a8", "25a", "2738a"}}}},
+        {"12a", {{"S_5", 0, {"3,27a8", "25a", "2738a", "3,22a"}}}},
         {"1,2,a", {{"S_6", 0, {"2,23,a"}}}},
         // "277a88" (CSV row 48) was first registered under S_7 and PROVEN UNSOUND there
         // 2026-08-21 by direct engine test (non-constant offset across right sides -- see
@@ -743,7 +753,14 @@ const std::vector<CritFamily>& singleCritFamilies() {
         // ELEMENT of (rather than S_9's own rep) before this split. Re-verified "277a88" directly
         // against "34a" across the SAME three hosts used to disprove it under S_7: all three now
         // agree exactly (offset 0), confirming the fix.
-        {"2,1a", {{"S_7", 0, {"227a8", "2,5a", "2,37a8"}}}},
+        {"2,1a", {{"S_7", 0, {"227a8", "2,5a", "2,37a8", "223a"}}}},
+        // S_8 added 2026-08-23 (user-provided; genome (0,3,{0},{},[S_2,C_3,C_4])). Rep "12,a" is
+        // the EXACT shape proven 2026-07-06 NOT to be an S_1 member (crit alone in its own
+        // boundary, distinct from valid S_1 element "1,2a") and again explicitly skipped
+        // 2026-08-21 when it resurfaced in the CSV under S_1 -- both calls were correct: "12,a"
+        // was never an S_1 element, it just turns out to be its OWN family's rep instead, not
+        // invalid shape. Standalone, no Pairing-Theorem sibling identified (like C_3/C_4/S_5).
+        {"12,a", {{"S_8", 0, {"25,a", "2728,a", "2738,a"}}}},
         {"34a", {{"S_9", 0, {"277a88", "3,4a", "4,3a", "273a8", "237a8"}}}},
     };
     return families;
@@ -775,8 +792,18 @@ const std::vector<CritFamily>& doubleCritFamilies() {
 // element is `[2CD|2CDα/` (both C and D connect the same two regions, mirroring S_1's element).
 const std::vector<CritFamily>& multiCritFamilies() {
     static const std::vector<CritFamily> families = {
-        {"2a", {{"S_1", 0, {"2CD|2a,CD", "4C|2Ca", "2CD|7CD8a", "22C|2Ca", "11C|2Ca"}},
-                {"S_2", 1, {"12C|2Ca"}}}},
+        {"2a", {{"S_1", 0,
+                 {"2CD|2a,CD", "4C|2Ca", "2CD|7CD8a", "22C|2Ca", "11C|2Ca",
+                  // 6 elements added 2026-08-23 (user-provided), same verification method and
+                  // date as the single-region batch above. "CD|CEF|DEFa" and "CD|CEF|EDFa" are
+                  // genuinely distinct (region2's boundary is a different cyclic order, not a
+                  // rotation/mirror of the other -- different adjacency, not a relabeling); "CD|
+                  // CEF|DEF,a" is the same three regions as "CD|CEF|DEFa" but with the crit split
+                  // into its OWN boundary in region2 (partition-sensitive, same caution as the
+                  // single-region batch's "13,a").
+                  "CDE|CDF|EFa", "CD|CEF|DEFa", "CD|CEF|EDFa", "CD|CEF|DEF,a", "CD|3CE|DEa",
+                  "CD|CE|3DaE"}},
+                {"S_2", 1, {"12C|2Ca", "1CD|CD,2a"}}}},
         {"4a", {{"C_4", 0, {"3C|Ca", "3C|C,a", "3,C|Ca", "3,C|C,a"}}}},
         {"12a", {{"S_5", 0, {"2CD|2CDa"}}}},
         {"1,2,a", {{"S_6", 0, {"2CD|C2Da", "CD|CE|2DaE"}}}},
@@ -1197,6 +1224,31 @@ void recordQuickReduction(const std::string& key) {
 // exposed by a later one -- e.g. DisaPoint compression revealing a fresh crit-cell). This is
 // exactly tier 1/tier 2's existing DisaPoint-last rationale (see applyDisaPoints' doc comment),
 // generalized to a fully-ordered six-step pass instead of a two-tier one.
+//
+// Re-canonicalization (2026-08-22 fix): steps 1-4 do NOT need `cur` in canonical form to find or
+// apply their own candidates (see each step's own doc comment -- their enumerate*/apply* helpers
+// already re-minimize internally via regionKey/leftSideKey). The previous code called
+// normalizeQuick() after EVERY one of steps 1-4 individually; quickCanon's outer loop below
+// instead runs all four together to their OWN local fixpoint against one un-canonicalized `cur`,
+// canonicalizing exactly ONCE at the end of that batch. Measured at n=5 (instrumented call
+// counters, since removed): this cuts steps-1-4's own normalizeQuick calls from 20,114 to 18,269
+// per 66,756 quickCanon() invocations -- real, but only ~1% of the ~176k total canonicalize-
+// family calls, so it does NOT produce a measurable wall-clock change on its own. The dominant
+// cost is elsewhere and is NOT this kind of redundancy: the per-invocation initial normalizeQuick
+// (66,756 calls, one per invocation, unavoidable -- a base form is needed before any step can
+// match) and applyDisaPoints' canonicalizeFull (87,892 calls, ~1.32 per invocation -- one
+// mandatory check per OUTER pass to see whether DisaPoint compression exposes anything new,
+// already near the theoretical floor of 1). Together those two are ~88% of all canonicalize-
+// family calls and are not redundant in the "after every move" sense this fix targeted. Step 5
+// (multi-region) still canonicalizes internally per application -- it genuinely needs a
+// comparable, reindexed position to pick the lex-least candidate and to re-enumerate against (see
+// step 5's own doc comment) -- but at n=5 this fires only ~1,125 times total, a minor share.
+// Bottom line: a real further speedup here would have to cut the NUMBER of outer passes per
+// invocation (why do ~32% of invocations need a 2nd pass?) or make canonicalize()/canonicalizeFull
+// themselves cheaper -- not restructure when they're called. See
+// [[project_quickcanon_recanonicalization_perf]] in memory for the corrected writeup; the prior
+// session's "~2.65x, 85-90%, expect ~2x speedup" framing conflated canonicalize+canonicalizeFull
+// call counts as if equally redundant, which this measurement disproves.
 // ---------------------------------------------------------------------------
 
 // Step 1: crit-cell congruity. Batch-applies every eligible merge found against a per-component
@@ -1336,22 +1388,36 @@ QuickCanonResult quickCanon(const Position& p) {
 
     while (true) {
         bool changed = false;
-        if (stepCritCell(cur)) {
+
+        // Steps 1-4 are region-local (see the section doc comment above): none of their
+        // enumerate*/apply* functions require `cur` to already be in canonical form to find or
+        // apply their candidates correctly (regionKey/leftSideKey already re-minimize internally).
+        // So run all four to their own local fixpoint against the SAME un-canonicalized `cur`,
+        // and canonicalize once at the end of that batch -- not after each individual step. A
+        // change introduced by a later step (e.g. double-crit) can expose a fresh opportunity for
+        // an earlier one (e.g. crit-cell), so this inner loop keeps re-running steps 1-4 until
+        // none of them find anything more, exactly mirroring what the single shared canonicalize
+        // call used to do as a side effect of re-normalizing between every step.
+        bool batchChanged = false;
+        while (true) {
+            bool stepChanged = false;
+            if (stepCritCell(cur))
+                stepChanged = true;
+            if (stepScabCell(cur))
+                stepChanged = true;
+            if (stepSingleCrit(cur, offset))
+                stepChanged = true;
+            if (stepDoubleCrit(cur, offset))
+                stepChanged = true;
+            if (!stepChanged)
+                break;
+            batchChanged = true;
+        }
+        if (batchChanged) {
             cur = normalizeQuick(cur);
             changed = true;
         }
-        if (stepScabCell(cur)) {
-            cur = normalizeQuick(cur);
-            changed = true;
-        }
-        if (stepSingleCrit(cur, offset)) {
-            cur = normalizeQuick(cur);
-            changed = true;
-        }
-        if (stepDoubleCrit(cur, offset)) {
-            cur = normalizeQuick(cur);
-            changed = true;
-        }
+
         if (stepMultiRegion(cur, offset))
             changed = true;  // already normalizeQuick'd internally, once per application
 

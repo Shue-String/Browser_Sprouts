@@ -246,7 +246,10 @@ const GENOME_QUERY_RE =
  * for lower-order positions. C_4 = (1,2,{1},{0},[S_1]) -- literally containing S_1 as its one
  * T-child. S_5 = (0,1,{0,2},{},[C_4,S_1⊕1]) -- containing both C_4 and S_1⊕1 as its two
  * T-children. S_7 = (0,3,{0,2},{},[C_3,S_1⊕1]) -- containing both C_3 and S_1⊕1 as its two
- * T-children. [T] entries in GENOME_NAMES keys are always in lexicographic order (see
+ * T-children. S_8 = (0,3,{0},{},[C_3,C_4,S_1⊕1]) -- containing C_3, C_4, and S_1⊕1 as its three
+ * T-children (added 2026-08-23; cross-checked against the regenerated genome DB -- the single
+ * `(0,3,{0},{})` bucket's T-children are exactly quick-canon reps `3a`/`4a`/`2a⊕1`, i.e. C_3/C_4/
+ * S_2). [T] entries in GENOME_NAMES keys are always in lexicographic order (see
  * collect.ts's genomeParts, which sorts [T] the same way before matching) -- the engine's own T
  * move-search order is arbitrary and unrelated to this.
  *
@@ -268,6 +271,7 @@ export const GENOME_SHORTHANDS: Record<string, string> = {
   C_4: '(1,2,{1},{0},[(0,1,{0},{},[])])',
   S_5: '(0,1,{0,2},{},[(1,0,{1},{},[(0,1,{0},{},[])]),(1,2,{1},{0},[(0,1,{0},{},[])])])',
   S_7: '(0,3,{0,2},{},[(1,1,{0},{0},[]),(1,0,{1},{},[(0,1,{0},{},[])])])',
+  S_8: '(0,3,{0},{},[(1,1,{0},{0},[]),(1,2,{1},{0},[(0,1,{0},{},[])]),(1,0,{1},{},[(0,1,{0},{},[])])])',
 };
 
 /** Expand a search-bar shorthand name (e.g. "S_1", "S_1+1", "S_2") to its full genome-query text;
@@ -313,6 +317,7 @@ const NAMED_GENOME_DEFS: Record<string, string> = {
   '(1,2,{1},{0},[S_1])': 'C_4',
   '(0,1,{0,2},{},[C_4,S_1⊕1])': 'S_5',
   '(0,3,{0,2},{},[C_3,S_1⊕1])': 'S_7',
+  '(0,3,{0},{},[C_3,C_4,S_1⊕1])': 'S_8',
 };
 
 interface CollectionRosterEntry {
