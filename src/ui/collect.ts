@@ -196,12 +196,25 @@ const AC_STORAGE_KEY = 'sprouts-collect-alpha-ac-v1';
  * T-grandchild during someone else's check) shows its "!!" immediately with no recomputation at
  * all, instead of
  * repeating the same recursive engine calls every time the Collect pane is reopened. */
-function saveAcResults(): void {
-  try {
-    localStorage.setItem(AC_STORAGE_KEY, JSON.stringify([...acResult.entries()]));
-  } catch {
-    /* ignore quota/availability errors */
-  }
+let acSaveScheduled = false;
+/** Debounced the same way scheduleRender is (see its doc comment): acResult only ever grows, so
+ * this write's cost (a full JSON.stringify of the WHOLE map) grows with it -- and an Advanced-
+ * Collection check for a family match can resolve a whole cluster of T-children/extra-children in
+ * one go (see isInAdvancedCollection's recursion), each independently calling this. Without
+ * coalescing, one search could re-serialize the entire (ever-growing, cross-session-persisted) map
+ * several times over, once per position resolved in that burst, instead of once for the whole
+ * batch. */
+function scheduleAcSave(): void {
+  if (acSaveScheduled) return;
+  acSaveScheduled = true;
+  setTimeout(() => {
+    acSaveScheduled = false;
+    try {
+      localStorage.setItem(AC_STORAGE_KEY, JSON.stringify([...acResult.entries()]));
+    } catch {
+      /* ignore quota/availability errors */
+    }
+  }, 0);
 }
 
 function loadAcResults(): void {
@@ -364,8 +377,22 @@ function foldedPlainOf(g: AlphaGenome | FourGeneGenome, depth: number): string {
  * GENOME_NAMES/foldToName) -- i.e. this genome IS a named one, not just containing one as a T
  * T-child. Ignores the Quick-Genome toggle (checked as if it were on) since this is used to flag
  * list entries, which should still surface the match even with the toggle off. */
+/** Memoized on the genome object itself: `history` only grows across a session (and is persisted
+ * across sessions via HISTORY_STORAGE_KEY, see loadHistory), but render() re-evaluates isNamedGenome
+ * for EVERY history entry (and every active-entry T-row, see renderTList) on every single re-render
+ * -- and a re-render fires once per settled relevancy/AC check, not once per search. Without this
+ * cache, foldedPlainOf's full recursive tree walk re-runs for every already-classified entry every
+ * time, so the per-render cost (and hence the visible lag between typing a search and seeing its
+ * result) grows without bound as more positions accumulate in history. A genome object is only ever
+ * replaced wholesale (selectEntry's stand-in-to-fresh upgrade creates a new object), never mutated in
+ * place, so keying on identity needs no invalidation. */
+const isNamedGenomeCache = new WeakMap<AlphaGenome | FourGeneGenome, boolean>();
 function isNamedGenome(genome: AlphaGenome | FourGeneGenome): boolean {
-  return !foldedPlainOf(genome, 0).startsWith('(');
+  const cached = isNamedGenomeCache.get(genome);
+  if (cached !== undefined) return cached;
+  const result = !foldedPlainOf(genome, 0).startsWith('(');
+  isNamedGenomeCache.set(genome, result);
+  return result;
 }
 
 /** A genome's bare (R,D,{L},{T'}) core, matching the format of NamedFamily.coreKey exactly (same
@@ -528,7 +555,7 @@ function isInAdvancedCollection(enc: string, known?: AlphaGenome | FourGeneGenom
   acCache.set(enc, promise);
   void promise.then(result => {
     acResult.set(enc, result);
-    saveAcResults();
+    scheduleAcSave();
   });
   return promise;
 }
@@ -957,9 +984,9 @@ function renderCollectionGroup(name: string, members: Entry[]): string {
   );
   const allItems = [...memberItems, ...staticItems];
   const items = allItems.length === 0 ? '<div class="collect-coll-empty">(none)</div>' : allItems.join('');
-  // Only names in NAMED_GENOME_DEFS (S_1, S_1⊕1, C_3, C_4, S_5, S_7) actually stand for a real
-  // single-alpha genome tuple -- S_3/S_4 (roster-only, two-crit) and "Other" have no entry, so no
-  // genome text is shown for them.
+  // Only names in NAMED_GENOME_DEFS (S_1, S_1⊕1, C_3, C_4, S_5, S_6, S_7, S_8, S_9) actually stand
+  // for a real single-alpha genome tuple -- S_3/S_4 (roster-only, two-crit) have no entry, so no genome text
+  // is shown for them.
   const genomeText = NAMED_FAMILY_GENOME_TEXT[name];
   const genomeHtml = genomeText
     ? `<span class="collect-coll-header-genome" title="${escapeHtml(genomeText)}">${escapeHtml(genomeText)}</span>`
@@ -974,20 +1001,21 @@ function renderCollectionGroup(name: string, members: Entry[]): string {
  * currently in `history` (i.e. every partial-position the user has looked at in this pane, quick-
  * canon-reduced same as everywhere else in Collect), grouped by which NAMED_FAMILIES entry it
  * belongs to -- exact match ("!") or Advanced-Collection member ("!!"), same test collect-t-table's
- * own bang markers use -- with everything else bucketed under "Other". A no-op (and leaves the
- * panel's previous content alone) while the panel is closed, so building this tree doesn't run
- * every render() call for no reason.
+ * own bang markers use. Anything that matches no family isn't shown here at all (dropped the old
+ * catch-all "Other" bucket, which added little and tended to balloon with every unrelated position
+ * ever looked at). A no-op (and leaves the panel's previous content alone) while the panel is
+ * closed, so building this tree doesn't run every render() call for no reason.
  *
  * The folder LIST is NAMED_FAMILIES' names (real, computable genome shapes: S_1, S_1⊕1, C_3, C_4,
- * S_5, S_7) unioned with COLLECTION_ROSTER_FOLDER_NAMES (every collection currently registered in
+ * S_5, S_6, S_7, S_8, S_9) unioned with COLLECTION_ROSTER_FOLDER_NAMES (every collection currently registered in
  * stalks/src/collections.cpp, straight from src/data/collectionsRoster.json -- S_3/S_4 today, but
  * also whatever's added there later) -- so a brand-new Stalks-side collection gets a folder (with
  * its static roster content, via KNOWN_COLLECTION_MEMBERS) with NO TypeScript change needed, even
  * before anyone teaches this file how to classify a REAL analyzed position into it.
  *
  * Reuses isNamedGenome/acMarker/familyForGenome rather than re-deriving membership: acMarker's
- * pending-check + re-render-on-resolve pattern means a freshly-added entry can briefly show under
- * Other until its "!!" check resolves, then move into its real family on the next render() --
+ * pending-check + re-render-on-resolve pattern means a freshly-added entry can appear in no folder
+ * at all until its "!!" check resolves, then move into its real family on the next render() --
  * exactly the same lazy-settle behavior the main list's own bang markers already have. */
 function renderCollections(): void {
   const dialog = document.getElementById('collect-dialog');
@@ -995,7 +1023,6 @@ function renderCollections(): void {
   if (!dialog || !panel || !dialog.classList.contains('collections-open')) return;
 
   const byFamily = new Map<string, Entry[]>();
-  const other: Entry[] = [];
   for (const entry of history) {
     const named = isNamedGenome(entry.genome);
     const bang = named ? '!' : acMarker(entry.position.enc, entry.genome);
@@ -1003,8 +1030,6 @@ function renderCollections(): void {
     if (family) {
       if (!byFamily.has(family.name)) byFamily.set(family.name, []);
       byFamily.get(family.name)!.push(entry);
-    } else {
-      other.push(entry);
     }
   }
 
@@ -1013,7 +1038,6 @@ function renderCollections(): void {
   for (const name of folderNames) {
     html += renderCollectionGroup(name, byFamily.get(name) ?? []);
   }
-  html += renderCollectionGroup('Other', other);
   panel.innerHTML = html;
 
   panel.querySelectorAll<HTMLElement>('[data-label]').forEach(el => {
