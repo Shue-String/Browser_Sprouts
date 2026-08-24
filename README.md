@@ -1,7 +1,4 @@
-### How to use
-1)  Download repo
-2)  Double-click "Sprouts" (dist/index.html if the shortcut doesn't work)
-3)  Enjoy!  (Optional)
+Playable at https://shue-string.github.io/Browser_Sprouts/
 
 ### Purpose
 This program is intended as a supplement to the paper "Related Classes of Positions in the Game of Sprouts" (currently unpublished).  This app is *not* intended to be part of the paper, but in developing the app, several people said that it helped them understand the paper better, so I'm packaging them together with the hope that they complement each other.  Just remember: if in doubt, trust the math, not this app.
