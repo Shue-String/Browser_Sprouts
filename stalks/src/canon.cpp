@@ -1328,6 +1328,37 @@ splitMinimalTracked(const Component& c, const CompSrc& src) {
 
 namespace {
 
+// canonMinimal() is a pure function of (piece content, slackOff, recompressFirst, brute,
+// structural): its search never reads or mutates anything outside its own arguments (env-var
+// knobs like STALKS_CANON_CAP/STALKS_CANON_ORBIT only pick which internal algorithm runs -- the
+// resulting canonical form is proven identical either way, see candidateCap/orbitThreshold's own
+// doc comments). Measured recurrence of the exact raw (pre-canon) piece across Quick-mode builds:
+// n=5 canonicalizeFull pieces repeat 91% of the time, canonicalize's (structural-only) 32%; at
+// n=6, overall hit rate 68.75% (2,648,463 hits / 3,852,303 lookups) -- small shapes recur heavily
+// (matches earlier region-shape recurrence data: 2-token regions recur ~1000x, collapsing to ~1x
+// by 10+ tokens). So it's cached here, process-lifetime, keyed on exactly those five inputs (the
+// serialized piece stands in for its content). Never invalidated:
+// nothing about a piece's canonical form can change after the fact. Measured wall-clock effect on
+// a real Quick-mode GameGraph build: n=5 25.9s -> 14.7s (-43%), n=6 ~541s -> 356s (-34%); verified
+// byte-identical output both sizes (515/515 stalks_tests, n=5 and n=6 quick-reduction mileage CSVs
+// unchanged).
+std::unordered_map<std::string, Component>& canonMinimalCache() {
+    static std::unordered_map<std::string, Component> cache;
+    return cache;
+}
+
+std::string canonMinimalCacheKey(bool structural, bool slackOff, bool brute, bool recompressFirst,
+                                  const Component& piece) {
+    std::string key;
+    key.push_back(structural ? 'S' : 'F');
+    key.push_back(slackOff ? '1' : '0');
+    key.push_back(brute ? '1' : '0');
+    key.push_back(recompressFirst ? '1' : '0');
+    key.push_back('|');
+    key += serialize(piece);
+    return key;
+}
+
 Position canonicalizeImpl(const Position& p, bool slackOff, bool compressed, bool brute = false,
                           bool structural = true) {
     std::vector<Component> minimals;
@@ -1341,8 +1372,17 @@ Position canonicalizeImpl(const Position& p, bool slackOff, bool compressed, boo
         // at all for the decompressed graph.
         const Component reduced = reduceDecompressed(comp);
         for (auto& piece : splitMinimal(reduced)) {
-            minimals.push_back(
-                canonMinimal(piece, slackOff, /*recompressFirst=*/compressed, brute, structural));
+            auto& cache = canonMinimalCache();
+            const std::string key = canonMinimalCacheKey(structural, slackOff, brute, compressed, piece);
+            const auto it = cache.find(key);
+            if (it != cache.end()) {
+                minimals.push_back(it->second);
+            } else {
+                Component result =
+                    canonMinimal(piece, slackOff, /*recompressFirst=*/compressed, brute, structural);
+                minimals.push_back(result);
+                cache.emplace(key, std::move(result));
+            }
             anyLive = true;
         }
     }
