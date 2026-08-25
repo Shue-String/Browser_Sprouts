@@ -47,6 +47,16 @@ int Component::lives2() const {
     return total;
 }
 
+int Component::leftSideLives2() const {
+    if (dead)
+        return 0;
+    int total = 0;
+    for (const auto& reg : regions)
+        for (const auto& b : reg)
+            total += stalks::leftSideLives2(b);
+    return total;
+}
+
 void Component::validate() const {
     if (dead) {
         if (!regions.empty() || !pairings.empty())
@@ -208,6 +218,13 @@ int Position::lives2() const {
     int total = 0;
     for (const auto& c : components)
         total += c.lives2();
+    return total;
+}
+
+int Position::leftSideLives2() const {
+    int total = 0;
+    for (const auto& c : components)
+        total += c.leftSideLives2();
     return total;
 }
 

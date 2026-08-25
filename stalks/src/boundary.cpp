@@ -143,4 +143,11 @@ int lives2(const Bnd& b) {
     return total;
 }
 
+int leftSideLives2(const Bnd& b) {
+    int total = 0;
+    for (Token t : b)
+        total += leftSideLives2(t);
+    return total;
+}
+
 } // namespace stalks

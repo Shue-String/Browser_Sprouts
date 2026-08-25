@@ -133,6 +133,19 @@ constexpr int lives2(Token t) {
     }
 }
 
+// Doubled lives (2L) contributed by one token, when counting the lives of a LEFT SIDE (the
+// detached chunk left when a crit is cut -- see collections.hpp). Differs from lives2() only for
+// DisaPoint (1 life instead of 2) and split point (2 lives instead of 3); every other token is
+// unchanged. Used exclusively for left-side life counts -- lives2() itself is untouched and
+// remains the general-purpose life count used everywhere else in the engine.
+constexpr int leftSideLives2(Token t) {
+    switch (t) {
+        case DISA:  return 2;  // 1 life instead of 2
+        case SPLIT: return 4;  // 2 lives instead of 3
+        default:    return lives2(t);
+    }
+}
+
 class EncodingError : public std::runtime_error {
 public:
     explicit EncodingError(const std::string& msg) : std::runtime_error(msg) {}

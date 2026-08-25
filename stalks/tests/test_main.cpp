@@ -158,6 +158,13 @@ void testBoundaryOps() {
     // Doubled lives.
     checkEqInt(lives2(toBnd("0")), 6, "lives2 spot");
     checkEqInt(lives2(toBnd("7182")), 2 + 4 + 2 + 0, "lives2 7182");
+
+    // Left-side lives: DisaPoint (3) and split point (5) differ from lives2(); everything else
+    // matches.
+    checkEqInt(leftSideLives2(toBnd("0")), 6, "leftSideLives2 spot unchanged");
+    checkEqInt(leftSideLives2(toBnd("3")), 2, "leftSideLives2 disapoint 1 life");
+    checkEqInt(leftSideLives2(toBnd("5")), 4, "leftSideLives2 split point 2 lives");
+    checkEqInt(leftSideLives2(toBnd("35")), 6, "leftSideLives2 disapoint+split");
 }
 
 void testParseSerialize() {

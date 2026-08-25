@@ -36,4 +36,8 @@ std::vector<int> bodyParts(const Bnd& b);
 // Doubled lives of the whole boundary.
 int lives2(const Bnd& b);
 
+// Doubled lives of the whole boundary, counted for a left side (see tokens.hpp's
+// leftSideLives2()).
+int leftSideLives2(const Bnd& b);
+
 } // namespace stalks

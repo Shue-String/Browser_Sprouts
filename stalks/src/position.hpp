@@ -41,6 +41,9 @@ struct Component {
 
     int lives2() const;
 
+    // Doubled lives, counted for a left side (see tokens.hpp's leftSideLives2()).
+    int leftSideLives2() const;
+
     // pairIndex()[r][b][occ] = index into pairings for that membrane occurrence, or -1
     // if unpaired. Throws EncodingError on inconsistent pairings.
     std::vector<std::vector<std::vector<int>>> pairIndex() const;
@@ -61,6 +64,10 @@ struct Position {
     std::vector<Component> components;
 
     int lives2() const;
+
+    // Doubled lives, counted for a left side (see tokens.hpp's leftSideLives2()).
+    int leftSideLives2() const;
+
     void validate() const;
     Position decompressed() const;
 };

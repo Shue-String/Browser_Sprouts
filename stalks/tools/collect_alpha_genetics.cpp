@@ -36,6 +36,7 @@
 //
 // Usage: collect_alpha_genetics <out.json> <spec1.spec> [spec2.spec ...]
 
+#include "alpha_genome.hpp"
 #include "canon.hpp"
 #include "collections.hpp"
 #include "encoding.hpp"
@@ -85,7 +86,8 @@ struct Entry {
 };
 
 // Comma-joined values, no wrapping braces/brackets -- for embedding directly inside a JSON array
-// literal (setStr below wraps this in "{...}" for the human-facing genome-bucket key text).
+// literal (alpha_genome.cpp's genomeKey wraps the equivalent in "{...}" for the human-facing
+// genome-bucket key text).
 std::string setStrBare(const std::set<int>& s) {
     std::string out;
     bool first = true;
@@ -95,14 +97,6 @@ std::string setStrBare(const std::set<int>& s) {
         out += std::to_string(v);
     }
     return out;
-}
-
-std::string setStr(const std::set<int>& s) {
-    return "{" + setStrBare(s) + "}";
-}
-
-std::string genomeKey(int R, int D, const std::set<int>& L, const std::set<int>& Tprime) {
-    return "(" + std::to_string(R) + "," + std::to_string(D) + "," + setStr(L) + "," + setStr(Tprime) + ")";
 }
 
 // Exactly one special-point character present in `enc`, and it's specifically alpha ('a') -- see
@@ -161,11 +155,26 @@ int main(int argc, char** argv) {
             Entry e;
             e.enc = node.enc;
             e.quick = quickDisp(p);
-            e.lives = p.lives2() / 2;
-            std::optional<int> R, D;
-            bool warned = false;
-            std::set<std::pair<std::string, int>> seenTChild;
+            // canonicalizeFull, not p itself: p deliberately stays DisaPoint-decompressed (see
+            // canon.hpp -- canonicalize() compresses Hollow/Split/Triplet but not DisaPoints) so
+            // the movetype classification below sees the base structural form it always has.
+            // leftSideLives2()'s whole point is counting a literal DISA token as 1 life instead of
+            // 2 (see tokens.hpp); computing it on the decompressed form would never see a DISA
+            // token to apply that rule to. Isolated to just this field via a throwaway copy, so it
+            // doesn't disturb the movetype pipeline's own canonical form.
+            e.lives = canonicalizeFull(p).leftSideLives2() / 2;
 
+            const auto genome = stalks_tools::classifyAlphaGenome(p, db);
+            if (!genome) continue;  // shouldn't happen; skip defensively
+            e.R = genome->R;
+            e.D = genome->D;
+            e.L = genome->L;
+            e.Tprime = genome->Tprime;
+
+            // T-children (movetype 5, untouched-alpha children) are NOT part of the genome bucket
+            // key computed above, so they're gathered in their own pass -- see this file's
+            // top-of-comment doc for why T stays separate.
+            std::set<std::pair<std::string, int>> seenTChild;
             for (const auto& [child, tag] : childrenAllWithMoveTag(p)) {
                 const EdgeTag et = edgeTagFromMoveTag(d, tag);
                 const auto sparse = specialPointMovetypes(p, et, child);
@@ -173,50 +182,16 @@ int main(int argc, char** argv) {
                 for (const auto& [tok, mt] : sparse) {
                     if (tok == ALPHA) { movetype = mt; break; }
                 }
-                if (movetype <= 0) continue;  // alpha not classified on this edge -- shouldn't happen
+                if (movetype != 5) continue;
 
                 SpecValue val;
-                if (!db.value(child, val)) {
-                    if (!warned) {
-                        std::cerr << "  warning: child of " << node.enc << " not found in graph, skipping edge(s)\n";
-                        warned = true;
-                    }
-                    continue;
-                }
+                if (!db.value(child, val)) continue;  // already warned by classifyAlphaGenome
                 const Position childCanon = canonicalize(child);
-                const std::string childEnc = serialize(childCanon);
-
-                switch (movetype) {
-                    case 1:
-                        if (R.has_value() && *R != val.nimber)
-                            std::cerr << "  warning: multiple distinct R values for " << node.enc << "\n";
-                        R = val.nimber;
-                        break;
-                    case 2:
-                        if (D.has_value() && *D != val.nimber)
-                            std::cerr << "  warning: multiple distinct D values for " << node.enc << "\n";
-                        D = val.nimber;
-                        break;
-                    case 3:
-                        e.L.insert(val.nimber);
-                        break;
-                    case 4:
-                        e.Tprime.insert(val.nimber);
-                        break;
-                    case 5: {
-                        const QuickDisp qd = quickDisp(childCanon);
-                        if (seenTChild.insert({qd.enc, qd.offset}).second)
-                            e.T.push_back({childEnc, qd, val.nimber});
-                        break;
-                    }
-                    default:
-                        break;
-                }
+                const QuickDisp qd = quickDisp(childCanon);
+                if (seenTChild.insert({qd.enc, qd.offset}).second)
+                    e.T.push_back({serialize(childCanon), qd, val.nimber});
             }
 
-            if (!R.has_value() || !D.has_value()) continue;  // shouldn't happen; skip defensively
-            e.R = *R;
-            e.D = *D;
             ++qualifying;
             byEnc.emplace(node.enc, std::move(e));
         }
@@ -224,7 +199,8 @@ int main(int argc, char** argv) {
     }
 
     std::map<std::string, std::vector<Entry*>> byGenome;
-    for (auto& [enc, e] : byEnc) byGenome[genomeKey(e.R, e.D, e.L, e.Tprime)].push_back(&e);
+    for (auto& [enc, e] : byEnc)
+        byGenome[stalks_tools::genomeKey({e.R, e.D, e.L, e.Tprime})].push_back(&e);
     for (auto& [key, entries] : byGenome) {
         std::stable_sort(entries.begin(), entries.end(),
                           [](const Entry* a, const Entry* b) { return a->lives < b->lives; });

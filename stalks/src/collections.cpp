@@ -311,23 +311,26 @@ std::vector<DoubleCritCandidate> enumerateDoubleCrits(const Component& c) {
 // ---------------------------------------------------------------------------
 // Multi-region ("crits on different organs") left sides -- k=1 scope. A multi-region left
 // side is >=2 regions joined by their OWN internal real membranes (never crits themselves),
-// detachable from the rest of the position by cutting exactly ONE crit membrane. Unlike the
-// single-region path above (which has no internal membranes to canonicalize -- a lone
-// region's every membrane is necessarily a crit, since a membrane can't pair a region to
-// itself), a multi-region chunk's canonical key genuinely needs region/boundary
-// ordering+rotation+chirality search THAT ALSO respects internal pairing identity across
-// regions -- exactly the problem canon.cpp's canonMinimal/canonicalizeFull already solve for
-// whole positions. Rather than duplicate that search here, a chunk is built as an ordinary
-// stand-alone Component (internal membranes as real Component::pairings; the one crit
-// membrane simply left OUT of pairings, so it renders as agnostic '9' via the existing
-// serialize()/pairIndex() path -- no new sentinel token needed) and run through the real
+// detachable from the rest of the position by cutting exactly ONE crit -- either a real membrane
+// bridging out to a host elsewhere, or (added 2026-08-25, see enumerateMultiCrits' own doc
+// comment) a special point (ALPHA, ...) sitting inside one of the chunk's own regions, with
+// nothing further to cut at all. Unlike the single-region path above (which has no internal
+// membranes to canonicalize -- a lone region's every membrane is necessarily a crit, since a
+// membrane can't pair a region to itself), a multi-region chunk's canonical key genuinely needs
+// region/boundary ordering+rotation+chirality search THAT ALSO respects internal pairing identity
+// across regions -- exactly the problem canon.cpp's canonMinimal/canonicalizeFull already solve
+// for whole positions. Rather than duplicate that search here, a chunk is built as an ordinary
+// stand-alone Component (internal membranes as real Component::pairings; the one crit -- a real
+// membrane left OUT of pairings, or a special point swapped for an equally-unpaired MEMB stand-in,
+// see withSpecialAsAgnostic -- renders as agnostic '9' via the existing serialize()/pairIndex()
+// path either way, so both crit kinds produce directly comparable keys) and run through the real
 // canonicalizeFull/serialize pipeline. This is additive and independent of the single-/
 // double-crit machinery above: a separate registry (multiRegistry), separate finder
-// (enumerateMultiCrits, a bridge search over the region-adjacency graph -- cutting a BRIDGE
-// membrane is exactly "detach a connected region-set with no other outside connection"), and
-// a separate swap (applyMultiCritSwap, which -- unlike applyCritSwap -- must delete the
-// chunk's extra regions and reindex every reference to them, since a multi-region chunk
-// collapses to a SINGLE new region at its family's rep).
+// (enumerateMultiCrits, a bridge search over the region-adjacency graph for the real-membrane
+// case, plus a closure search for the special-point case -- see its own doc comment), and a
+// separate swap (applyMultiCritSwap, which -- unlike applyCritSwap -- must delete the chunk's
+// extra regions and reindex every reference to them, since a multi-region chunk collapses to a
+// SINGLE new region at its family's rep).
 // ---------------------------------------------------------------------------
 
 // Cap on chunk size worth attempting: every authored multi-region roster element is tiny (<=3
@@ -429,13 +432,128 @@ std::string multiLeftSideKey(const std::string& enc) {
     return multiChunkKey(regions, pairings);
 }
 
-// One candidate multi-region swap: the chunk's original region indices (>=2, sorted), the
-// original pairing index of its single crossing (crit) membrane, and its canonical key.
+// One candidate multi-region swap: the chunk's original region indices (>=2, sorted), its sole
+// crit occurrence -- either a real bridge membrane (CritSlot::pairing) or a special point sitting
+// inside one of the chunk's own regions (CritSlot::special/tok), mirroring critSlots' uniform
+// treatment of the two for the single-region case -- and its canonical key.
 struct MultiCritCandidate {
     std::vector<std::uint32_t> regions;
-    int crossPairing = -1;
+    CritSlot slot;
     std::string leftKey;
 };
+
+// Shared validation + region/pairing extraction for a candidate multi-region side, used by both
+// the real-bridge search and the special-point search below (see enumerateMultiCrits' own doc
+// comment for why there are two). `excl`, when >= 0, is the crossing bridge's pairing index to
+// leave OUT of `newPairings` so it renders as agnostic '9' (the real-membrane crit case); -1 means
+// every internal pairing is kept (the special-point case, where nothing crosses out of the side at
+// all). `wantSpecials` is the EXACT special-point count the side must contain (0 for a bridge
+// crit, 1 for a special-point crit) -- any other count means the side's true crit count isn't
+// exactly 1 (k=1 scope), so it's rejected.
+struct ChunkExtraction {
+    std::vector<std::uint32_t> sorted;
+    std::vector<std::vector<Bnd>> newRegions;
+    std::vector<std::pair<MRef, MRef>> newPairings;
+};
+std::optional<ChunkExtraction> extractChunk(const Component& c,
+                                             const std::vector<std::vector<std::vector<int>>>& idx,
+                                             const std::vector<std::uint32_t>& side, int excl,
+                                             std::size_t wantSpecials) {
+    if (side.size() < 2 || side.size() > MAX_MULTI_REGIONS)
+        return std::nullopt;
+    std::size_t tokenCount = 0, specials = 0;
+    for (std::uint32_t r : side)
+        for (const auto& b : c.regions[r]) {
+            tokenCount += b.size();
+            for (Token t : b)
+                if (isSpecialPoint(t))
+                    ++specials;
+        }
+    if (tokenCount > MAX_MULTI_TOKENS || specials != wantSpecials)
+        return std::nullopt;
+    // Guard: a pre-existing agnostic (truly unpaired) membrane inside the side would be
+    // indistinguishable from the crit port and corrupt the count -- bail (mirrors critSlots'
+    // single-region agnostic guard). Never fires on real game-tree positions.
+    // idx[r][b] is sized to the MEMBRANE COUNT of boundary b (Component::pairIndex()), not its
+    // total token count -- must index by membrane-occurrence-so-far, not raw token position
+    // (an earlier version of this loop used the token position directly and read past the end
+    // of idx[r][b] whenever a boundary mixed a membrane with non-membrane tokens, e.g. "2C" --
+    // undefined behavior, observed as the quickCanon fixpoint flip-flopping between two
+    // different results across repeated runs of the same input).
+    for (std::uint32_t r : side)
+        for (std::uint32_t b = 0; b < c.regions[r].size(); ++b) {
+            std::uint32_t membOcc = 0;
+            for (std::uint32_t o = 0; o < c.regions[r][b].size(); ++o)
+                if (c.regions[r][b][o] == MEMB) {
+                    if (idx[r][b][membOcc] < 0)
+                        return std::nullopt;
+                    ++membOcc;
+                }
+        }
+
+    std::vector<std::uint32_t> sorted = side;
+    std::sort(sorted.begin(), sorted.end());
+    std::map<std::uint32_t, std::uint32_t> remap;
+    for (std::size_t i = 0; i < sorted.size(); ++i)
+        remap[sorted[i]] = static_cast<std::uint32_t>(i);
+
+    std::vector<std::vector<Bnd>> newRegions;
+    newRegions.reserve(sorted.size());
+    for (std::uint32_t r : sorted)
+        newRegions.push_back(c.regions[r]);
+
+    std::vector<std::pair<MRef, MRef>> newPairings;
+    for (int pi = 0; pi < static_cast<int>(c.pairings.size()); ++pi) {
+        if (pi == excl)
+            continue;
+        const auto& [a, b] = c.pairings[static_cast<std::size_t>(pi)];
+        const auto ia = remap.find(a.region), ib = remap.find(b.region);
+        if (ia != remap.end() && ib != remap.end())
+            newPairings.push_back({{ia->second, a.boundary, a.occ},
+                                   {ib->second, b.boundary, b.occ}});
+    }
+    return ChunkExtraction{std::move(sorted), std::move(newRegions), std::move(newPairings)};
+}
+
+// The special-point case's extracted chunk still has the LITERAL special-point token sitting in
+// place -- replace it with a bare (unpaired) MEMB so its key renders the SAME agnostic '9' way
+// every multi-region registry element is authored in (parseChunkEncoding's lowercase ports become
+// unpaired MEMB tokens, never special points -- see its own doc comment), so a real-membrane crit
+// and a special-point crit produce comparable keys. Exactly one such token exists, per
+// extractChunk's wantSpecials=1 guard.
+//
+// MUST also fix up `pairings`' stored occurrence numbers, not just the token itself: an MRef's
+// `.occ` is "how many MEMB tokens precede this one in its boundary" (Component::pairIndex()'s own
+// convention -- a special point was NEVER counted towards that, since it isn't MEMB), computed
+// back when the special point held its spot without being a membrane at all. The moment it becomes
+// a real MEMB token, every occurrence AFTER it in the SAME boundary needs its stored `.occ`
+// incremented by one to stay correct -- exactly the "occurrence index computed before a token-type
+// change goes stale" class of bug extractChunk's own agnostic-guard comment warns about. Skipping
+// this reproduced it: a real membrane occurring after the special point in the same boundary kept
+// its pre-conversion `.occ`, so multiChunkKey silently built the WRONG canonical key (observed as
+// "2CD|C2Da" -- an existing, already-verified S_6 element -- computing the same key as S_5's
+// "2CD|2CDa" once alpha replaced its real-membrane crit; caught via verify_left_side, not by eye).
+void convertSpecialToAgnostic(std::vector<std::vector<Bnd>>& regions,
+                               std::vector<std::pair<MRef, MRef>>& pairings) {
+    for (std::uint32_t r = 0; r < regions.size(); ++r)
+        for (std::uint32_t b = 0; b < regions[r].size(); ++b)
+            for (std::uint32_t o = 0; o < regions[r][b].size(); ++o) {
+                if (!isSpecialPoint(regions[r][b][o]))
+                    continue;
+                std::uint32_t membBefore = 0;
+                for (std::uint32_t k = 0; k < o; ++k)
+                    if (regions[r][b][k] == MEMB)
+                        ++membBefore;
+                regions[r][b][o] = MEMB;
+                for (auto& [a, bb] : pairings) {
+                    if (a.region == r && a.boundary == b && a.occ >= membBefore)
+                        ++a.occ;
+                    if (bb.region == r && bb.boundary == b && bb.occ >= membBefore)
+                        ++bb.occ;
+                }
+                return;  // exactly one special point, per extractChunk's wantSpecials=1 guard
+            }
+}
 
 // Bridge search over a Component's region-adjacency graph (nodes = regions, edges = real
 // membrane pairings -- every pairing connects two DIFFERENT regions, Component::validate()'s "no
@@ -444,6 +562,20 @@ struct MultiCritCandidate {
 // it has zero special points (else its true crit count exceeds 1) and stays within the size cap.
 // Graphs here are tiny (a handful of regions at n<=6), so the naive O(P*(R+P)) trial-removal scan
 // is simplest and fast enough; no need for a linear-time bridge algorithm.
+//
+// ALSO searches for the special-point analogue (author 2026-08-25): a lone special point (ALPHA,
+// ...) sitting inside one of a connected cluster's own regions plays the IDENTICAL structural role
+// a crit membrane plays once its far side is known (tokens.hpp) -- it already stands for "connects
+// to somewhere outside this position" -- so a cluster whose only real-membrane connectivity is
+// INTERNAL to itself, with exactly one special point inside it, is just as valid a multi-region
+// left side as the real-bridge case, with the special point itself as the sole crit instead of a
+// bridge membrane. Since a special point isn't a pairing, there's no bridge to cut: the candidate
+// side is simply the FULL connected component (via real membranes) containing the special point's
+// region -- by definition of "connected component", nothing crosses out of it. This closes the gap
+// behind every currently-registered multi-region element (S_1/C_4/S_5/S_6/S_7/S_9's own multi-
+// region rosters) never matching a genuine single-alpha analysis position: the bridge search alone
+// can only ever find a REAL membrane as the crit, so a chunk whose sole external connection is
+// alpha itself was never even considered a candidate (see [[project_advanced_collections]]).
 std::vector<MultiCritCandidate> enumerateMultiCrits(const Component& c) {
     std::vector<MultiCritCandidate> out;
     if (c.dead)
@@ -480,64 +612,13 @@ std::vector<MultiCritCandidate> enumerateMultiCrits(const Component& c) {
     };
     const auto idx = c.pairIndex();
     auto tryAdd = [&](const std::vector<std::uint32_t>& side, int excl) {
-        if (side.size() < 2 || side.size() > MAX_MULTI_REGIONS)
+        auto extracted = extractChunk(c, idx, side, excl, /*wantSpecials=*/0);
+        if (!extracted)
             return;
-        std::size_t tokenCount = 0, specials = 0;
-        for (std::uint32_t r : side)
-            for (const auto& b : c.regions[r]) {
-                tokenCount += b.size();
-                for (Token t : b)
-                    if (isSpecialPoint(t))
-                        ++specials;
-            }
-        if (tokenCount > MAX_MULTI_TOKENS || specials != 0)
-            return;
-        // Guard: a pre-existing agnostic (truly unpaired) membrane inside the side would be
-        // indistinguishable from the crit port and corrupt the count -- bail (mirrors critSlots'
-        // single-region agnostic guard). Never fires on real game-tree positions.
-        // idx[r][b] is sized to the MEMBRANE COUNT of boundary b (Component::pairIndex()), not its
-        // total token count -- must index by membrane-occurrence-so-far, not raw token position
-        // (an earlier version of this loop used the token position directly and read past the end
-        // of idx[r][b] whenever a boundary mixed a membrane with non-membrane tokens, e.g. "2C" --
-        // undefined behavior, observed as the quickCanon fixpoint flip-flopping between two
-        // different results across repeated runs of the same input).
-        for (std::uint32_t r : side)
-            for (std::uint32_t b = 0; b < c.regions[r].size(); ++b) {
-                std::uint32_t membOcc = 0;
-                for (std::uint32_t o = 0; o < c.regions[r][b].size(); ++o)
-                    if (c.regions[r][b][o] == MEMB) {
-                        if (idx[r][b][membOcc] < 0)
-                            return;
-                        ++membOcc;
-                    }
-            }
-
-        std::vector<std::uint32_t> sorted = side;
-        std::sort(sorted.begin(), sorted.end());
-        std::map<std::uint32_t, std::uint32_t> remap;
-        for (std::size_t i = 0; i < sorted.size(); ++i)
-            remap[sorted[i]] = static_cast<std::uint32_t>(i);
-
-        std::vector<std::vector<Bnd>> newRegions;
-        newRegions.reserve(sorted.size());
-        for (std::uint32_t r : sorted)
-            newRegions.push_back(c.regions[r]);
-
-        std::vector<std::pair<MRef, MRef>> newPairings;
-        for (int pi = 0; pi < static_cast<int>(c.pairings.size()); ++pi) {
-            if (pi == excl)
-                continue;
-            const auto& [a, b] = c.pairings[static_cast<std::size_t>(pi)];
-            const auto ia = remap.find(a.region), ib = remap.find(b.region);
-            if (ia != remap.end() && ib != remap.end())
-                newPairings.push_back({{ia->second, a.boundary, a.occ},
-                                       {ib->second, b.boundary, b.occ}});
-        }
-
         MultiCritCandidate cand;
-        cand.regions = std::move(sorted);
-        cand.crossPairing = excl;
-        cand.leftKey = multiChunkKey(newRegions, newPairings);
+        cand.regions = extracted->sorted;
+        cand.slot = CritSlot{false, 0, excl};
+        cand.leftKey = multiChunkKey(extracted->newRegions, extracted->newPairings);
         out.push_back(std::move(cand));
     };
     for (int pi = 0; pi < static_cast<int>(c.pairings.size()); ++pi) {
@@ -548,6 +629,36 @@ std::vector<MultiCritCandidate> enumerateMultiCrits(const Component& c) {
         tryAdd(sideA, pi);
         tryAdd(reachableExcluding(b.region, pi), pi);
     }
+
+    // Special-point analogue: one candidate per region containing a special point, closure via
+    // ALL real membranes (excl = -1, an index that never matches a real pairing -- pairingIdx is
+    // always >= 0). Two special-point-bearing regions ending up in the SAME connected cluster is
+    // impossible under the wantSpecials=1 guard (that cluster would have 2 specials, failing the
+    // check), so no dedup is needed here the way the bridge loop needs its two-sided tryAdd calls.
+    for (std::uint32_t r0 = 0; r0 < R; ++r0) {
+        const bool hasSpecial =
+            std::any_of(c.regions[r0].begin(), c.regions[r0].end(), [](const Bnd& b) {
+                return std::any_of(b.begin(), b.end(), [](Token t) { return isSpecialPoint(t); });
+            });
+        if (!hasSpecial)
+            continue;
+        auto extracted = extractChunk(c, idx, reachableExcluding(r0, -1), /*excl=*/-1,
+                                       /*wantSpecials=*/1);
+        if (!extracted)
+            continue;
+        Token specialTok = 0;
+        for (const auto& region : extracted->newRegions)
+            for (const auto& b : region)
+                for (Token t : b)
+                    if (isSpecialPoint(t))
+                        specialTok = t;
+        convertSpecialToAgnostic(extracted->newRegions, extracted->newPairings);
+        MultiCritCandidate cand;
+        cand.regions = extracted->sorted;
+        cand.slot = CritSlot{true, specialTok, -1};
+        cand.leftKey = multiChunkKey(extracted->newRegions, extracted->newPairings);
+        out.push_back(std::move(cand));
+    }
     return out;
 }
 
@@ -555,11 +666,13 @@ std::vector<MultiCritCandidate> enumerateMultiCrits(const Component& c) {
 // at the lowest of their original indices, containing exactly [head..., crit] (single-crit
 // scope, matching applyCritSwap's k=1 shape); the other side regions are deleted and every
 // pairing's region reference is reindexed accordingly. The chunk's internal pairings (both ends
-// in sideRegions) are simply dropped -- their content is gone, replaced wholesale by the rep.
-// The crossing pairing is repointed: its side-end becomes the new merged region's sole
-// occurrence, its host-end just gets its region index remapped, preserving the host's link.
+// in sideRegions) are simply dropped -- their content is gone, replaced wholesale by the rep. For
+// a real-membrane slot, the crossing pairing is repointed: its side-end becomes the new merged
+// region's sole occurrence, its host-end just gets its region index remapped, preserving the
+// host's link. For a special-point slot (added 2026-08-25) there is no crossing pairing at all --
+// the token is simply carried over into the merged region by the template-building loop below.
 Component applyMultiCritSwap(const Component& c, const std::vector<std::uint32_t>& sideRegions,
-                             int crossPairing, const std::vector<Bnd>& repTemplate) {
+                             const CritSlot& slot, const std::vector<Bnd>& repTemplate) {
     auto inSide = [&](std::uint32_t r) {
         return std::find(sideRegions.begin(), sideRegions.end(), r) != sideRegions.end();
     };
@@ -570,7 +683,10 @@ Component applyMultiCritSwap(const Component& c, const std::vector<std::uint32_t
     // ordinary content for S_1/C_4/S_5/S_7's reps), recording its per-boundary occurrence for the
     // crossing pairing's repoint below. Originally always built exactly one new boundary
     // [head...,MEMB] on the single-boundary-rep assumption; generalized 2026-08-21 alongside
-    // applyCritSwap for the same reason (S_6/S_7's multi-boundary reps).
+    // applyCritSwap for the same reason (S_6/S_7's multi-boundary reps). A special-point slot
+    // (added 2026-08-25) keeps its own token in place instead -- it has no separate host to
+    // repoint, since it already stands for "connects to somewhere outside this position" (same
+    // convention applyCritSwap uses for the single-/double-crit case).
     std::vector<Bnd> newRegion;
     newRegion.reserve(repTemplate.size());
     std::uint32_t portBoundary = 0, portOcc = 0;
@@ -579,12 +695,16 @@ Component applyMultiCritSwap(const Component& c, const std::vector<std::uint32_t
         nb.reserve(repTemplate[bi].size());
         std::uint32_t membOcc = 0;
         for (Token t : repTemplate[bi]) {
-            if (isPort(t)) {
+            if (!isPort(t)) {
+                nb.push_back(t);
+                continue;
+            }
+            if (slot.special) {
+                nb.push_back(slot.tok);
+            } else {
                 portBoundary = static_cast<std::uint32_t>(bi);
                 portOcc = membOcc++;
                 nb.push_back(MEMB);
-            } else {
-                nb.push_back(t);
             }
         }
         newRegion.push_back(std::move(nb));
@@ -607,7 +727,7 @@ Component applyMultiCritSwap(const Component& c, const std::vector<std::uint32_t
     out.pairings.reserve(c.pairings.size());
     for (int pi = 0; pi < static_cast<int>(c.pairings.size()); ++pi) {
         auto pr = c.pairings[static_cast<std::size_t>(pi)];
-        if (pi == crossPairing) {
+        if (!slot.special && pi == slot.pairing) {
             MRef& sideEnd = inSide(pr.first.region) ? pr.first : pr.second;
             MRef& hostEnd = inSide(pr.first.region) ? pr.second : pr.first;
             hostEnd.region = oldToNew[hostEnd.region];
@@ -732,7 +852,12 @@ const std::vector<CritFamily>& singleCritFamilies() {
             // 2026-07-06 "12,a"-vs-"1,2a" lesson that partition is significant and must not be
             // assumed from a similar-looking sibling).
             "3,1a", "1,3,a", "13,a", "3,37a8", "3,3,2a", "3,5a", "3738a", "337a8", "35a",
-            "1,12,2a"}},
+            "1,12,2a",
+            // 3 elements added 2026-08-25 (user-provided), each a distinct boundary partition of
+            // an already-registered sibling's tokens (same "partition is significant" caution as
+            // the 2026-08-23 batch above): "3,5,a" vs "3,5a"/"35a"; "35,a" vs "3,5a"/"35a"; "3738,a"
+            // vs "3738a".
+            "3,5,a", "35,a", "3738,a"}},
           {"S_2", 1,
            {"1a", "1,a", "5a", "5,a", "2,2a", "22a", "2,2,a", "27a8",
             "2,3a", "23a", "2,3,a", "37a8", "3,2a", "0,2a", "0,3a", "22,a", "23,a"}}}},
@@ -743,8 +868,10 @@ const std::vector<CritFamily>& singleCritFamilies() {
         // that caught the 277a88 bug) finding zero discrepancies -- evidence pointed to it being
         // sound, but user wanted it out of the registry anyway; see
         // [[project_advanced_collections]] if this needs revisiting.
-        {"12a", {{"S_5", 0, {"3,27a8", "25a", "2738a", "3,22a"}}}},
-        {"1,2,a", {{"S_6", 0, {"2,23,a"}}}},
+        // "233a"/"3,23a" added 2026-08-25 (user-provided).
+        {"12a", {{"S_5", 0, {"3,27a8", "25a", "2738a", "3,22a", "233a", "3,23a"}}}},
+        // "2,5,a"/"323a"/"222,a" added 2026-08-25 (user-provided).
+        {"1,2,a", {{"S_6", 0, {"2,23,a", "2,5,a", "323a", "222,a"}}}},
         // "277a88" (CSV row 48) was first registered under S_7 and PROVEN UNSOUND there
         // 2026-08-21 by direct engine test (non-constant offset across right sides -- see
         // [[project_advanced_collections]]). User then identified the real cause: several
@@ -753,15 +880,19 @@ const std::vector<CritFamily>& singleCritFamilies() {
         // ELEMENT of (rather than S_9's own rep) before this split. Re-verified "277a88" directly
         // against "34a" across the SAME three hosts used to disprove it under S_7: all three now
         // agree exactly (offset 0), confirming the fix.
-        {"2,1a", {{"S_7", 0, {"227a8", "2,5a", "2,37a8", "223a"}}}},
+        // "2,33a" added 2026-08-25 (user-provided).
+        {"2,1a", {{"S_7", 0, {"227a8", "2,5a", "2,37a8", "223a", "2,33a"}}}},
         // S_8 added 2026-08-23 (user-provided; genome (0,3,{0},{},[S_2,C_3,C_4])). Rep "12,a" is
         // the EXACT shape proven 2026-07-06 NOT to be an S_1 member (crit alone in its own
         // boundary, distinct from valid S_1 element "1,2a") and again explicitly skipped
         // 2026-08-21 when it resurfaced in the CSV under S_1 -- both calls were correct: "12,a"
         // was never an S_1 element, it just turns out to be its OWN family's rep instead, not
         // invalid shape. Standalone, no Pairing-Theorem sibling identified (like C_3/C_4/S_5).
-        {"12,a", {{"S_8", 0, {"25,a", "2728,a", "2738,a"}}}},
-        {"34a", {{"S_9", 0, {"277a88", "3,4a", "4,3a", "273a8", "237a8"}}}},
+        // "233,a" added 2026-08-25 (user-provided).
+        {"12,a", {{"S_8", 0, {"25,a", "2728,a", "2738,a", "233,a"}}}},
+        // "3,4,a"/"34,a" added 2026-08-25 (user-provided) -- distinct boundary partitions of the
+        // already-registered "3,4a".
+        {"34a", {{"S_9", 0, {"277a88", "3,4a", "4,3a", "273a8", "237a8", "3,4,a", "34,a"}}}},
     };
     return families;
 }
@@ -802,13 +933,31 @@ const std::vector<CritFamily>& multiCritFamilies() {
                   // into its OWN boundary in region2 (partition-sensitive, same caution as the
                   // single-region batch's "13,a").
                   "CDE|CDF|EFa", "CD|CEF|DEFa", "CD|CEF|EDFa", "CD|CEF|DEF,a", "CD|3CE|DEa",
-                  "CD|CE|3DaE"}},
+                  "CD|CE|3DaE",
+                  // 3 elements added 2026-08-25 (user-provided). "4C|7C8a" and "CD|CE|D2Ea" (in
+                  // S_6 below) were originally submitted with a mismatched/extra membrane letter
+                  // ("4C|7D8a", "CD|DE|D2Ea") -- corrected with the user to reuse the letter that
+                  // actually pairs, per each letter needing exactly 2 occurrences. A fourth
+                  // proposed element, "CD|3DE|CEa", turned out to canonicalize to the exact same
+                  // key as the already-registered "CD|3CE|DEa" above (a pure C<->D relabeling) and
+                  // is skipped as a duplicate.
+                  "3C|CD|2Da", "3C|CD|7D8a", "4C|7C8a"}},
                 {"S_2", 1, {"12C|2Ca", "1CD|CD,2a"}}}},
         {"4a", {{"C_4", 0, {"3C|Ca", "3C|C,a", "3,C|Ca", "3,C|C,a"}}}},
         {"12a", {{"S_5", 0, {"2CD|2CDa"}}}},
+        // Two of the user's proposed S_6 additions turned out to be duplicates once corrected/
+        // checked against the engine (2026-08-25): "2CD|2,CDa" is an EXACT duplicate of the
+        // already-registered S_7 element of the same text (a left-side's canonical key doesn't
+        // depend on which family list it's authored under); "CD|CE|D2Ea" (corrected from
+        // "CD|DE|D2Ea") canonicalizes to the exact same key as the already-registered
+        // "CD|CE|2DaE" just above (a boundary-rotation/relabeling equivalent, not a new shape).
+        // Net result: no new S_6 multi-region elements from this batch.
         {"1,2,a", {{"S_6", 0, {"2CD|C2Da", "CD|CE|2DaE"}}}},
         {"2,1a", {{"S_7", 0, {"2CD|2,CDa"}}}},
-        {"34a", {{"S_9", 0, {"CD|2CE|DEa"}}}},
+        // "2CD|2CD,a" added 2026-08-25 (user-provided) -- S_8's first multi-region element.
+        {"12,a", {{"S_8", 0, {"2CD|2CD,a"}}}},
+        // "3C|3Ca" added 2026-08-25 (user-provided).
+        {"34a", {{"S_9", 0, {"CD|2CE|DEa", "3C|3Ca"}}}},
     };
     return families;
 }
@@ -1346,7 +1495,7 @@ bool stepMultiRegion(Position& cur, int& offset) {
                     continue;
                 Position np = cur;
                 np.components[ci] =
-                    applyMultiCritSwap(comp, cand.regions, cand.crossPairing, it->second.head);
+                    applyMultiCritSwap(comp, cand.regions, cand.slot, it->second.head);
                 Position canon = normalizeQuick(np);
                 std::string s = serialize(canon);
                 if (!found || s < bestSer) {
