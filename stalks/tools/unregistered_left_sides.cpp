@@ -75,6 +75,56 @@ bool isSingleAlpha(const std::string& enc) {
     return count == 1 && sawAlpha;
 }
 
+// Index of the character matching the bracket/paren opened at `open` (one of '(','['), tracking
+// combined depth across both delimiter kinds (well-nested by construction, so simple aggregate
+// depth is sufficient -- see fullGenomeText's own doc comment on the "(R,D,{L},{T'},[T])" shape).
+std::size_t matchingClose(const std::string& s, std::size_t open) {
+    int depth = 0;
+    for (std::size_t i = open; i < s.size(); ++i) {
+        const char c = s[i];
+        if (c == '(' || c == '[') {
+            ++depth;
+        } else if (c == ')' || c == ']') {
+            --depth;
+            if (depth == 0) return i;
+        }
+    }
+    return std::string::npos;
+}
+
+// A genome text's own top-level [T] entries -- e.g. "(0,3,{0},{},[C_3,C_4,S_1\xe2\x8a\x951])" ->
+// {"C_3","C_4","S_1\xe2\x8a\x951"} -- each either a folded name (alpha_genome.cpp's namedGenomes())
+// or, when unrecognized, a full nested "(...)" tuple in its own right. The outer '[' is always the
+// FIRST '[' in the text (fullGenomeText's shape puts {L}/{T'} -- digits and commas only, no brackets
+// -- before it), so locating it doesn't need to worry about a deeper child's own "[T]" bracket
+// appearing earlier. Splits the bracket's inner text on top-level commas only (tracking combined
+// paren/bracket/brace depth), so a comma INSIDE a child tuple's own {L}/{T'}/[T] never splits it.
+// Returns {} for "(unclassified)" or any text with no bracket at all.
+std::vector<std::string> topLevelTChildren(const std::string& genomeText) {
+    const auto open = genomeText.find('[');
+    if (open == std::string::npos) return {};
+    const std::size_t close = matchingClose(genomeText, open);
+    if (close == std::string::npos || close <= open + 1) return {};
+    const std::string inner = genomeText.substr(open + 1, close - open - 1);
+
+    std::vector<std::string> out;
+    int depth = 0;
+    std::size_t start = 0;
+    for (std::size_t i = 0; i < inner.size(); ++i) {
+        const char c = inner[i];
+        if (c == '(' || c == '[' || c == '{') {
+            ++depth;
+        } else if (c == ')' || c == ']' || c == '}') {
+            --depth;
+        } else if (c == ',' && depth == 0) {
+            out.push_back(inner.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+    out.push_back(inner.substr(start));
+    return out;
+}
+
 // Distinct lowercase crit-port letters ('a'-'z') appearing in a roster's authored left-side text.
 int distinctPortLetters(const std::string& s) {
     std::set<char> letters;
@@ -173,6 +223,12 @@ int main(int argc, char** argv) {
     }
 
     std::filesystem::create_directories(outDir);
+    // Tally of every top-level T-subgenome entry (topLevelTChildren) seen across ALL unregistered
+    // rows, all lives buckets combined -- which genomes recur most often as T-children of an
+    // otherwise-unregistered shape is a direct signal for which family to register next (a T-child
+    // that's already a folded name like "C_3" means the PARENT shape is new but built from familiar
+    // pieces; a raw unfolded tuple means even the T-child itself isn't recognized yet).
+    std::map<std::string, long long> tSubgenomeCounts;
     for (int lives = 1; lives <= 4; ++lives) {
         const std::string path = outDir + "/unregistered_" + std::to_string(lives) +
                                   (lives == 1 ? "_life" : "_lives") + ".txt";
@@ -187,11 +243,30 @@ int main(int argc, char** argv) {
                       return a.second != b.second ? a.second < b.second : a.first < b.first;
                   });
         f << "enc\tgenome\n";
-        for (const auto& [enc, genome] : bucket)
+        for (const auto& [enc, genome] : bucket) {
             f << enc << "\t" << genome << "\n";
+            for (const std::string& t : topLevelTChildren(genome))
+                ++tSubgenomeCounts[t];
+        }
         std::cerr << lives << " life: " << bucket.size() << " unregistered / "
                   << totalByLives[lives] << " total single-alpha left sides -- wrote " << path << "\n";
     }
+
+    const std::string countsPath = outDir + "/t_subgenome_counts.csv";
+    std::ofstream cf(countsPath, std::ios::binary);
+    if (!cf) {
+        std::cerr << "cannot open output file: " << countsPath << "\n";
+        return 1;
+    }
+    std::vector<std::pair<std::string, long long>> counted(tSubgenomeCounts.begin(),
+                                                             tSubgenomeCounts.end());
+    std::sort(counted.begin(), counted.end(), [](const auto& a, const auto& b) {
+        return a.second != b.second ? a.second > b.second : a.first < b.first;
+    });
+    cf << "count,genome\n";
+    for (const auto& [genome, count] : counted)
+        cf << count << ",\"" << genome << "\"\n";
+    std::cerr << "wrote " << counted.size() << " distinct T-subgenomes (" << countsPath << ")\n";
 
     return 0;
 }

@@ -860,7 +860,11 @@ const std::vector<CritFamily>& singleCritFamilies() {
             "3,5,a", "35,a", "3738,a"}},
           {"S_2", 1,
            {"1a", "1,a", "5a", "5,a", "2,2a", "22a", "2,2,a", "27a8",
-            "2,3a", "23a", "2,3,a", "37a8", "3,2a", "0,2a", "0,3a", "22,a", "23,a"}}}},
+            "2,3a", "23a", "2,3,a", "37a8", "3,2a", "0,2a", "0,3a", "22,a", "23,a",
+            // 6 elements added 2026-08-25 (user-provided). Verified via tools/verify_left_side.cpp
+            // (offset 1 vs rep "2a") on both the cheap 8-host set and the joint-bearing "0,0,17Z8"-
+            // pattern hosts, same method as every other batch this session.
+            "13,2a", "2a,35", "2a,3738", "13,3a", "0,3,a", "2,2,2,2,a"}}}},
         {"3a", {{"C_3", 0, {"3,a"}}}},
         {"4a", {{"C_4", 0, {"4,a"}}}},
         // "2,3,2a" removed 2026-08-21 at user request pending re-verification, despite direct
@@ -893,6 +897,32 @@ const std::vector<CritFamily>& singleCritFamilies() {
         // "3,4,a"/"34,a" added 2026-08-25 (user-provided) -- distinct boundary partitions of the
         // already-registered "3,4a".
         {"34a", {{"S_9", 0, {"277a88", "3,4a", "4,3a", "273a8", "237a8", "3,4,a", "34,a"}}}},
+        // S_10 added 2026-08-25 (user-provided; genome (2,0,{1},{1},[C_3,S_1])). No single-region
+        // elements yet -- the empty group exists purely so allCollectionRosters() still emits an
+        // entry for its rep (see addFamily's per-group loop below); its only known member so far is
+        // multi-region ("3A|2Aa", see multiCritFamilies()). Verified via verify_left_side.cpp
+        // (offset 0) on both host sets.
+        {"4,2a", {{"S_10", 0, {}}}},
+        // S_12 added 2026-08-25 (user-provided; genome (1,3,{1},{},[S_1,C_3⊕1,S_6])) -- a single
+        // known example, "obviously its own rep" (user's own words): no elements to reduce yet, same
+        // empty-group rationale as S_10 above.
+        {"5,5,a", {{"S_12", 0, {}}}},
+        // S_14 through S_20 added 2026-08-25 (user-provided). S_13 (genome (2,0,{1},{},[C_3,S_1]),
+        // rep "33a") and S_16 (genome (0,3,{2},{1},[C_3,C_4,S_1⊕1]), rep "3CD|CDa", multi-region)
+        // are DELIBERATELY NOT registered here -- user's own note: every other member of each is
+        // already caught by the pre-existing crit-cell congruity rule (enumerateCritCells/
+        // mergeCritCell, upstream of this registry entirely), so a roster entry would be redundant.
+        // Both still get named-genome-table entries (alpha_genome.cpp/collectAlpha.ts) for display.
+        {"222a", {{"S_14", 0, {"2,22a"}}}},
+        {"24a", {{"S_15", 0, {"2,4a"}}}},
+        // S_17 (genome (0,3,{0,1,2},{},[C_3,C_4,S_1⊕1])) -- unique, single known example, same
+        // empty-group rationale as S_10/S_12.
+        {"2728a", {{"S_17", 0, {}}}},
+        {"2,23a", {{"S_18", 0, {"2,27a8"}}}},
+        {"24,a", {{"S_19", 0, {"2,4,a"}}}},
+        // S_20 (genome (0,3,{0,1},{},[C_4,S_1⊕1])) -- unique so far ("another one-off"), same
+        // empty-group rationale.
+        {"232a", {{"S_20", 0, {}}}},
     };
     return families;
 }
@@ -958,6 +988,9 @@ const std::vector<CritFamily>& multiCritFamilies() {
         {"12,a", {{"S_8", 0, {"2CD|2CD,a"}}}},
         // "3C|3Ca" added 2026-08-25 (user-provided).
         {"34a", {{"S_9", 0, {"CD|2CE|DEa", "3C|3Ca"}}}},
+        // S_10's first (and so far only) known element, added 2026-08-25 (user-provided) alongside
+        // S_10's own new single-region rep entry in singleCritFamilies() above.
+        {"4,2a", {{"S_10", 0, {"3A|2Aa"}}}},
     };
     return families;
 }
@@ -1612,6 +1645,16 @@ std::vector<CollectionRoster> allCollectionRosters() {
                     r.elements.insert(r.elements.end(), g.elements.begin(), g.elements.end());
                     break;
                 }
+    // S_11 added 2026-08-25 (user-provided; genome (2,0,{1},{1},[C_3,S_1])) -- its rep "4A|Aa" is
+    // genuinely multi-region (unlike every other family here, whose repEncoding is single-region and
+    // parsed via repTemplate/parseLeftSide). No family struct can hold it without repTemplate()
+    // throwing at static-init time, and there's no swap-matching machinery for a multi-region REP
+    // target yet either (applyCritSwap/applyMultiCritSwap only ever collapse a match down into ONE
+    // region). Since S_11 has no additional roster elements yet to verify such machinery against
+    // (deliberately deferred -- see [[project_advanced_collections]]), it's appended here directly:
+    // display/reference only, bypassing registry()/multiRegistry() entirely. Verified via
+    // verify_left_side.cpp (offset 0 against candidate "2AB|a,AB") on both host sets.
+    out.push_back({"S_11", 0, {}, "4A|Aa"});
     return out;
 }
 

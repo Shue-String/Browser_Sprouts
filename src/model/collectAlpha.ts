@@ -277,6 +277,24 @@ export const GENOME_SHORTHANDS: Record<string, string> = {
   S_7: '(0,3,{0,2},{},[(1,1,{0},{0},[]),(1,0,{1},{},[(0,1,{0},{},[])])])',
   S_8: '(0,3,{0},{},[(1,1,{0},{0},[]),(1,2,{1},{0},[(0,1,{0},{},[])]),(1,0,{1},{},[(0,1,{0},{},[])])])',
   S_9: '(0,3,{0,2},{},[(1,1,{0},{0},[]),(1,2,{1},{0},[(0,1,{0},{},[])]),(1,0,{1},{},[(0,1,{0},{},[])])])',
+  // S_10/S_11 added 2026-08-25 (user-provided) -- see alpha_genome.cpp's own table for the
+  // genome-collision note (S_10's genome was corrected in-session; it and S_11 were originally
+  // both given as the same text).
+  S_10: '(2,3,{0,2},{},[(0,1,{0},{},[]),(1,0,{1},{},[(0,1,{0},{},[])])])',
+  S_11: '(2,0,{1},{1},[(1,1,{0},{0},[]),(0,1,{0},{},[])])',
+  'C_3+1': '(0,0,{1},{1},[(1,1,{0},{0},[])])',
+  S_12: '(1,3,{1},{},[(0,0,{1},{1},[(1,1,{0},{0},[])]),(0,1,{0},{},[]),(0,2,{0},{},[(1,1,{0},{0},[]),(1,0,{1},{},[(0,1,{0},{},[])])])])',
+  // S_13/S_14/S_15/S_16/S_17/S_18/S_19/S_20 added 2026-08-25 (user-provided). S_13/S_16 have no
+  // collections.cpp roster entry (see that file's own comment -- caught by crit-cell congruity
+  // already), named here for display/T-subgenome purposes only.
+  S_13: '(2,0,{1},{},[(1,1,{0},{0},[]),(0,1,{0},{},[])])',
+  S_14: '(0,2,{0,1},{},[(1,1,{0},{0},[]),(1,0,{1},{},[(0,1,{0},{},[])])])',
+  S_15: '(2,3,{0,1,2},{},[(1,1,{0},{0},[]),(0,1,{0},{},[]),(1,0,{1},{},[(0,1,{0},{},[])])])',
+  S_16: '(0,3,{2},{1},[(1,1,{0},{0},[]),(1,2,{1},{0},[(0,1,{0},{},[])]),(1,0,{1},{},[(0,1,{0},{},[])])])',
+  S_17: '(0,3,{0,1,2},{},[(1,1,{0},{0},[]),(1,2,{1},{0},[(0,1,{0},{},[])]),(1,0,{1},{},[(0,1,{0},{},[])])])',
+  S_18: '(0,3,{0,1,2},{},[(1,1,{0},{0},[]),(1,0,{1},{},[(0,1,{0},{},[])])])',
+  S_19: '(2,3,{0,2},{},[(1,1,{0},{0},[]),(0,1,{0},{},[]),(1,0,{1},{},[(0,1,{0},{},[])])])',
+  S_20: '(0,3,{0,1},{},[(1,2,{1},{0},[(0,1,{0},{},[])]),(1,0,{1},{},[(0,1,{0},{},[])])])',
 };
 
 /** Expand a search-bar shorthand name (e.g. "S_1", "S_1+1", "S_2") to its full genome-query text;
@@ -316,6 +334,12 @@ function withCompactKeys(names: Record<string, string>): Record<string, string> 
 // outright, so there's no genome to classify a real position against. Their Collections-panel
 // folders come entirely from the roster JSON below (COLLECTION_ROSTER_FOLDER_NAMES) instead.
 const NAMED_GENOME_DEFS: Record<string, string> = {
+  // The two alternate-presentation keys below are inserted BEFORE the canonical bare-tuple entry
+  // deliberately: NAMED_FAMILY_GENOME_TEXT (the inverse map, below) keeps whichever key for a given
+  // name is LAST in this object's own iteration order, and the canonical key should win that, not
+  // an alternate form.
+  '(0,1,{0},{},[S_1⊕1])': 'S_1',
+  '(0,1,{0},{},[C_4,S_1⊕1])': 'S_1',
   '(0,1,{0},{},[])': 'S_1',
   '(1,0,{1},{},[S_1])': 'S_1⊕1',
   '(1,1,{0},{0},[])': 'C_3',
@@ -325,6 +349,21 @@ const NAMED_GENOME_DEFS: Record<string, string> = {
   '(0,3,{0,2},{},[C_3,S_1⊕1])': 'S_7',
   '(0,3,{0},{},[C_3,C_4,S_1⊕1])': 'S_8',
   '(0,3,{0,2},{},[C_3,C_4,S_1⊕1])': 'S_9',
+  '(2,3,{0,2},{},[S_1,S_1⊕1])': 'S_10',
+  '(2,0,{1},{1},[C_3,S_1])': 'S_11',
+  '(0,0,{1},{1},[C_3])': 'C_3⊕1',
+  '(1,3,{1},{},[C_3⊕1,S_1,S_6])': 'S_12',
+  // S_13 (rep "33a") and S_16 (rep "3CD|CDa", multi-region) have no collectionsRoster.json entry
+  // (see collections.cpp's own comment -- caught by crit-cell congruity already), named here for
+  // display/T-subgenome purposes only, same as everything else in this table.
+  '(2,0,{1},{},[C_3,S_1])': 'S_13',
+  '(0,2,{0,1},{},[C_3,S_1⊕1])': 'S_14',
+  '(2,3,{0,1,2},{},[C_3,S_1,S_1⊕1])': 'S_15',
+  '(0,3,{2},{1},[C_3,C_4,S_1⊕1])': 'S_16',
+  '(0,3,{0,1,2},{},[C_3,C_4,S_1⊕1])': 'S_17',
+  '(0,3,{0,1,2},{},[C_3,S_1⊕1])': 'S_18',
+  '(2,3,{0,2},{},[C_3,S_1,S_1⊕1])': 'S_19',
+  '(0,3,{0,1},{},[C_4,S_1⊕1])': 'S_20',
 };
 
 interface CollectionRosterEntry {
