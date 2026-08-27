@@ -662,76 +662,205 @@ std::vector<MultiCritCandidate> enumerateMultiCrits(const Component& c) {
     return out;
 }
 
-// Apply a matched multi-region swap: collapse EVERY region in `sideRegions` into ONE new region
-// at the lowest of their original indices, containing exactly [head..., crit] (single-crit
-// scope, matching applyCritSwap's k=1 shape); the other side regions are deleted and every
-// pairing's region reference is reindexed accordingly. The chunk's internal pairings (both ends
-// in sideRegions) are simply dropped -- their content is gone, replaced wholesale by the rep. For
-// a real-membrane slot, the crossing pairing is repointed: its side-end becomes the new merged
-// region's sole occurrence, its host-end just gets its region index remapped, preserving the
+// ---------------------------------------------------------------------------
+// Rep-template representation, shared by applyCritSwap (single-/double-crit, below) and
+// applyMultiCritSwap (just below this section): a family's shared reduction target, as a boundary
+// TEMPLATE. Originally a flat `vector<Bnd>` (single region) on the assumption every rep was one
+// region -- true for S1/S2's "2a", C_3's "3a", C_4's "4a", S_5's "12a", generalized 2026-08-21 for
+// S_6's rep "1,2,a" (the crit alone in its own THIRD boundary) and S_7's "2,1a" (two boundaries,
+// crit sharing the second with ordinary content). Generalized again 2026-08-27 to a genuinely
+// MULTI-region template (`regions.size() > 1`, e.g. S_11's "4A|Aa" or S_16's "3CD|CDa") for reps
+// that are themselves multi-region -- unlike every prior multiCritFamilies() entry, which always
+// reused an EXISTING single-region family's rep (see multiCritFamilies()' own doc comment),
+// S_11/S_16 have no single-region sibling to reuse. Port tokens are left in place as sentinels
+// marking where each crit slot's real occurrence goes; `internalPairings` records the rep's OWN
+// internal membranes (e.g. S_11's single membrane A, crossing between its two regions) by
+// LETTER-RANK occurrence (how many internal-letter tokens precede it in its own boundary) rather
+// than a final pairIndex()-style occurrence -- whether a port sharing that boundary ends up a real
+// membrane (shifting a later letter's true occurrence) or stays a literal special token (no shift)
+// isn't known until application time, so only applyMultiCritSwap can compute the final occurrence
+// (see its own doc comment). Both `applyCritSwap` (single-/double-crit, always single-region:
+// k=1/k=2 finders never produce multi-region candidates, so their families' reps never use '|' or
+// uppercase letters) and `applyMultiCritSwap` (multi-region, possibly N>1 regions) substitute
+// ports from this same shape.
+struct MultiRepTemplate {
+    std::vector<std::vector<Bnd>> regions;
+    std::vector<std::pair<MRef, MRef>> internalPairings;
+};
+
+// Parse a rep-template encoding. Like `parseLeftSide` (single region, ports only) generalized in
+// the same direction `parseChunkEncoding` generalizes it for left-side MATCHING: '|' separates
+// regions, uppercase A-Z is an internal membrane label that must occur exactly twice, in two
+// different regions. Two differences from `parseChunkEncoding` (which serves the LEFT side, not
+// the rep): (1) multiple DISTINCT port letters are allowed (k=2 templates like doubleCritFamilies'
+// "2ba" need two, ranked by letter for applyCritSwap's slot assignment -- see its own doc
+// comment), so ports are kept as distinct PORT0+n tokens exactly like parseLeftSide, never
+// collapsed to a bare MEMB; (2) a single region (no '|' at all) is valid -- every existing rep
+// before S_11/S_16 parses identically to the old parseLeftSide-based repTemplate(): regions of
+// size 1, internalPairings empty.
+MultiRepTemplate parseRepTemplate(const std::string& enc) {
+    std::vector<std::vector<Bnd>> regions;
+    std::vector<Bnd> curRegion;
+    Bnd curBnd;
+    std::uint32_t letterOcc = 0;  // internal-letter MEMB tokens seen so far in curBnd (ports don't
+                                   // count -- see the struct doc comment on why not)
+    std::map<char, std::vector<MRef>> letterLocs;
+    bool sawPort = false;
+    auto flushBnd = [&]() {
+        if (curBnd.empty())
+            throw EncodingError("empty boundary in rep template: '" + enc + "'");
+        curRegion.push_back(curBnd);
+        curBnd.clear();
+        letterOcc = 0;
+    };
+    auto flushRegion = [&]() {
+        flushBnd();
+        regions.push_back(curRegion);
+        curRegion.clear();
+    };
+    for (char ch : enc) {
+        if (ch == '|') {
+            flushRegion();
+        } else if (ch == ',') {
+            flushBnd();
+        } else if (ch >= '0' && ch <= '8') {
+            curBnd.push_back(static_cast<Token>(ch - '0'));
+        } else if (ch >= 'a' && ch <= 'z') {
+            curBnd.push_back(static_cast<Token>(PORT0 + (ch - 'a')));
+            sawPort = true;
+        } else if (ch >= 'A' && ch <= 'Z') {
+            letterLocs[ch].push_back(MRef{static_cast<std::uint32_t>(regions.size()),
+                                          static_cast<std::uint32_t>(curRegion.size()), letterOcc});
+            curBnd.push_back(MEMB);
+            ++letterOcc;
+        } else if (ch == '[' || ch == ']' || ch == '/' || ch == ' ' || ch == '\t') {
+            continue;
+        } else if (ch == '9') {
+            throw EncodingError("agnostic membrane '9' has no meaning in a rep template: '" + enc +
+                                "'");
+        } else {
+            throw EncodingError(std::string("unexpected character '") + ch + "' in rep template");
+        }
+    }
+    flushRegion();
+    if (!sawPort)
+        throw EncodingError("rep template has no crit port: '" + enc + "'");
+
+    std::vector<std::pair<MRef, MRef>> internalPairings;
+    for (const auto& [letter, locs] : letterLocs) {
+        if (locs.size() != 2)
+            throw EncodingError(std::string("internal membrane '") + letter +
+                                "' must appear exactly twice in rep template: '" + enc + "'");
+        if (locs[0].region == locs[1].region)
+            throw EncodingError(std::string("internal membrane '") + letter +
+                                "' must connect two different regions in rep template: '" + enc +
+                                "'");
+        internalPairings.push_back({locs[0], locs[1]});
+    }
+    if (regions.size() > 1 && internalPairings.empty())
+        throw EncodingError("multi-region rep template has no internal membrane connecting its "
+                            "regions: '" + enc + "'");
+    return {std::move(regions), std::move(internalPairings)};
+}
+
+MultiRepTemplate repTemplate(const char* repEncoding) { return parseRepTemplate(repEncoding); }
+// ---------------------------------------------------------------------------
+
+// Apply a matched multi-region swap: replace EVERY region in `sideRegions` with the rep's OWN
+// region(s) (`rep.regions.size()`, not always 1 -- generalized 2026-08-27: a rep like S_11's
+// "4A|Aa" or S_16's "3CD|CDa" is itself multi-region, so the matched chunk no longer always
+// collapses to a single region, see MultiRepTemplate's own doc comment), inserted at the lowest of
+// the side regions' original indices; the rest of the side is deleted and every pairing's region
+// reference is reindexed accordingly. The chunk's internal pairings (both ends in sideRegions) are
+// simply dropped -- their content is gone, replaced wholesale by the rep -- and the REP's own
+// internal pairings (e.g. S_11's single membrane A, crossing between its two new regions) are
+// wired fresh from `rep.internalPairings`. For a real-membrane slot, the crossing pairing (the
+// chunk's one connection to the rest of the position) is repointed: its side-end becomes wherever
+// the rep template's port landed, its host-end just gets its region index remapped, preserving the
 // host's link. For a special-point slot (added 2026-08-25) there is no crossing pairing at all --
-// the token is simply carried over into the merged region by the template-building loop below.
+// the token is simply carried over into whichever new region the template puts it in.
 Component applyMultiCritSwap(const Component& c, const std::vector<std::uint32_t>& sideRegions,
-                             const CritSlot& slot, const std::vector<Bnd>& repTemplate) {
+                             const CritSlot& slot, const MultiRepTemplate& rep) {
     auto inSide = [&](std::uint32_t r) {
         return std::find(sideRegions.begin(), sideRegions.end(), r) != sideRegions.end();
     };
     const std::uint32_t keepRegion = *std::min_element(sideRegions.begin(), sideRegions.end());
 
-    // Build the new region's boundaries from the template (k=1 scope here: exactly one port
-    // total, wherever it sits -- alone in its own boundary for S_6's "1,2,a", sharing one with
-    // ordinary content for S_1/C_4/S_5/S_7's reps), recording its per-boundary occurrence for the
-    // crossing pairing's repoint below. Originally always built exactly one new boundary
-    // [head...,MEMB] on the single-boundary-rep assumption; generalized 2026-08-21 alongside
-    // applyCritSwap for the same reason (S_6/S_7's multi-boundary reps). A special-point slot
-    // (added 2026-08-25) keeps its own token in place instead -- it has no separate host to
-    // repoint, since it already stands for "connects to somewhere outside this position" (same
-    // convention applyCritSwap uses for the single-/double-crit case).
-    std::vector<Bnd> newRegion;
-    newRegion.reserve(repTemplate.size());
-    std::uint32_t portBoundary = 0, portOcc = 0;
-    for (std::size_t bi = 0; bi < repTemplate.size(); ++bi) {
-        Bnd nb;
-        nb.reserve(repTemplate[bi].size());
-        std::uint32_t membOcc = 0;
-        for (Token t : repTemplate[bi]) {
-            if (!isPort(t)) {
-                nb.push_back(t);
-                continue;
+    // Build the rep's own new region(s) from the template (k=1 scope: exactly one port total,
+    // wherever it sits), recording its final region+boundary+occurrence for the crossing
+    // pairing's repoint below, and -- for every internal-letter MEMB token -- its final occurrence
+    // too (`letterFinalOcc`, keyed by the template-side MRef `parseRepTemplate` recorded it under),
+    // since a letter's TRUE occurrence can only be known here: a port sharing its boundary shifts
+    // a later letter's occurrence only when that port itself becomes a real membrane (the
+    // special-token case leaves it un-shifted) -- see MultiRepTemplate's own doc comment. A
+    // special-point slot keeps its own token in place instead of becoming a membrane -- it has no
+    // separate host to repoint, since it already stands for "connects to somewhere outside this
+    // position" (same convention applyCritSwap uses for the single-/double-crit case).
+    std::vector<std::vector<Bnd>> newRegions(rep.regions.size());
+    std::map<MRef, std::uint32_t> letterFinalOcc;
+    std::uint32_t portRegionT = 0, portBoundary = 0, portOcc = 0;
+    for (std::size_t ri = 0; ri < rep.regions.size(); ++ri) {
+        std::vector<Bnd> region;
+        region.reserve(rep.regions[ri].size());
+        for (std::size_t bi = 0; bi < rep.regions[ri].size(); ++bi) {
+            Bnd nb;
+            nb.reserve(rep.regions[ri][bi].size());
+            std::uint32_t membOcc = 0, letterOcc = 0;
+            for (Token t : rep.regions[ri][bi]) {
+                if (isPort(t)) {
+                    if (slot.special) {
+                        nb.push_back(slot.tok);
+                    } else {
+                        portRegionT = static_cast<std::uint32_t>(ri);
+                        portBoundary = static_cast<std::uint32_t>(bi);
+                        portOcc = membOcc++;
+                        nb.push_back(MEMB);
+                    }
+                } else if (t == MEMB) {
+                    letterFinalOcc[MRef{static_cast<std::uint32_t>(ri), static_cast<std::uint32_t>(bi),
+                                        letterOcc}] = membOcc;
+                    ++letterOcc;
+                    ++membOcc;
+                    nb.push_back(MEMB);
+                } else {
+                    nb.push_back(t);
+                }
             }
-            if (slot.special) {
-                nb.push_back(slot.tok);
-            } else {
-                portBoundary = static_cast<std::uint32_t>(bi);
-                portOcc = membOcc++;
-                nb.push_back(MEMB);
-            }
+            region.push_back(std::move(nb));
         }
-        newRegion.push_back(std::move(nb));
+        newRegions[ri] = std::move(region);
     }
 
     // Sentinel (not 0) for deleted-region slots: if the "exactly one crossing edge" invariant
     // were ever violated, a stray read of an unset entry surfaces immediately as an out-of-range
     // EncodingError from pairIndex() instead of silently aliasing onto real region 0.
     std::vector<std::uint32_t> oldToNew(c.regions.size(), static_cast<std::uint32_t>(-1));
+    std::vector<std::uint32_t> templateToNew(rep.regions.size(), static_cast<std::uint32_t>(-1));
     Component out;
     out.dead = c.dead;
     std::uint32_t next = 0;
     for (std::uint32_t r = 0; r < c.regions.size(); ++r) {
         if (inSide(r) && r != keepRegion)
-            continue;  // deleted -- absorbed into keepRegion's rep
+            continue;  // deleted -- absorbed into the rep's own regions
+        if (r == keepRegion) {
+            for (std::size_t ri = 0; ri < newRegions.size(); ++ri) {
+                templateToNew[ri] = next++;
+                out.regions.push_back(std::move(newRegions[ri]));
+            }
+            continue;
+        }
         oldToNew[r] = next++;
-        out.regions.push_back(r == keepRegion ? newRegion : c.regions[r]);
+        out.regions.push_back(c.regions[r]);
     }
 
-    out.pairings.reserve(c.pairings.size());
+    out.pairings.reserve(c.pairings.size() + rep.internalPairings.size());
     for (int pi = 0; pi < static_cast<int>(c.pairings.size()); ++pi) {
         auto pr = c.pairings[static_cast<std::size_t>(pi)];
         if (!slot.special && pi == slot.pairing) {
             MRef& sideEnd = inSide(pr.first.region) ? pr.first : pr.second;
             MRef& hostEnd = inSide(pr.first.region) ? pr.second : pr.first;
             hostEnd.region = oldToNew[hostEnd.region];
-            sideEnd = MRef{oldToNew[keepRegion], portBoundary, portOcc};
+            sideEnd = MRef{templateToNew[portRegionT], portBoundary, portOcc};
             out.pairings.push_back(pr);
             continue;
         }
@@ -740,6 +869,17 @@ Component applyMultiCritSwap(const Component& c, const std::vector<std::uint32_t
         pr.first.region = oldToNew[pr.first.region];
         pr.second.region = oldToNew[pr.second.region];
         out.pairings.push_back(pr);
+    }
+
+    // The rep's OWN internal pairings (empty for every single-region rep; S_11/S_16 cross the
+    // rep's own new regions), remapped from template-side (region-index-within-template,
+    // letter-rank) to final (real new region index via templateToNew, real pairIndex()-style
+    // occurrence via letterFinalOcc).
+    for (const auto& [a, b] : rep.internalPairings) {
+        auto remap = [&](const MRef& m) {
+            return MRef{templateToNew[m.region], m.boundary, letterFinalOcc.at(m)};
+        };
+        out.pairings.push_back({remap(a), remap(b)});
     }
     return out;
 }
@@ -801,15 +941,12 @@ struct CritFamily {
     std::vector<RosterGroup> groups;
 };
 
-// This family's own shared reduction target, as a boundary TEMPLATE: exactly `parseLeftSide`'s
-// parse of `repEncoding`, with port tokens left in place as sentinels marking where each crit
-// slot's real occurrence goes (applyCritSwap/applyMultiCritSwap substitute them in). Originally a
-// flat `vector<Token>` on the assumption every rep was exactly one boundary (true for S1/S2's
-// "2a", C_3's "3a", C_4's "4a", S_5's "12a") -- generalized 2026-08-21 for S_6's rep "1,2,a" (the
-// crit alone in its own THIRD boundary) and S_7's "2,1a" (two boundaries, crit sharing the
-// second with ordinary content). `parseLeftSide` already returns exactly this shape, so this is
-// just a naming wrapper -- kept so callers read as "the rep template" rather than a raw parse.
-std::vector<Bnd> repTemplate(const char* repEncoding) { return parseLeftSide(repEncoding); }
+// This family's own shared reduction target, as a boundary TEMPLATE, built by `repTemplate()`
+// (see the MultiRepTemplate/parseRepTemplate section above, near applyMultiCritSwap -- moved
+// ahead of this struct since applyMultiCritSwap needs the type too). Port tokens are left in place
+// as sentinels marking where each crit slot's real occurrence goes; `internalPairings` records the
+// rep's OWN internal membranes for a genuinely multi-region rep like S_11's "4A|Aa" (empty for
+// every single-region rep, which is still most of them).
 
 // Single-crit (k=1) families. S1/S2 share rep "2a" ([SCAB, crit]); when the crit is a real
 // membrane this is the DECOMPRESSED form of a DisaPoint, which the very next canonicalizeFull
@@ -892,8 +1029,9 @@ const std::vector<CritFamily>& singleCritFamilies() {
         // 2026-08-21 when it resurfaced in the CSV under S_1 -- both calls were correct: "12,a"
         // was never an S_1 element, it just turns out to be its OWN family's rep instead, not
         // invalid shape. Standalone, no Pairing-Theorem sibling identified (like C_3/C_4/S_5).
-        // "233,a" added 2026-08-25 (user-provided).
-        {"12,a", {{"S_8", 0, {"25,a", "2728,a", "2738,a", "233,a"}}}},
+        // "233,a" added 2026-08-25 (user-provided). "223,a" added 2026-08-26 (user-provided) --
+        // same family, an additional single-region partition.
+        {"12,a", {{"S_8", 0, {"25,a", "2728,a", "2738,a", "233,a", "223,a"}}}},
         // "3,4,a"/"34,a" added 2026-08-25 (user-provided) -- distinct boundary partitions of the
         // already-registered "3,4a".
         {"34a", {{"S_9", 0, {"277a88", "3,4a", "4,3a", "273a8", "237a8", "3,4,a", "34,a"}}}},
@@ -909,10 +1047,30 @@ const std::vector<CritFamily>& singleCritFamilies() {
         {"5,5,a", {{"S_12", 0, {}}}},
         // S_14 through S_20 added 2026-08-25 (user-provided). S_13 (genome (2,0,{1},{},[C_3,S_1]),
         // rep "33a") and S_16 (genome (0,3,{2},{1},[C_3,C_4,S_1⊕1]), rep "3CD|CDa", multi-region)
-        // are DELIBERATELY NOT registered here -- user's own note: every other member of each is
-        // already caught by the pre-existing crit-cell congruity rule (enumerateCritCells/
-        // mergeCritCell, upstream of this registry entirely), so a roster entry would be redundant.
-        // Both still get named-genome-table entries (alpha_genome.cpp/collectAlpha.ts) for display.
+        // were ORIGINALLY left unregistered here on the theory that every member is already caught
+        // by the pre-existing crit-cell congruity rule (enumerateCritCells/mergeCritCell, upstream
+        // of this registry entirely), making a roster entry redundant. That theory silently assumed
+        // no single-alpha member would ever land its special point in the SAME region as the crits
+        // crit-cell is trying to merge -- but a genuine single-alpha S_13 member does exactly that
+        // (its rep "33a" decompresses to "A,B,a|2A|2B": 2 real membranes + the alpha marker sharing
+        // one region), and crit-cell's ALL-membrane requirement excludes any region containing the
+        // alpha token. Fixed 2026-08-26 by special-cell congruity (see its own section doc comment,
+        // above enumerateSpecialCells/mergeSpecialCell) generalized to cover k=2 real membranes +1
+        // special point, which now reduces every such member down to "33a" same as crit-cell always
+        // did for the pure-membrane members -- so S_13 is registered below like S_10/S_12/S_17/S_20
+        // (empty group; no single-region elements need listing here, the merge does the work).
+        // S_16 was left unregistered here through 2026-08-26 -- not for the same reason as S_13
+        // above, but a distinct architectural gap: its rep "3CD|CDa" is itself multi-region
+        // (contains '|'), and applyMultiCritSwap only ever collapsed a matched chunk down into ONE
+        // new region built from repTemplate()'s single-region parse, so there was no swap machinery
+        // that could target a multi-region rep at all. Fixed 2026-08-27 by generalizing
+        // repTemplate/applyMultiCritSwap to emit N regions (see MultiRepTemplate's own doc
+        // comment); S_16 (with its two known members) is now registered in multiCritFamilies()
+        // instead of here, alongside the new S_11⊕1 sibling group which needed the same machinery.
+        // S_13's fix does NOT apply here -- that was about crit-cell missing a special point
+        // sharing the region, a single-region concern; this was single-vs-multi-region swap-target
+        // support, unrelated.
+        {"33a", {{"S_13", 0, {}}}},
         {"222a", {{"S_14", 0, {"2,22a"}}}},
         {"24a", {{"S_15", 0, {"2,4a"}}}},
         // S_17 (genome (0,3,{0,1,2},{},[C_3,C_4,S_1⊕1])) -- unique, single known example, same
@@ -982,7 +1140,8 @@ const std::vector<CritFamily>& multiCritFamilies() {
         // "CD|DE|D2Ea") canonicalizes to the exact same key as the already-registered
         // "CD|CE|2DaE" just above (a boundary-rotation/relabeling equivalent, not a new shape).
         // Net result: no new S_6 multi-region elements from this batch.
-        {"1,2,a", {{"S_6", 0, {"2CD|C2Da", "CD|CE|2DaE"}}}},
+        // "2CD|2,CD,a" added 2026-08-26 (user-provided).
+        {"1,2,a", {{"S_6", 0, {"2CD|C2Da", "CD|CE|2DaE", "2CD|2,CD,a"}}}},
         {"2,1a", {{"S_7", 0, {"2CD|2,CDa"}}}},
         // "2CD|2CD,a" added 2026-08-25 (user-provided) -- S_8's first multi-region element.
         {"12,a", {{"S_8", 0, {"2CD|2CD,a"}}}},
@@ -991,6 +1150,33 @@ const std::vector<CritFamily>& multiCritFamilies() {
         // S_10's first (and so far only) known element, added 2026-08-25 (user-provided) alongside
         // S_10's own new single-region rep entry in singleCritFamilies() above.
         {"4,2a", {{"S_10", 0, {"3A|2Aa"}}}},
+        // S_11 (2nd element) / S_11⊕1 added 2026-08-27, the first family here whose OWN rep is
+        // genuinely multi-region (unlike every entry above, which reuses an EXISTING single-region
+        // family's rep -- see this function's own doc comment) -- built on the multi-region-target
+        // swap machinery (MultiRepTemplate/parseRepTemplate/applyMultiCritSwap) added the same
+        // session. S_11 itself was previously appended directly in allCollectionRosters() as
+        // display-only, bypassing registry()/multiRegistry() entirely (no swap machinery existed
+        // yet); it is now a genuine registry entry like every other family. Both elements confirmed
+        // via query_position --graph-ensure-only (exact nimber/minMoves/maxMoves) prior to this
+        // machinery landing: "2AB|ABa" matches rep "4A|Aa" at offset 0 (3/2/3); the Pairing-Theorem
+        // sibling (offset 1) matches at offset 1, both "5AB|ABa" and "ABa|37AB8" landing nimber
+        // 2 = 3^1 (minMoves 3/maxMoves 4) -- neither reduces to the other or to S_11's rep through
+        // any existing structural rule, so both are stable quick-canon fixpoints in their own
+        // right. Named plain "S_11⊕1" (the group name below), NOT a standalone "S_22" -- an
+        // in-session correction 2026-08-27: an earlier session's genome text for a distinct "S_22"
+        // family (given before this swap machinery existed to check it against) didn't match what
+        // computeAlphaGenome actually reports for either element (identical R/D/L/T'/T to S_11's
+        // own genome, differing only in the accumulated quick-canon offset), and the user confirmed
+        // directly that this was always meant as the S_1/S_1⊕1-style oplus-suffix sibling, not a
+        // separate named collection -- so it needs no genome-table entry of its own either (its
+        // genome bucket IS S_11's).
+        {"4A|Aa", {{"S_11", 0, {"2AB|ABa"}}, {"S_11⊕1", 1, {"5AB|ABa", "ABa|37AB8"}}}},
+        // S_16 added 2026-08-27, alongside S_11/S_11⊕1 above -- previously left unregistered (see
+        // singleCritFamilies()'s own "33a"/S_13 comment block) specifically because its rep
+        // "3CD|CDa" is itself multi-region and no swap machinery could target one; both elements
+        // confirmed nimber-equal (4/2/4, matching the rep) via query_position --graph-ensure-only
+        // before the machinery landed.
+        {"3CD|CDa", {{"S_16", 0, {"4C|CD|Da", "2CD|CDE|Ea"}}}},
     };
     return families;
 }
@@ -1001,7 +1187,11 @@ const std::vector<CritFamily>& multiCritFamilies() {
 // element must belong to exactly one family.
 struct CritMatch {
     int offset;
-    std::vector<Bnd> head;
+    // Single-/double-crit families' reps are always single-region (their k=1/k=2 finders never
+    // produce multi-region candidates -- see enumerateCrits/enumerateDoubleCrits), enforced at
+    // construction below; multi-region families' reps may be N>1 regions (see MultiRepTemplate's
+    // own doc comment).
+    MultiRepTemplate head;
     // The roster's own authored left-side text (pre-canonicalization), e.g. "1a", "0,a", "2CD|2a,CD"
     // -- used to label which collection member fired a reduction, see quickReductionCounts.
     std::string display;
@@ -1011,7 +1201,10 @@ const std::map<std::string, CritMatch>& registry() {
     static const std::map<std::string, CritMatch> reg = [] {
         std::map<std::string, CritMatch> m;
         for (const auto& fam : singleCritFamilies()) {
-            const std::vector<Bnd> head = repTemplate(fam.repEncoding);
+            const MultiRepTemplate head = repTemplate(fam.repEncoding);
+            if (head.regions.size() != 1)
+                throw std::logic_error("collections registry: family rep must be single-region: '" +
+                                        std::string(fam.repEncoding) + "'");
             for (const auto& g : fam.groups)
                 for (const char* e : g.elements) {
                     const std::string key = leftSideKey(e);
@@ -1033,7 +1226,7 @@ const std::map<std::string, CritMatch>& multiRegistry() {
     static const std::map<std::string, CritMatch> reg = [] {
         std::map<std::string, CritMatch> m;
         for (const auto& fam : multiCritFamilies()) {
-            const std::vector<Bnd> head = repTemplate(fam.repEncoding);
+            const MultiRepTemplate head = repTemplate(fam.repEncoding);
             for (const auto& g : fam.groups)
                 for (const char* e : g.elements) {
                     const std::string key = multiLeftSideKey(e);
@@ -1054,7 +1247,11 @@ const std::map<std::string, CritMatch>& doubleCritRegistry() {
     static const std::map<std::string, CritMatch> reg = [] {
         std::map<std::string, CritMatch> m;
         for (const auto& fam : doubleCritFamilies()) {
-            const std::vector<Bnd> head = repTemplate(fam.repEncoding);
+            const MultiRepTemplate head = repTemplate(fam.repEncoding);
+            if (head.regions.size() != 1)
+                throw std::logic_error(
+                    "collections doubleCritRegistry: family rep must be single-region: '" +
+                    std::string(fam.repEncoding) + "'");
             for (const auto& g : fam.groups)
                 for (const char* e : g.elements) {
                     const std::string key = leftSideKey(e);
@@ -1270,6 +1467,136 @@ Component mergeCritCell(const Component& c, std::uint32_t R) {
 }
 
 // ---------------------------------------------------------------------------
+// Special-cell congruity: a region whose tokens are EXACTLY k in {1,2} real crit membranes (each
+// paired to a DISTINCT host elsewhere), plus exactly one special point (ALPHA, ...; see
+// tokens.hpp), and nothing else, plays identically regardless of how that content is split across
+// the region's boundaries. A special point stands for "connects to somewhere outside this
+// position" with no independent structure of its own (isSpecialPoint tokens contribute 0 to
+// lives2() and can never self-connect -- see tokens.hpp), so unlike a real scab (DisaPoint's
+// {membrane+scab} case) it carries no value the crit partition could be sensitive to; its
+// placement relative to the membranes within the region is therefore not value-significant. This
+// is the special-point analogue of crit-cell congruity above (which requires the region be PURELY
+// membranes, k in {2,3}) -- here one of the crit slots is allowed to be the special point instead,
+// capping total crit-slot count at 3 the same way (k membranes + 1 special = 2 or 3 total).
+//
+// k=1 (2 total crit slots) prompted by a user report that "[4A|A,a/" wasn't being recognized as
+// S_11's "[4A|Aa/" -- confirmed via query_position --graph-ensure-only: exact nimber (and
+// minMoves/maxMoves) matches between the split and merged forms across 5 varied hosts (4A, 2A, 1A,
+// 0A, 22A), author 2026-08-26.
+//
+// k=2 (3 total crit slots) prompted by a followup: S_13's rep "33a" decompresses to
+// "A,B,a|2A|2B" -- two real membranes plus the alpha marker, split across 3 boundaries -- which
+// crit-cell's ALL-membrane requirement excludes and the original k=1-only special-cell rule didn't
+// cover either, so S_13 (deliberately left unregistered on the now-disproven assumption that
+// crit-cell alone would always reduce every member first, see multiCritFamilies()' own comment)
+// kept leaking through as 4 duplicate "unregistered" rows. Confirmed sound via
+// query_position --graph-ensure-only across 4 host pairs, including an ASYMMETRIC one
+// ("[A,B,a|2A|1B]" vs "[ABa|2A|1B]", different hosts on each membrane) -- a stronger check than
+// k=1's symmetric hosts -- and confirmed "[ABa|2A|2B]" quick-canons to "33a" (S_13's rep) via the
+// existing crit-cell+DisaPoint pipeline once merged, author 2026-08-26.
+//
+// Distinct from DisaPoint compression: DisaPoint's {membrane+scab} pattern collapses to an OPAQUE
+// pseudo-token (the scab has no separate identity worth keeping visible). A special point DOES
+// need to stay visible in the rep -- it IS the point genome/left-side analysis is tracking, so
+// erasing it would corrupt the very shape being classified -- so this merges the boundaries into
+// one WITHOUT compressing any token, mirroring mergeCritCell's mechanics (a literal boundary
+// merge) rather than DisaPoint's (a token substitution).
+// ---------------------------------------------------------------------------
+
+// Regions that are k in {1,2} crit membranes plus a lone special point, split across >=2
+// boundaries (so merging changes them).
+std::vector<std::uint32_t> enumerateSpecialCells(const Component& c) {
+    std::vector<std::uint32_t> out;
+    if (c.dead)
+        return out;
+    const auto idx = c.pairIndex();
+    for (std::uint32_t R = 0; R < c.regions.size(); ++R) {
+        const auto& reg = c.regions[R];
+        if (reg.size() < 2)
+            continue;  // already a single boundary: canonical, nothing to merge
+
+        int membs = 0, specials = 0;
+        bool ok = true;
+        for (const auto& b : reg) {
+            for (Token t : b) {
+                if (t == MEMB) {
+                    ++membs;
+                } else if (isSpecialPoint(t)) {
+                    ++specials;
+                } else {
+                    ok = false;
+                    break;
+                }
+            }
+            if (!ok)
+                break;
+        }
+        if (!ok || specials != 1 || membs < 1 || membs > 2)
+            continue;  // only {1,2} real crits + exactly 1 special point is verified
+
+        // Every membrane must be validly paired to a DISTINCT host elsewhere (mirrors crit-cell's
+        // own distinct-pairing guard, generalized to k>1: an agnostic membrane, or two membranes
+        // paired to EACH OTHER within this region, disqualifies it). idx[R][b] holds one entry per
+        // MEMB in boundary b (Component::pairIndex()'s own numbering), so a boundary made only of
+        // the special point contributes no entries here and is skipped automatically.
+        std::set<int> pis;
+        bool pairOk = true;
+        for (std::uint32_t b = 0; b < reg.size() && pairOk; ++b)
+            for (int pi : idx[R][b]) {
+                if (pi < 0 || !pis.insert(pi).second) {
+                    pairOk = false;
+                    break;
+                }
+            }
+        if (!pairOk)
+            continue;
+
+        out.push_back(R);
+    }
+    return out;
+}
+
+// Merge a special cell's boundaries into one: all its crit membranes plus the one special point,
+// in any order -- mergeCritCell's own "ordering is a non-issue" argument applies identically here
+// (merging only ever collapses body parts, so the result is always drawable; canonicalizeFull's
+// existing rotation/reordering search resolves the residual freedom). Membrane pairings are
+// repointed to the new boundary exactly as mergeCritCell does; the special point stays a literal
+// token appended at the end, never converted to MEMB, so its identity is never lost.
+Component mergeSpecialCell(const Component& c, std::uint32_t R) {
+    std::map<std::pair<std::uint32_t, std::uint32_t>, std::uint32_t> newOcc;
+    std::uint32_t k = 0;
+    Token specialTok = 0;
+    for (std::uint32_t b = 0; b < c.regions[R].size(); ++b) {
+        std::uint32_t occ = 0;
+        for (Token t : c.regions[R][b]) {
+            if (t == MEMB)
+                newOcc[{b, occ++}] = k++;
+            else if (isSpecialPoint(t))
+                specialTok = t;
+        }
+    }
+
+    Bnd merged(k, MEMB);
+    merged.push_back(specialTok);
+
+    Component out;
+    out.dead = c.dead;
+    out.regions.reserve(c.regions.size());
+    for (std::uint32_t r = 0; r < c.regions.size(); ++r)
+        out.regions.push_back(r == R ? std::vector<Bnd>{merged} : c.regions[r]);
+
+    auto remap = [&](MRef m) -> MRef {
+        if (m.region != R)
+            return m;
+        return MRef{R, 0u, newOcc.at({m.boundary, m.occ})};
+    };
+    out.pairings.reserve(c.pairings.size());
+    for (const auto& pr : c.pairings)
+        out.pairings.push_back({remap(pr.first), remap(pr.second)});
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // Scab-cell congruity: the same "merge boundaries, offset 0" idea as the crit-cell family above,
 // but for a region whose tokens are EXACTLY k lone scabs and nothing else (author 2026-08-16).
 // Empirically verified via testQuickNimber (--graph-ensure-only vs --graph-ensure-quick on
@@ -1383,9 +1710,14 @@ void recordQuickReduction(const std::string& key) {
 //   1. Crit-cell congruity      4. Double-crit registry (S_3/S_4)
 //   2. Scab-cell congruity      5. Multi-region registry (S_1/C_4/S_5/S_6/S_7 extra elements)
 //   3. Single-crit registry     6. DisaPoint compression
-// Each of steps 1-4 is REGION-LOCAL: a merge/swap only ever rewrites its OWN region's content
-// plus its OWN side of any pairing referencing that region (never another region's content, never
-// a pairing's OTHER side) -- see mergeCritCell/mergeScabCell/applyCritSwap's own doc comments.
+// Special-cell congruity (added 2026-08-26, see its own section doc comment) runs as step 1b,
+// immediately after crit-cell -- it is the same kind of region-local pure-token-pattern merge as
+// steps 1-2, just not renumbered into the list above to avoid rewriting every "step N" reference
+// below.
+// Each of steps 1-4 (plus 1b) is REGION-LOCAL: a merge/swap only ever rewrites its OWN region's
+// content plus its OWN side of any pairing referencing that region (never another region's
+// content, never a pairing's OTHER side) -- see mergeCritCell/mergeSpecialCell/mergeScabCell/
+// applyCritSwap's own doc comments.
 // Regions are therefore independent within a step: every eligible candidate is found ONCE against
 // a snapshot of the position at the step's start, then ALL of them are applied in one batch
 // (chained sequentially so pairing updates compose correctly -- see stepSingleCrit's doc comment
@@ -1449,6 +1781,22 @@ bool stepCritCell(Position& cur) {
     return changed;
 }
 
+// Step 1b: special-cell congruity (see its own section doc comment above). Same batching pattern
+// as step 1 -- region-local, mergeSpecialCell only ever touches its own region's content plus the
+// one pairing referencing it.
+bool stepSpecialCell(Position& cur) {
+    bool changed = false;
+    for (std::size_t ci = 0; ci < cur.components.size(); ++ci) {
+        const Component snapshot = cur.components[ci];
+        for (std::uint32_t R : enumerateSpecialCells(snapshot)) {
+            recordQuickReduction("[" + regionKey(snapshot.regions[R]) + "/");
+            cur.components[ci] = mergeSpecialCell(cur.components[ci], R);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 // Step 2: scab-cell congruity. Same batching pattern as step 1.
 bool stepScabCell(Position& cur) {
     bool changed = false;
@@ -1479,8 +1827,8 @@ bool stepSingleCrit(Position& cur, int& offset) {
             const auto it = registry().find(cand.leftKey);
             if (it == registry().end())
                 continue;
-            cur.components[ci] =
-                applyCritSwap(cur.components[ci], cand.leftRegion, it->second.head, {cand.slot});
+            cur.components[ci] = applyCritSwap(cur.components[ci], cand.leftRegion,
+                                                it->second.head.regions[0], {cand.slot});
             offset ^= it->second.offset;
             recordQuickReduction("[" + it->second.display + "/");
             changed = true;
@@ -1498,7 +1846,8 @@ bool stepDoubleCrit(Position& cur, int& offset) {
             const auto it = doubleCritRegistry().find(cand.leftKey);
             if (it == doubleCritRegistry().end())
                 continue;
-            cur.components[ci] = applyCritSwap(cur.components[ci], cand.region, it->second.head,
+            cur.components[ci] = applyCritSwap(cur.components[ci], cand.region,
+                                                it->second.head.regions[0],
                                                 {cand.slot1, cand.slot2});
             offset ^= it->second.offset;
             recordQuickReduction("[" + it->second.display + "/");
@@ -1585,6 +1934,8 @@ QuickCanonResult quickCanon(const Position& p) {
             bool stepChanged = false;
             if (stepCritCell(cur))
                 stepChanged = true;
+            if (stepSpecialCell(cur))
+                stepChanged = true;
             if (stepScabCell(cur))
                 stepChanged = true;
             if (stepSingleCrit(cur, offset))
@@ -1634,27 +1985,34 @@ std::vector<CollectionRoster> allCollectionRosters() {
         addFamily(fam);
     for (const auto& fam : doubleCritFamilies())
         addFamily(fam);
-    // Multi-region families reuse an existing single-/double-crit family's name (they're
-    // additional elements of the SAME collection, not new ones) -- append their elements onto
-    // the already-emitted roster entry of that name rather than emitting a second entry, so the
-    // Collect pane's JSON dump still has exactly one object per collection name.
-    for (const auto& fam : multiCritFamilies())
+    // Most multi-region families reuse an existing single-/double-crit family's name (they're
+    // additional elements of the SAME collection, not new ones) -- append their elements onto the
+    // already-emitted roster entry of that name rather than emitting a second entry, so the
+    // Collect pane's JSON dump still has exactly one object per collection name. A family whose
+    // name doesn't match anything already emitted (added 2026-08-27: S_11/S_11⊕1/S_16, the first
+    // multiCritFamilies() entries with a genuinely multi-region rep of their own rather than a
+    // borrowed single-region one -- see multiCritFamilies()' own doc comment) has no existing
+    // entry to append onto, so it's emitted fresh via addFamily instead, same as any single-/
+    // double-crit family.
+    for (const auto& fam : multiCritFamilies()) {
+        bool anyExisting = false;
+        for (const auto& g : fam.groups)
+            for (const auto& r : out)
+                if (r.name == g.name) {
+                    anyExisting = true;
+                    break;
+                }
+        if (!anyExisting) {
+            addFamily(fam);
+            continue;
+        }
         for (const auto& g : fam.groups)
             for (auto& r : out)
                 if (r.name == g.name) {
                     r.elements.insert(r.elements.end(), g.elements.begin(), g.elements.end());
                     break;
                 }
-    // S_11 added 2026-08-25 (user-provided; genome (2,0,{1},{1},[C_3,S_1])) -- its rep "4A|Aa" is
-    // genuinely multi-region (unlike every other family here, whose repEncoding is single-region and
-    // parsed via repTemplate/parseLeftSide). No family struct can hold it without repTemplate()
-    // throwing at static-init time, and there's no swap-matching machinery for a multi-region REP
-    // target yet either (applyCritSwap/applyMultiCritSwap only ever collapse a match down into ONE
-    // region). Since S_11 has no additional roster elements yet to verify such machinery against
-    // (deliberately deferred -- see [[project_advanced_collections]]), it's appended here directly:
-    // display/reference only, bypassing registry()/multiRegistry() entirely. Verified via
-    // verify_left_side.cpp (offset 0 against candidate "2AB|a,AB") on both host sets.
-    out.push_back({"S_11", 0, {}, "4A|Aa"});
+    }
     return out;
 }
 

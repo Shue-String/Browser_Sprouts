@@ -1649,6 +1649,82 @@ void testSpecialPointCollections() {
     }
 }
 
+// The multi-region-TARGET swap machinery (2026-08-27): unlike every earlier multiCritFamilies()
+// entry, S_11/S_11⊕1 (rep "4A|Aa") and S_16 (rep "3CD|CDa") have a rep that is ITSELF multi-region,
+// so applyMultiCritSwap must emit N new regions (matching the rep's own region count) instead of
+// always collapsing a match down to one -- and wire the rep's own internal membrane (S_11/S_11⊕1's
+// A, S_16's C/D) fresh across those new regions. Exercises both crit kinds: a real membrane host
+// pairing (queried against GameGraph::Exact by hand -- see verify_left_side.cpp/query_position
+// --graph-ensure-only for the ad-hoc method) and a special point (ALPHA, checked directly here the
+// same way testSpecialPointCollections does). Nimbers below were cross-checked against
+// GameGraph::Exact via `query_position --graph-ensure-only` before being hard-coded.
+void testMultiRegionRepTarget() {
+    using namespace stalks;
+
+    auto qc = [](const std::string& enc) { return quickCanon(parsePosition(enc)); };
+
+    // S_11's rep "4A|Aa" and its second element "2AB|ABa", crit as a real special point (alpha):
+    // both exact nimber 3 (query_position --graph-ensure-only), offset 0.
+    {
+        const auto rep = qc("4A|Aa");
+        const auto elem = qc("2AB|ABa");
+        checkEqInt(rep.offset, 0, "S_11 rep alpha-crit: offset 0");
+        checkEq(ser(elem.rep), ser(rep.rep), "S_11 2nd element (alpha crit) reduces to the rep");
+        checkEqInt(elem.offset, 0, "S_11 2nd element (alpha crit): offset 0");
+    }
+    // S_11⊕1 (Pairing-Theorem sibling of S_11, offset 1 -- named plain "S_11⊕1", not a standalone
+    // collection, per user confirmation 2026-08-27): both known elements, alpha crit, exact
+    // nimber 2 = 3^1 (query_position --graph-ensure-only), and neither reduces to S_11's own rep
+    // (each is its own stable quick-canon fixpoint).
+    {
+        const auto rep = qc("4A|Aa");
+        const auto e1 = qc("5AB|ABa");
+        const auto e2 = qc("ABa|37AB8");
+        checkEq(ser(e1.rep), ser(rep.rep), "S_11⊕1 element 1 (alpha crit) reduces to S_11's rep shape");
+        checkEqInt(e1.offset, 1, "S_11⊕1 element 1 (alpha crit): offset 1");
+        checkEq(ser(e2.rep), ser(rep.rep), "S_11⊕1 element 2 (alpha crit) reduces to S_11's rep shape");
+        checkEqInt(e2.offset, 1, "S_11⊕1 element 2 (alpha crit): offset 1");
+    }
+    // S_16's rep "3CD|CDa" (3 regions collapsing to the rep's 2) and its two elements, alpha crit:
+    // all exact nimber 4 (query_position --graph-ensure-only), offset 0.
+    {
+        const auto rep = qc("3CD|CDa");
+        const auto e1 = qc("4C|CD|Da");
+        const auto e2 = qc("2CD|CDE|Ea");
+        checkEqInt(rep.offset, 0, "S_16 rep alpha-crit: offset 0");
+        checkEq(ser(e1.rep), ser(rep.rep), "S_16 element 1 (alpha crit) reduces to the rep");
+        checkEqInt(e1.offset, 0, "S_16 element 1 (alpha crit): offset 0");
+        checkEq(ser(e2.rep), ser(rep.rep), "S_16 element 2 (alpha crit) reduces to the rep");
+        checkEqInt(e2.offset, 0, "S_16 element 2 (alpha crit): offset 0");
+    }
+    // Real-membrane crit variant: same elements, port paired to an external host membrane Z
+    // instead of alpha, with the matched chunk sandwiched between unrelated regions (region index
+    // 0 is NOT part of the chunk) -- exercises the oldToNew/templateToNew reindexing, not just the
+    // slot.special branch. Nimbers cross-checked via query_position --graph-ensure-only on
+    // "22|<elem>|0,Z" / "22|<rep>|0,Z": S_11 rep/element both 2, S_16 rep/elements both 0.
+    {
+        const auto rep = qc("22|4A|AZ|0,Z");
+        const auto elem = qc("22|2AB|ABZ|0,Z");
+        checkEq(ser(elem.rep), ser(rep.rep),
+                "S_11 2nd element (real-membrane crit, mid-position) reduces to the rep");
+        checkEqInt(elem.offset, rep.offset,
+                    "S_11 2nd element (real-membrane crit, mid-position): offset matches rep");
+    }
+    {
+        const auto rep = qc("22|3CD|CDZ|0,Z");
+        const auto e1 = qc("22|4C|CD|DZ|0,Z");
+        const auto e2 = qc("22|2CD|CDE|EZ|0,Z");
+        checkEq(ser(e1.rep), ser(rep.rep),
+                "S_16 element 1 (real-membrane crit, mid-position) reduces to the rep");
+        checkEqInt(e1.offset, rep.offset,
+                    "S_16 element 1 (real-membrane crit, mid-position): offset matches rep");
+        checkEq(ser(e2.rep), ser(rep.rep),
+                "S_16 element 2 (real-membrane crit, mid-position) reduces to the rep");
+        checkEqInt(e2.offset, rep.offset,
+                    "S_16 element 2 (real-membrane crit, mid-position): offset matches rep");
+    }
+}
+
 void testQuickNimber() {
     using namespace stalks;
 
@@ -2111,6 +2187,7 @@ int main() {
         testCanon();
         testCollections();
         testSpecialPointCollections();
+        testMultiRegionRepTarget();
         testQuickNimber();
         testDriver();
         testRegression();
