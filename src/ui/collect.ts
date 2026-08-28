@@ -117,7 +117,10 @@ let searchGen = 0;
  * depth. Defaults on (checkbox in index.html is checked by default). */
 let quickGenome = true;
 
-const HISTORY_STORAGE_KEY = 'sprouts-collect-alpha-v2';
+// v2->v3 2026-08-27: computeAlphaGenomeAt reworked (away-component moves now enumerated as real
+// T-children, oplus folded directly into R/D/L/T' instead of a display suffix) -- old cached
+// genomes for any split T-child are stale/wrong-shaped.
+const HISTORY_STORAGE_KEY = 'sprouts-collect-alpha-v3';
 
 /** Coalesces render() calls triggered by async completions (acMarker/relevancyMarker resolving) --
  * NOT for direct user-triggered calls (search, toggle, select), which still call render()
@@ -297,14 +300,8 @@ function depthClass(depth: number): string {
 function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: string; html: string } {
   const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}}`;
   const cls = depthClass(depth);
-  // A T move can land on a split (sum) position -- only the alpha-bearing component's genome is
-  // classified, so the other component(s)' nim-summed nimber (plus the quick-canon offset, since
-  // this is always computed on the quick-canon rep) is appended as "⊕oplus" -- see
-  // collectAlpha.ts's quickAlphaSplitOf/FourGeneGenome doc comment. Omitted when 0 (no split, no
-  // offset).
-  const oplusSuffix = g.oplus ? `⊕${g.oplus}` : '';
   if (!isFullGenome(g)) {
-    const plain = head + ')' + oplusSuffix;
+    const plain = head + ')';
     return foldToName(plain, `<span class="${cls}">${escapeHtml(plain)}</span>`, cls);
   }
 
@@ -335,28 +332,21 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
   const childPlains = children.map(c => c.plain);
   const childHtmls = children.map(c => c.html);
 
-  const plain = `${head},[${childPlains.join(',')}])${oplusSuffix}`;
+  const plain = `${head},[${childPlains.join(',')}])`;
   const html =
     `<span class="${cls}">${escapeHtml(head)},[</span>` +
     childHtmls.join(`<span class="${cls}">,</span>`) +
-    `<span class="${cls}">])${escapeHtml(oplusSuffix)}</span>`;
+    `<span class="${cls}">])</span>`;
   return foldToName(plain, html, cls);
 }
 
 /** When the Quick-Genome toggle is on, fold a genome node whose exact plain-text tuple matches a
- * known shorthand (see GENOME_NAMES) down to its name, replacing the full tuple rendering. Matched
- * on the tuple with any trailing "⊕N" oplus suffix stripped first, since GENOME_NAMES's keys are
- * un-suffixed (a given tuple shape can appear at any oplus, e.g. S_1 itself split-offset by a T
- * move elsewhere) -- the suffix, if present, is reattached to the folded name unchanged. */
+ * known shorthand (see GENOME_NAMES) down to its name, replacing the full tuple rendering. */
 function foldToName(plain: string, html: string, cls: string): { plain: string; html: string } {
   if (!quickGenome) return { plain, html };
-  const suffixMatch = /⊕\d+$/.exec(plain);
-  const suffix = suffixMatch ? suffixMatch[0] : '';
-  const core = suffix ? plain.slice(0, -suffix.length) : plain;
-  const name = GENOME_NAMES[core];
+  const name = GENOME_NAMES[plain];
   if (!name) return { plain, html };
-  const folded = name + suffix;
-  return { plain: folded, html: `<span class="${cls}">${escapeHtml(folded)}</span>` };
+  return { plain: name, html: `<span class="${cls}">${escapeHtml(name)}</span>` };
 }
 
 /** genomeParts(g, depth).plain, but forcing the fold as if the Quick-Genome toggle were on --
@@ -408,7 +398,7 @@ function coreKeyOf(g: { R: number | null; D: number | null; L: number[]; Tprime:
  * when present. */
 function byEncGenome(enc: string): AlphaGenome | undefined {
   const hit = BY_ENC[enc];
-  return hit ? { R: hit.R, D: hit.D, L: hit.L, Tprime: hit.Tprime, oplus: 0, T: hit.T } : undefined;
+  return hit ? { R: hit.R, D: hit.D, L: hit.L, Tprime: hit.Tprime, T: hit.T } : undefined;
 }
 
 /** A T-child's own folded-plain identity, used the same way GENOME_NAMES/NAMED_FAMILIES text
@@ -543,8 +533,9 @@ function isInAdvancedCollection(enc: string, known?: AlphaGenome | FourGeneGenom
     // rule): "any T move that's not the lowest order's T moves must have ... a child (through a T
     // move) that's in the Advanced Collection" -- the "child (through a T move)" IS the extra
     // T-child itself (that's what a T move produces), not one further step past it. A T-child with
-    // no T-children of its own (e.g. an oplus-shifted copy of a lowest-order genome, T:[]) can
-    // still satisfy this by being named directly -- see isNamedGenome's own oplus-suffix handling.
+    // no T-children of its own (e.g. an away-shifted copy of a lowest-order genome like S_1⊕1,
+    // T:[]) can still satisfy this by being named directly -- it's its own NAMED_GENOME_DEFS entry,
+    // see collectAlpha.ts's FourGeneGenome doc comment.
     for (const [plain, extra] of byPlain) {
       if (family.tChildPlains.includes(plain)) continue;
       const extraKnown = extra.genome ?? byEncGenome(extra.enc);
@@ -582,13 +573,13 @@ function buildEntry(position: PositionRef, genome: AlphaGenome, lives: number | 
 
 /** Build an Entry from a GENOME_DB hit -- no engine call needed up front, since the genome is
  * implied by the bucket key and each T-child already carries its own quick-canon form + nimber
- * (see collect_alpha_genetics.cpp). `oplus` is always 0 and `genomeFresh` is false here: the DB
- * predates quick-canon-split handling (see collectAlpha.ts's quickAlphaSplitOf) and nested [T]
- * genomes, so this is a stand-in, upgraded to a real computeAlphaGenome() result the first time this
- * entry is actually selected -- see selectEntry. */
+ * (see collect_alpha_genetics.cpp). `genomeFresh` is false here: the DB predates quick-canon-split
+ * handling (see collectAlpha.ts's quickAlphaSplitOf) and nested [T] genomes, so this is a stand-in,
+ * upgraded to a real computeAlphaGenome() result the first time this entry is actually selected --
+ * see selectEntry. */
 function buildGenomeEntry(hit: GenomeHit, R: number, D: number, L: number[], Tprime: number[]): Entry {
   return { label: quickLabel(hit), position: hit, lives: hit.lives, genomeFresh: false,
-    genome: { R, D, L, Tprime, oplus: 0, T: hit.T } };
+    genome: { R, D, L, Tprime, T: hit.T } };
 }
 
 /** Make `label` the active entry and, if its genome is still the GENOME_DB stand-in (see
@@ -984,7 +975,7 @@ function renderCollectionGroup(name: string, members: Entry[]): string {
   );
   const allItems = [...memberItems, ...staticItems];
   const items = allItems.length === 0 ? '<div class="collect-coll-empty">(none)</div>' : allItems.join('');
-  // Only names in NAMED_GENOME_DEFS (S_1, S_1⊕1, C_3, C_4, S_5, S_6, S_7, S_8, S_9) actually stand
+  // Only names in NAMED_GENOME_DEFS (S_1, S_1⊕1, S_2, C_4, S_5, S_6, S_7, S_8, S_9) actually stand
   // for a real single-alpha genome tuple -- S_3/S_4 (roster-only, two-crit) have no entry, so no genome text
   // is shown for them.
   const genomeText = NAMED_FAMILY_GENOME_TEXT[name];
@@ -1006,7 +997,7 @@ function renderCollectionGroup(name: string, members: Entry[]): string {
  * ever looked at). A no-op (and leaves the panel's previous content alone) while the panel is
  * closed, so building this tree doesn't run every render() call for no reason.
  *
- * The folder LIST is NAMED_FAMILIES' names (real, computable genome shapes: S_1, S_1⊕1, C_3, C_4,
+ * The folder LIST is NAMED_FAMILIES' names (real, computable genome shapes: S_1, S_1⊕1, S_2, C_4,
  * S_5, S_6, S_7, S_8, S_9) unioned with COLLECTION_ROSTER_FOLDER_NAMES (every collection currently registered in
  * stalks/src/collections.cpp, straight from src/data/collectionsRoster.json -- S_3/S_4 today, but
  * also whatever's added there later) -- so a brand-new Stalks-side collection gets a folder (with

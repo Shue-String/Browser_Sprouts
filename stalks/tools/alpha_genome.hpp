@@ -34,8 +34,8 @@ std::optional<AlphaGenome> classifyAlphaGenome(const stalks::Position& p, const 
 std::string genomeKey(const AlphaGenome& g);
 
 // The FULL "(R,D,{L},{T'},[T])" genome text, T-children folded to their shorthand name when
-// recognized (see the named-genome table in alpha_genome.cpp, mirroring
-// src/model/collectAlpha.ts's NAMED_GENOME_DEFS/GENOME_NAMES) -- mirrors collect.ts's
+// recognized (see the named-genome table in alpha_genome.cpp, derived from the same
+// src/data/genomeDefs.json that src/model/collectAlpha.ts's GENOME_DEFS reads) -- mirrors collect.ts's
 // genomeParts/foldToName convention: a T-child recurses one level with its OWN full [T] computed,
 // and bottoms out at a bare 4-gene tuple two levels down (matching collectAlpha.ts's
 // MAX_GENOME_DEPTH), since none of the currently-named genomes need deeper nesting to be

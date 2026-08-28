@@ -2,11 +2,15 @@
 
 #include "canon.hpp"
 #include "encoding.hpp"
+#include "genome_defs.generated.hpp"
 #include "moves.hpp"
 #include "tokens.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <map>
+#include <set>
+#include <stdexcept>
 #include <vector>
 
 using namespace stalks;
@@ -44,55 +48,128 @@ std::vector<Position> tChildrenOf(const Position& p) {
     return out;
 }
 
-// Named-genome shorthand table, hand-mirrored from src/model/collectAlpha.ts's
-// NAMED_GENOME_DEFS + GENOME_NAMES (withCompactKeys) -- update both places together if a new
-// family is registered there. Matches collectAlpha.ts's "S_1⊕1" naming convention exactly (no
-// space around ⊕ -- see that file's own doc comment on why the spacing must match precisely).
-const std::map<std::string, std::string>& namedGenomes() {
-    static const std::map<std::string, std::string> kFull = {
-        {"(0,1,{0},{},[])", "S_1"},
-        // Alternate T-child presentations of the SAME S_1 genome, added 2026-08-25 (user-provided):
-        // "(0,1,{0},{},[C_4,S_1⊕1])" in particular is what the (Grandparent) Bypass Theorem was
-        // originally derived for. Distinct KEYS mapping to the same already-existing NAME, not a
-        // naming collision (unlike the S_10/S_11 case) -- std::map allows any number of keys per
-        // value.
-        {"(0,1,{0},{},[S_1⊕1])", "S_1"},
-        {"(0,1,{0},{},[C_4,S_1⊕1])", "S_1"},
-        {"(1,0,{1},{},[S_1])", "S_1⊕1"},
-        {"(1,1,{0},{0},[])", "C_3"},
-        {"(1,2,{1},{0},[S_1])", "C_4"},
-        {"(0,1,{0,2},{},[C_4,S_1⊕1])", "S_5"},
-        {"(0,2,{0},{},[C_3,S_1⊕1])", "S_6"},
-        {"(0,3,{0,2},{},[C_3,S_1⊕1])", "S_7"},
-        {"(0,3,{0},{},[C_3,C_4,S_1⊕1])", "S_8"},
-        {"(0,3,{0,2},{},[C_3,C_4,S_1⊕1])", "S_9"},
-        // S_10/S_11 added 2026-08-25 (user-provided). S_10's genome was originally mis-given as
-        // identical to S_11's ((2,0,{1},{1},[C_3,S_1])) -- corrected by the user in-session once
-        // flagged (two different names can't share one genome-text key).
-        {"(2,3,{0,2},{},[S_1,S_1⊕1])", "S_10"},
-        {"(2,0,{1},{1},[C_3,S_1])", "S_11"},
-        // C_3⊕1 and S_12 added 2026-08-25 (user-provided). S_12 = (S_6⊕1) under a plain name for
-        // contexts where the ⊕1 factoring isn't relevant (user's own framing); needs C_3⊕1 as its
-        // own named entry first since it appears inside S_12's own T-child list. S_12's [T] list
-        // re-sorted lexicographically ("C_3⊕1" < "S_1" < "S_6") from the user's as-typed
-        // "[S_1,C_3⊕1,S_6]" -- this file's own genomeTextAt always builds [T] from a sorted
-        // std::set, so a real position's computed text can only ever match the sorted key.
-        {"(0,0,{1},{1},[C_3])", "C_3⊕1"},
-        {"(1,3,{1},{},[C_3⊕1,S_1,S_6])", "S_12"},
-        // S_13 (rep "33a") and S_16 (rep "3CD|CDa", multi-region) added 2026-08-25 (user-provided)
-        // for genome-naming/T-subgenome display ONLY -- deliberately NOT registered in
-        // collections.cpp's own registry (see singleCritFamilies()'s own comment): every other
-        // member of each is already caught by the pre-existing crit-cell congruity rule, so a
-        // roster entry would be redundant.
-        {"(2,0,{1},{},[C_3,S_1])", "S_13"},
-        {"(0,2,{0,1},{},[C_3,S_1⊕1])", "S_14"},
-        {"(2,3,{0,1,2},{},[C_3,S_1,S_1⊕1])", "S_15"},
-        {"(0,3,{2},{1},[C_3,C_4,S_1⊕1])", "S_16"},
-        {"(0,3,{0,1,2},{},[C_3,C_4,S_1⊕1])", "S_17"},
-        {"(0,3,{0,1,2},{},[C_3,S_1⊕1])", "S_18"},
-        {"(2,3,{0,2},{},[C_3,S_1,S_1⊕1])", "S_19"},
-        {"(0,3,{0,1},{},[C_4,S_1⊕1])", "S_20"},
+// Named-genome shorthand table. The DATA (per-family R/D/{L}/{T'}/[T] shape) is single-sourced in
+// src/data/genomeDefs.json and reaches this file as genome_defs.generated.hpp -- a mechanical
+// transcription, not a hand-typed copy (see that header's own comment). This function ports
+// collectAlpha.ts's resolveGenome/buildRegistry ALGORITHM (fold `shift` into every gene via XOR,
+// union T-children across the shift range, detect same-genome-different-name collisions) natively
+// to C++, so the only thing duplicated across languages is the ~40-line algorithm itself, not the
+// ~20-family, ever-growing data table it used to be (that table drifted at least once already --
+// see the generated header's own S_10/S_11 note, now impossible to reintroduce since both
+// languages compute from the same JSON).
+std::string foldedNameOf(const std::string& family, int shift) {
+    if (shift == 0) return family;
+    return family + "⊕" + std::to_string(shift);
+}
+
+struct ResolvedGenome {
+    int R;
+    int D;
+    std::vector<int> L;
+    std::vector<int> Tprime;
+    std::set<std::string> T;  // child names; std::set keeps them sorted, matching every
+                               // downstream use (TS always sorts before using its own T list too)
+};
+
+std::vector<int> sortedDedup(std::vector<int> v) {
+    std::sort(v.begin(), v.end());
+    v.erase(std::unique(v.begin(), v.end()), v.end());
+    return v;
+}
+
+const std::map<std::string, genome_defs_generated::GenomeDef>& genomeDefsByName() {
+    static const std::map<std::string, genome_defs_generated::GenomeDef> kByName = [] {
+        std::map<std::string, genome_defs_generated::GenomeDef> m;
+        for (const auto& [name, def] : genome_defs_generated::familyDefs()) m.emplace(name, def);
+        return m;
+    }();
+    return kByName;
+}
+
+// Fold `shift` into `family`'s own genome_defs entry -- mirrors collectAlpha.ts's resolveGenome
+// exactly (see that function's own doc comment for the rule). Memoized for the same reason: the
+// full-registry build below resolves the same (family, shift) pair repeatedly.
+const ResolvedGenome& resolveGenome(const std::string& family, int shift) {
+    static std::map<std::string, ResolvedGenome> cache;
+    const std::string cacheKey = foldedNameOf(family, shift);
+    const auto cached = cache.find(cacheKey);
+    if (cached != cache.end()) return cached->second;
+
+    const auto& defs = genomeDefsByName();
+    const auto defIt = defs.find(family);
+    if (defIt == defs.end())
+        throw std::runtime_error("genome_defs has no entry named \"" + family + "\"");
+    const genome_defs_generated::GenomeDef& def = defIt->second;
+
+    ResolvedGenome resolved;
+    resolved.R = def.R ^ shift;
+    resolved.D = def.D ^ shift;
+    std::vector<int> L, Tprime;
+    for (int v : def.L) L.push_back(v ^ shift);
+    for (int v : def.Tprime) Tprime.push_back(v ^ shift);
+    resolved.L = sortedDedup(L);
+    resolved.Tprime = sortedDedup(Tprime);
+    for (const auto& child : def.T) resolved.T.insert(foldedNameOf(child.name, child.shift ^ shift));
+    for (int k = 0; k < shift; k++) resolved.T.insert(foldedNameOf(family, k));
+
+    return cache.emplace(cacheKey, std::move(resolved)).first->second;
+}
+
+std::string fourGeneKeyOf(const ResolvedGenome& g) {
+    std::string L, Tprime;
+    for (size_t i = 0; i < g.L.size(); i++) { if (i) L += ","; L += std::to_string(g.L[i]); }
+    for (size_t i = 0; i < g.Tprime.size(); i++) { if (i) Tprime += ","; Tprime += std::to_string(g.Tprime[i]); }
+    return "(" + std::to_string(g.R) + "," + std::to_string(g.D) + ",{" + L + "},{" + Tprime + "})";
+}
+
+std::string foldedKeyOf(const ResolvedGenome& g) {
+    std::string head = fourGeneKeyOf(g);
+    head.pop_back();  // drop the trailing ')'
+    std::string joined;
+    bool first = true;
+    for (const auto& t : g.T) {
+        if (!first) joined += ",";
+        first = false;
+        joined += t;
+    }
+    return head + ",[" + joined + "])";
+}
+
+// Registers every family at every shift 0..kMaxShift, base forms before shifted forms (in
+// genome_defs.generated.hpp's own declaration order) -- same collision-resolution priority as
+// collectAlpha.ts's buildRegistry, and for the same reason: several (family, shift) pairs compute
+// to the same (R,D,{L},{T'}) core with different [T] lists, and a genuinely NEW collision (two
+// DIFFERENT names computing the identical full genome) should throw, not silently pick one.
+std::map<std::string, std::string> buildNamedGenomes() {
+    std::map<std::string, std::string> named;
+
+    auto registerOne = [&](const std::string& family, int shift) {
+        const std::string name = foldedNameOf(family, shift);
+        const ResolvedGenome& g = resolveGenome(family, shift);
+        const std::string key = foldedKeyOf(g);
+        const auto existing = named.find(key);
+        if (existing != named.end() && existing->second != name) {
+            throw std::runtime_error(
+                "genome_defs collision: \"" + name + "\" and \"" + existing->second +
+                "\" compute to the identical genome " + key +
+                " -- pick one name and remove the other's own genome_defs entry, keeping it "
+                "only as a T-child reference.");
+        }
+        named[key] = name;
     };
+
+    const auto& defs = genome_defs_generated::familyDefs();
+    for (const auto& entry : defs) registerOne(entry.first, 0);
+    for (const auto& entry : defs) {
+        for (int shift = 1; shift <= genome_defs_generated::kMaxShift; shift++) registerOne(entry.first, shift);
+    }
+    for (const auto& legacy : genome_defs_generated::legacyFoldKeys()) named[legacy.key] = legacy.name;
+
+    return named;
+}
+
+const std::map<std::string, std::string>& namedGenomes() {
+    static const std::map<std::string, std::string> kFull = buildNamedGenomes();
     static const std::map<std::string, std::string> kWithCompact = [] {
         std::map<std::string, std::string> m = kFull;
         for (const auto& [key, name] : kFull) {
