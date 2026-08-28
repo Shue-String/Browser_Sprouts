@@ -975,7 +975,7 @@ function renderCollectionGroup(name: string, members: Entry[]): string {
   );
   const allItems = [...memberItems, ...staticItems];
   const items = allItems.length === 0 ? '<div class="collect-coll-empty">(none)</div>' : allItems.join('');
-  // Only names in NAMED_GENOME_DEFS (S_1, S_1⊕1, S_2, C_4, S_5, S_6, S_7, S_8, S_9) actually stand
+  // Only names in NAMED_GENOME_DEFS (S_1, S_1⊕1, S_2, C_3, S_5, S_6, S_7, S_8, S_9) actually stand
   // for a real single-alpha genome tuple -- S_3/S_4 (roster-only, two-crit) have no entry, so no genome text
   // is shown for them.
   const genomeText = NAMED_FAMILY_GENOME_TEXT[name];
@@ -997,7 +997,7 @@ function renderCollectionGroup(name: string, members: Entry[]): string {
  * ever looked at). A no-op (and leaves the panel's previous content alone) while the panel is
  * closed, so building this tree doesn't run every render() call for no reason.
  *
- * The folder LIST is NAMED_FAMILIES' names (real, computable genome shapes: S_1, S_1⊕1, S_2, C_4,
+ * The folder LIST is NAMED_FAMILIES' names (real, computable genome shapes: S_1, S_1⊕1, S_2, C_3,
  * S_5, S_6, S_7, S_8, S_9) unioned with COLLECTION_ROSTER_FOLDER_NAMES (every collection currently registered in
  * stalks/src/collections.cpp, straight from src/data/collectionsRoster.json -- S_3/S_4 today, but
  * also whatever's added there later) -- so a brand-new Stalks-side collection gets a folder (with
