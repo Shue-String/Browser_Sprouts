@@ -32,6 +32,7 @@ import {
   type AlphaGenome,
   type FourGeneGenome,
   type NamedFamily,
+  type NamedFamilyGroup,
   type PositionRef,
   type TChild,
   COLLECTION_ROSTER_FOLDER_NAMES,
@@ -39,6 +40,7 @@ import {
   KNOWN_COLLECTION_MEMBERS,
   NAMED_FAMILIES,
   NAMED_FAMILY_GENOME_TEXT,
+  NAMED_FAMILY_GROUPS,
   computeAlphaGenome,
   expandGenomeShorthand,
   genomeKey,
@@ -952,16 +954,17 @@ async function runExport(): Promise<void> {
   }
 }
 
-/** One `<details>` group for the Collections panel: `name`'s members (already-resolved Entry
- * objects, in history order) plus an always-present, italicized "(none)" placeholder when empty --
+/** The item list (member rows + an always-present, italicized "(none)" placeholder when empty --
  * so every named family is visible in the tree even before anything's been found for it, per the
- * user's request to see "all of our named collections" at a glance, not just the nonempty ones. */
-function renderCollectionGroup(name: string, members: Entry[]): string {
+ * user's request to see "all of our named collections" at a glance, not just the nonempty ones)
+ * for one family name -- shared by the top-level and nested-offset renderers below, since the
+ * content logic is identical either way; only the wrapping markup differs. */
+function renderCollectionItems(name: string, members: Entry[]): { itemsHtml: string; count: number } {
   // Known roster members straight from stalks/src/collections.cpp's registries (see
   // KNOWN_COLLECTION_MEMBERS's doc comment) -- schematic left-side shapes, not analyzed Collect
   // entries, so they're listed as plain, non-clickable reference text (no PositionRef behind them
   // to select). A real, analyzed Entry can legitimately fold to the EXACT same display text as one
-  // of these (S_1/S_1⊕1's single-crit shapes are valid standalone positions, unlike S_3/S_4's,
+  // of these (S_1/S_1⊕1's single-crit shapes are valid standalone positions, unlike Z_1/Z_2's,
   // so this isn't just theoretical) -- when that happens, skip the static copy rather than showing
   // the identical label twice; the real entry (clickable, backed by an actual genome) wins.
   const memberLabels = new Set(members.map(m => m.label));
@@ -974,18 +977,61 @@ function renderCollectionGroup(name: string, members: Entry[]): string {
       `<div class="collect-coll-member collect-coll-static" title="Known roster member from stalks/src/collections.cpp -- a schematic left-side shape, not an analyzed Collect entry.">${escapeHtml(s)}</div>`,
   );
   const allItems = [...memberItems, ...staticItems];
-  const items = allItems.length === 0 ? '<div class="collect-coll-empty">(none)</div>' : allItems.join('');
-  // Only names in NAMED_GENOME_DEFS (S_1, S_1⊕1, S_2, C_3, S_5, S_6, S_7, S_8, S_9) actually stand
-  // for a real single-alpha genome tuple -- S_3/S_4 (roster-only, two-crit) have no entry, so no genome text
-  // is shown for them.
+  const itemsHtml = allItems.length === 0 ? '<div class="collect-coll-empty">(none)</div>' : allItems.join('');
+  return { itemsHtml, count: members.length + staticLabels.length };
+}
+
+/** The name/count/genome header row shared by both a top-level group's <summary> and a nested
+ * offset block's own header -- only names in NAMED_GENOME_DEFS (S_1, S_1⊕1, S_2, S_3, S_5, S_6,
+ * S_7, S_8, S_9, ...) actually stand for a real single-alpha genome tuple; Z_1/Z_2 (the roster's
+ * own two-crit "S_3"/"S_4", roster-only) have no entry, so no genome text is shown for them. */
+function renderCollectionHeaderRow(name: string, count: number): string {
   const genomeText = NAMED_FAMILY_GENOME_TEXT[name];
   const genomeHtml = genomeText
     ? `<span class="collect-coll-header-genome" title="${escapeHtml(genomeText)}">${escapeHtml(genomeText)}</span>`
     : '';
-  return `<details class="collect-coll-group" open>
-    <summary><span class="collect-coll-header-row"><span class="collect-coll-name">${escapeHtml(name)} <span class="collect-coll-count">(${members.length + staticLabels.length})</span></span>${genomeHtml}</span></summary>
-    ${items}
+  return `<span class="collect-coll-header-row"><span class="collect-coll-name">${escapeHtml(name)} <span class="collect-coll-count">(${count})</span></span>${genomeHtml}</span>`;
+}
+
+/** One nested, non-collapsible sub-block for a base family's own "X⊕n" sibling -- rendered INSIDE
+ * the base's own <details> (see renderCollectionGroup) so it's hidden while the base is collapsed
+ * and only shown once the base is expanded, per the user's request: still its own fully labeled
+ * name/genome/member list, just visually subordinate to the base rather than a separate, ~4x-as-
+ * numerous set of top-level folders. */
+function renderOffsetBlock(name: string, members: Entry[]): string {
+  const { itemsHtml, count } = renderCollectionItems(name, members);
+  return `<div class="collect-coll-offset">
+    <div class="collect-coll-offset-header">${renderCollectionHeaderRow(name, count)}</div>
+    ${itemsHtml}
+  </div>`;
+}
+
+/** One `<details>` group for the Collections panel -- collapsed by default per the user's request,
+ * with `offsets` (a base family's "X⊕n" siblings, if any -- see NAMED_FAMILY_GROUPS) nested inside
+ * as renderOffsetBlock sub-sections, so expanding the base reveals its own siblings too without
+ * those needing separate top-level folders. */
+function renderCollectionGroup(
+  name: string,
+  members: Entry[],
+  offsets: string[],
+  byFamily: Map<string, Entry[]>,
+): string {
+  const { itemsHtml, count } = renderCollectionItems(name, members);
+  const offsetsHtml = offsets.map(offsetName => renderOffsetBlock(offsetName, byFamily.get(offsetName) ?? [])).join('');
+  return `<details class="collect-coll-group">
+    <summary>${renderCollectionHeaderRow(name, count)}</summary>
+    ${itemsHtml}
+    ${offsetsHtml}
   </details>`;
+}
+
+/** Natural-sort key for a "PREFIX_NUMBER" family/folder name (e.g. "S_1" -> [0,"S",1], "S_26" ->
+ * [0,"S",26], "Z_1" -> [0,"Z",1]) -- plain string sort would put "S_10" before "S_2". Anything that
+ * doesn't fit the pattern (shouldn't happen today, but collections.cpp could register something odd
+ * later) sorts after every matching name instead of crashing or silently misplacing. */
+function folderSortKey(name: string): [number, string, number] {
+  const m = name.match(/^([A-Za-z]+)_(\d+)$/);
+  return m ? [0, m[1], Number(m[2])] : [1, name, 0];
 }
 
 /** Render the Collections side panel (see index.html's #collect-collections-panel): every position
@@ -997,12 +1043,16 @@ function renderCollectionGroup(name: string, members: Entry[]): string {
  * ever looked at). A no-op (and leaves the panel's previous content alone) while the panel is
  * closed, so building this tree doesn't run every render() call for no reason.
  *
- * The folder LIST is NAMED_FAMILIES' names (real, computable genome shapes: S_1, S_1⊕1, S_2, C_3,
- * S_5, S_6, S_7, S_8, S_9) unioned with COLLECTION_ROSTER_FOLDER_NAMES (every collection currently registered in
- * stalks/src/collections.cpp, straight from src/data/collectionsRoster.json -- S_3/S_4 today, but
- * also whatever's added there later) -- so a brand-new Stalks-side collection gets a folder (with
- * its static roster content, via KNOWN_COLLECTION_MEMBERS) with NO TypeScript change needed, even
- * before anyone teaches this file how to classify a REAL analyzed position into it.
+ * TOP-LEVEL folders are NAMED_FAMILY_GROUPS' bases (S_1, S_2, S_3, ...) unioned with
+ * COLLECTION_ROSTER_FOLDER_NAMES (every collection currently registered in stalks/src/
+ * collections.cpp, straight from src/data/collectionsRoster.json -- Z_1/Z_2 today, but also
+ * whatever's added there later) MINUS anything that's actually an "X⊕n" offset of some base
+ * (reachable via a roster alias, e.g. "S_5⊕1" -- see ROSTER_TO_FOLDER_NAME) -- those get nested
+ * inside their own base's group instead (see renderCollectionGroup), never their own top-level
+ * folder. So a brand-new Stalks-side collection still gets a folder (with its static roster
+ * content, via KNOWN_COLLECTION_MEMBERS) with NO TypeScript change needed, even before anyone
+ * teaches this file how to classify a REAL analyzed position into it. Sorted by folderSortKey --
+ * per the user's request to see them "in order" -- rather than left in registration order.
  *
  * Reuses isNamedGenome/acMarker/familyForGenome rather than re-deriving membership: acMarker's
  * pending-check + re-render-on-resolve pattern means a freshly-added entry can appear in no folder
@@ -1024,10 +1074,20 @@ function renderCollections(): void {
     }
   }
 
-  const folderNames = [...new Set([...COLLECTION_ROSTER_FOLDER_NAMES, ...NAMED_FAMILIES.map(f => f.name)])];
+  const offsetNames = new Set(NAMED_FAMILY_GROUPS.flatMap(g => g.offsets));
+  const groupByBase = new Map<string, NamedFamilyGroup>(NAMED_FAMILY_GROUPS.map(g => [g.base, g]));
+  const topLevelNames = [...new Set([...COLLECTION_ROSTER_FOLDER_NAMES, ...NAMED_FAMILIES.map(f => f.name)])].filter(
+    name => !offsetNames.has(name),
+  );
+  topLevelNames.sort((a, b) => {
+    const ak = folderSortKey(a);
+    const bk = folderSortKey(b);
+    return ak[0] - bk[0] || ak[1].localeCompare(bk[1]) || ak[2] - bk[2];
+  });
+
   let html = '';
-  for (const name of folderNames) {
-    html += renderCollectionGroup(name, byFamily.get(name) ?? []);
+  for (const name of topLevelNames) {
+    html += renderCollectionGroup(name, byFamily.get(name) ?? [], groupByBase.get(name)?.offsets ?? [], byFamily);
   }
   panel.innerHTML = html;
 

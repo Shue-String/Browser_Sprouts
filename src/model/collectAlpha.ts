@@ -56,8 +56,8 @@ const MAX_NESTED_GENOME_LIVES = 5;
  * (they never touch alpha, so by definition they're T moves too) -- see quickAlphaSplitOf/
  * computeAlphaGenomeAt. A component with nimber n necessarily has moves reaching every nimber
  * 0..n-1 (mex), so this naturally reproduces the whole X⊕0..X⊕(n-1) family of a base shape X as
- * real, engine-verified T-children, not a hand-derived pattern -- see NAMED_GENOME_DEFS's C_3⊕1/
- * C_3⊕2 entries. There is deliberately no separate "oplus" field any more: every correction is
+ * real, engine-verified T-children, not a hand-derived pattern -- see NAMED_GENOME_DEFS's S_3⊕1/
+ * S_3⊕2 entries. There is deliberately no separate "oplus" field any more: every correction is
  * folded straight into R/D/L/T'/T, so two genomes with the same tuple text are the same gene. */
 /** One raw (undeduped) R/D/L/T' child: its real structural encoding (the quick-canon alpha-bearing
  * rep's own child, NOT further quick-canon-reduced) and nimber. Unlike the deduped `L`/`Tprime`
@@ -162,7 +162,7 @@ async function quickAlphaSplitOf(enc: string): Promise<{ alphaEnc: string; awayE
  * of nimber n forces moves to every nimber 0..n-1 by mex, so this is what actually happens to the
  * position's values when it's played as a disjoint sum -- not a display-only correction), and each
  * away component's own moves are enumerated as additional T-children (see quickAlphaSplitOf's own
- * doc comment) -- this is what lets shapes like C_3⊕1/C_3⊕2 arise as real, named T-children instead
+ * doc comment) -- this is what lets shapes like S_3⊕1/S_3⊕2 arise as real, named T-children instead
  * of only ever showing up as an approximate "⊕N" suffix on the alpha component's own tuple.
  *
  * `depth` controls how far [T] nests -- see MAX_GENOME_DEPTH/MAX_NESTED_GENOME_LIVES: at
@@ -269,10 +269,10 @@ export function genomeKey(R: number, D: number, L: number[], Tprime: number[]): 
 const GENOME_QUERY_RE =
   /^\(\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*\{([0-9,\s]*)\}\s*,\s*\{([0-9,\s]*)\}\s*(?:,\s*\[([\s\S]*)\]\s*)?\)$/;
 
-/** Numeric data for every named single-crit genome family (S_3/S_4 excluded -- they carry TWO
- * special-point crits, which isSingleAlpha rejects outright, so there's no single-alpha genome to
- * define for them; their Collections-panel folders come entirely from the roster JSON instead --
- * see COLLECTION_ROSTER_FOLDER_NAMES below).
+/** Numeric data for every named single-crit genome family ("Z_1"/"Z_2" excluded -- authored in the
+ * roster as "S_3"/"S_4", they carry TWO special-point crits, which isSingleAlpha rejects outright,
+ * so there's no single-alpha genome to define for them; their Collections-panel folders come
+ * entirely from the roster JSON instead -- see COLLECTION_ROSTER_FOLDER_NAMES below).
  *
  * The data lives in src/data/genomeDefs.json -- the SINGLE hand-authored source of these shapes,
  * shared with the native C++ side: stalks/tools/genome_defs.generated.hpp is mechanically
@@ -292,7 +292,7 @@ const GENOME_QUERY_RE =
  * is both easier to verify and easier to extend.
  *
  * A T-child is a reference to another entry in this same table, optionally itself already shifted
- * (`shift`, default 0) -- e.g. C_3's one T-child is S_1 at shift 0, S_5's second T-child is S_1 at
+ * (`shift`, default 0) -- e.g. S_3's one T-child is S_1 at shift 0, S_5's second T-child is S_1 at
  * shift 1 (displayed "S_1⊕1"). Why "X⊕n" exists at all: a T move can land on a SPLIT position (a
  * sum of components, only one of which still contains alpha) -- the other component(s)' nim-
  * summed nimber gets XORed directly into R/D/L/T', and (since a component of nimber n forces moves
@@ -300,14 +300,15 @@ const GENOME_QUERY_RE =
  * T-children X⊕0..X⊕(n-1) -- see FourGeneGenome's doc comment and computeAlphaGenomeAt.
  * `resolveGenome` below is the same rule applied algebraically: fold `shift` into every gene via
  * XOR, and the T-list is {this family's own T-children, each shifted further by the same amount}
- * UNION {this family at every shift 0..shift-1}. Confirmed against the real engine for C_3 and
- * S_11 (both base and shifted forms) before generalizing to every other family here.
+ * UNION {this family at every shift 0..shift-1}. Confirmed against the real engine for the shape
+ * now called S_3 and for S_11 (both base and shifted forms) before generalizing to every other
+ * family here.
  *
  * Two 2026-08-25 provenance notes, using THAT DAY's labels (both shapes have since been renamed --
  * see below -- so don't read these as referring to the CURRENT S_10/S_11/S_13/S_16): the shape then
  * called "S_10" (now "S_8") had its genome corrected in-session, having originally been given as
  * identical to the shape then called "S_11" (now "S_5") by mistake. Separately, the shapes then
- * called "S_13" and "S_16" (now "C_4" and "S_23") were noted as having no collectionsRoster.json
+ * called "S_13" and "S_16" (now "S_4" and "S_23") were noted as having no collectionsRoster.json
  * entry of their own at the time (caught by crit-cell congruity instead) -- that claim no longer
  * holds for either shape's current label (both are in the roster today, see ROSTER_TO_FOLDER_NAME),
  * so treat it as historical only, not a live invariant to preserve.
@@ -328,7 +329,15 @@ const GENOME_QUERY_RE =
  * labels S_6, S_7, S_11, S_13, S_15, S_16, S_19 (plus never-used S_24) were immediately reassigned
  * to 8 BRAND NEW families, each verified against the live engine (not hand-derived) before being
  * added: their genome and T-children matched the user's own table exactly. See
- * ROSTER_TO_FOLDER_NAME's own doc comment for the (large) roster-aliasing fallout this required. */
+ * ROSTER_TO_FOLDER_NAME's own doc comment for the (large) roster-aliasing fallout this required.
+ *
+ * Renamed AGAIN 2026-08-28, immediately after: the roster's two double-crit collections (no
+ * GENOME_DEFS entry of their own -- see this comment's opening paragraph) moved from their roster-
+ * authored "S_3"/"S_4" display to "Z_1"/"Z_2", freeing "S_3"/"S_4" for what the cascade above had
+ * just called "C_3"/"C_4" -- per the user's own naming scheme, ALL single-crit families now use
+ * "S_n" and both double-crit ones use "Z_n". Order mattered (vacate before reassigning, same as the
+ * S_2 rename), and the C_3->S_3 step needed the same LEGACY_FOLD_KEYS update the C_4->C_3 step did
+ * two paragraphs up, for the same reason (its "key" string embeds the T-child's folded NAME). */
 interface GenomeDef {
   R: number;
   D: number;
@@ -544,12 +553,21 @@ const COLLECTION_ROSTERS = (collectionsRosterJson as unknown as CollectionsRoste
  * this class of bug on every future rename: a roster name that currently passes through unaliased
  * can silently start needing one, if it happens to collide with an auto-derived "X⊕n" shift name.
  *
- * Everything else (S_3, S_4, and whatever gets registered later) has no such pre-existing alias
- * and passes through unchanged. */
+ * "S_3": "Z_1" and "S_4": "Z_2" added 2026-08-28 for the user's own naming scheme: the roster's
+ * two DOUBLE-crit collections (no GENOME_DEFS entry at all -- see that interface's own doc comment
+ * -- so previously just passed through unaliased) get their own "Z_n" namespace, freeing "S_3"/
+ * "S_4" up for reuse by single-crit families -- which happened in the very same pass: the shapes
+ * then called "C_3"/"C_4" (see genomeDefs.json) took over "S_3"/"S_4", so "C_4": "C_3" above became
+ * "C_4": "S_3" and "S_13": "C_4" became "S_13": "S_4". Ordering mattered here for the same reason
+ * as the S_2 rename: vacate the target label before reassigning it, not after.
+ *
+ * Whatever gets registered later that has no pre-existing alias still passes through unchanged. */
 const ROSTER_TO_FOLDER_NAME: Record<string, string> = {
   C_3: 'S_2',
-  C_4: 'C_3',
+  C_4: 'S_3',
   S_2: 'S_1⊕1',
+  S_3: 'Z_1',
+  S_4: 'Z_2',
   S_5: 'S_20',
   S_6: 'S_9',
   S_7: 'S_12',
@@ -559,7 +577,7 @@ const ROSTER_TO_FOLDER_NAME: Record<string, string> = {
   S_11: 'S_5',
   'S_11⊕1': 'S_5⊕1',
   S_12: 'S_9⊕1',
-  S_13: 'C_4',
+  S_13: 'S_4',
   S_14: 'S_10',
   S_15: 'S_18',
   S_16: 'S_23',
@@ -596,7 +614,8 @@ function leftSideDisplay(enc: string): string {
  * shares S_1's; S_4 shares S_3's) has no extra entry for it here.
  *
  * Static reference labels, not PositionRef -- there's no real analyzed Collect entry behind them
- * (S_3/S_4 in particular have two crits, which isSingleAlpha rejects outright; S_1/S_2's
+ * (S_3/S_4 -- displayed as "Z_1"/"Z_2" since 2026-08-28, see ROSTER_TO_FOLDER_NAME -- in particular
+ * have two crits, which isSingleAlpha rejects outright; S_1/S_2's
  * single-port shapes use 'a' as a schematic port placeholder in the registry, not necessarily the
  * literal alpha token). Keyed by rosterFolderName() so collect.ts's Collections panel lists them
  * under the right folder (aliased onto an existing NAMED_FAMILIES folder for S_1/S_2, or its own
@@ -611,27 +630,49 @@ export const KNOWN_COLLECTION_MEMBERS: Record<string, string[]> = Object.fromEnt
 
 /** Folder names the roster JSON contributes to the Collections panel, in the JSON's own (authored)
  * order -- exported so collect.ts can render one folder per currently-registered collection (S_1,
- * S_1⊕1, S_3, S_4, and whatever's added later) even when no NAMED_GENOME_DEFS entry exists for it
- * (S_3/S_4 today), with no TS-side edit required when collections.cpp registers something new. */
+ * S_1⊕1, Z_1, Z_2, and whatever's added later) even when no NAMED_GENOME_DEFS entry exists for it
+ * (the roster's own "S_3"/"S_4", displayed as "Z_1"/"Z_2" today), with no TS-side edit required
+ * when collections.cpp registers something new. */
 export const COLLECTION_ROSTER_FOLDER_NAMES: string[] = COLLECTION_ROSTERS.map(r => rosterFolderName(r.name));
 
 export const GENOME_NAMES: Record<string, string> = withCompactKeys(REGISTRY.named);
 
 /** Each named family's own assigned genome tuple text (folded form -- nested named T-children
- * shown as their own names, e.g. C_3's "[S_1]" rather than S_1's full tuple), keyed by the family
+ * shown as their own names, e.g. S_3's "[S_1]" rather than S_1's full tuple), keyed by the family
  * name. Used by the Collect pane's Collections panel to show which genome shape a pre-defined
- * folder actually stands for, right on its header -- S_3/S_4 (roster-only, two-crit, no
- * single-alpha genome at all) simply have no entry here, same as they have none in GENOME_DEFS. */
+ * folder actually stands for, right on its header -- Z_1/Z_2 (the roster's own two-crit "S_3"/
+ * "S_4", roster-only, no single-alpha genome at all) simply have no entry here, same as they have
+ * none in GENOME_DEFS. */
 export const NAMED_FAMILY_GENOME_TEXT: Record<string, string> = REGISTRY.genomeTextByName;
 
 /** A named genome's identity for Advanced-Collection membership testing: its (R,D,{L},{T'}) core
- * plus the folded-plain names of its own lowest-order T-children (e.g. S_5's ["C_3","S_1⊕1"]). A
+ * plus the folded-plain names of its own lowest-order T-children (e.g. S_20's ["S_3","S_1⊕1"]). A
  * bigger, non-lowest-order position belongs to this family (per the user's Advanced Collection /
  * Grandparent Bypass rule -- see collect.ts's isInAdvancedCollection) when its own core matches
  * AND its own T-children are a superset of tChildPlains AND every extra T-child beyond that has
  * some T-child already in an Advanced Collection. See buildRegistry's own doc comment for why
  * this array's ORDER matters (multiple families can share a core with different T-lists). */
 export const NAMED_FAMILIES: NamedFamily[] = REGISTRY.families;
+
+export interface NamedFamilyGroup {
+  /** The shift-0 (plain) name, e.g. "S_1". */
+  base: string;
+  /** "base⊕1".."base⊕MAX_SHIFT", in shift order -- buildRegistry always registers exactly this
+   * many for every GENOME_DEFS family unconditionally (see its own second registration pass), so
+   * this is computed directly via nameOf rather than filtered out of REGISTRY.families -- no risk
+   * of missing or extra entries. */
+  offsets: string[];
+}
+
+/** One group per GENOME_DEFS family, in GENOME_DEFS' own declaration order (a DIFFERENT thing from
+ * display order -- collect.ts sorts these itself for the Collections panel; this array's order
+ * stays tied to GENOME_DEFS purely because that's the natural free order to compute it in). Lets a
+ * consumer nest each family's "X⊕n" siblings inside its own base's collapsible section instead of
+ * listing ~4x as many top-level folders -- exactly what the Collections panel needed. */
+export const NAMED_FAMILY_GROUPS: NamedFamilyGroup[] = Object.keys(GENOME_DEFS).map(base => ({
+  base,
+  offsets: Array.from({ length: MAX_SHIFT }, (_, i) => nameOf(base, i + 1)),
+}));
 
 function parseNumSet(raw: string): number[] | null {
   const trimmed = raw.trim();
