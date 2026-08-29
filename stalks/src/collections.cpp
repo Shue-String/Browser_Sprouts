@@ -948,6 +948,22 @@ struct CritFamily {
 // rep's OWN internal membranes for a genuinely multi-region rep like S_11's "4A|Aa" (empty for
 // every single-region rep, which is still most of them).
 
+// NAMING NOTE (2026-08-29): every group name below (here, in doubleCritFamilies(), and in
+// multiCritFamilies()) was renamed in one pass to match src/data/genomeDefs.json's current scheme
+// (single-crit families all "S_n", the two double-crit ones "Z_1"/"Z_2") -- this file previously
+// used a DIFFERENT, older naming scheme (this is the one file the TS-side genome-name consolidation
+// deliberately left untouched, bridged instead via collectAlpha.ts's ROSTER_TO_FOLDER_NAME, which
+// is now largely obsolete and can be pruned since names match directly). The historical comments
+// throughout this section still reference the OLD names (as they existed when written) and were
+// NOT rewritten -- treat any bare "S_n"/"C_n" name in prose below as describing what that shape was
+// called AT THE TIME, not its current label. Full old->new mapping applied: S_2->S_1⊕1, C_3->S_2,
+// C_4->S_3, S_5->S_20, S_6->S_9, S_7->S_12, S_8->S_22, S_9->S_25, S_10->S_8, S_11->S_5,
+// S_11⊕1->S_5⊕1, S_12->S_9⊕1, S_13->S_4, S_14->S_10, S_15->S_18, S_16->S_23, S_17->S_26,
+// S_18->S_14, S_19->S_17, S_20->S_21 (single-crit), plus S_3->Z_1/S_4->Z_2 (double-crit). Verified
+// after the rename: regenerated collectionsRoster.json and cross-checked every roster name against
+// genomeDefs.json's own GENOME_DEFS entry for the same name -- same genome, same members, nothing
+// mismatched (see [[project_collect_feature]] for the full verification).
+//
 // Single-crit (k=1) families. S1/S2 share rep "2a" ([SCAB, crit]); when the crit is a real
 // membrane this is the DECOMPRESSED form of a DisaPoint, which the very next canonicalizeFull
 // pass's existing DisaPoint recompression folds back into a bare DISA token automatically (see
@@ -978,8 +994,20 @@ const std::vector<CritFamily>& singleCritFamilies() {
         {"2a",
          {{"S_1", 0,
            {"2,a", "0,a", "2,2,2,a", "1,2a", "5,2a", "23,2a", "2,2,3,a",
-            "13a", "23,3a", "22,2a", "2,3,3,a", "1,3a", "3,23,a", "22,3a", "17a8", "377a88",
+            "13a", "23,3a", "2,3,3,a", "3,23,a", "17a8", "377a88",
             "57a8", "33,2a",
+            // "1,3a" removed 2026-08-29 -- NOT dead like the removals above: it's a legitimate
+            // S_1 member (confirmed firing, 20 hits at n=6) that is permanently shadowed by a
+            // double-crit registry match landing on the exact same region first, every time,
+            // before stepSingleCrit ever gets a look (see [[project_advanced_collections]]'s
+            // double-crit-masking diagnostic, 2026-08-29). Dropped from the registry text since a
+            // shadowed entry can never actually apply the swap, but the membership itself stays
+            // true and documented here for the record.
+            // "22,2a"/"22,3a" removed 2026-08-29 (user-confirmed): each is a boundary-doubled
+            // ("22" = a repeated boundary token) shape the 22==1 rewrite (rewrite22, applied as
+            // part of normalizeQuick's base structural canon, upstream of this registry) already
+            // collapses before a registry lookup ever runs -- confirmed 0-count via
+            // quick_reduction_counts.exe.
             // 10 elements added 2026-08-23 (user-provided). Each verified via
             // tools/verify_left_side.cpp: direct exact-nimber comparison against rep "2a" across
             // 8 plain hosts + 4 joint-bearing hosts (incl. "0,0,17Z8", the exact shape that
@@ -995,24 +1023,41 @@ const std::vector<CritFamily>& singleCritFamilies() {
             // the 2026-08-23 batch above): "3,5,a" vs "3,5a"/"35a"; "35,a" vs "3,5a"/"35a"; "3738,a"
             // vs "3738a".
             "3,5,a", "35,a", "3738,a"}},
-          {"S_2", 1,
+          {"S_1⊕1", 1,
            {"1a", "1,a", "5a", "5,a", "2,2a", "22a", "2,2,a", "27a8",
-            "2,3a", "23a", "2,3,a", "37a8", "3,2a", "0,2a", "0,3a", "22,a", "23,a",
+            "23a", "0,2a",
+            // "37a8"/"0,3a" removed 2026-08-29 -- NOT dead like the crit-cell/22==1 removals
+            // elsewhere in this file: both are legitimate S_2 members (confirmed firing without
+            // double-crit: "37a8" 164 hits at n=5 / 3066 at n=6, "0,3a" 10 at n=5 / 443 at n=6),
+            // permanently shadowed by a double-crit registry match on the same region firing
+            // first, every time (see [[project_advanced_collections]]'s double-crit-masking
+            // diagnostic, 2026-08-29). Dropped from the registry text since a shadowed entry can
+            // never actually apply, membership stays true and documented here.
             // 6 elements added 2026-08-25 (user-provided). Verified via tools/verify_left_side.cpp
             // (offset 1 vs rep "2a") on both the cheap 8-host set and the joint-bearing "0,0,17Z8"-
             // pattern hosts, same method as every other batch this session.
-            "13,2a", "2a,35", "2a,3738", "13,3a", "0,3,a", "2,2,2,2,a"}}}},
-        {"3a", {{"C_3", 0, {"3,a"}}}},
-        {"4a", {{"C_4", 0, {"4,a"}}}},
+            "13,2a", "2a,35", "2a,3738", "13,3a", "0,3,a", "2,2,2,2,a",
+            // "2,3a"/"2,3,a"/"3,2a"/"22,a"/"23,a" removed 2026-08-29 (user-confirmed): each is a
+            // 2-or-3-membrane/scab-only region, so crit-cell/scab-cell/special-cell congruity
+            // (enumerateCritCells/enumerateScabCells/enumerateSpecialCells, upstream of this
+            // registry) already merges it before a registry lookup ever runs -- confirmed
+            // unreachable via quick_reduction_counts.exe's 0-count report (n=5/n=6, see
+            // [[project_quick_reduction_counters]]), same rationale as S_13's empty group above.
+           }}}},
+        // "3,a" removed 2026-08-29 for the same reason as the S_2 removals just above (already
+        // caught by crit-cell congruity, confirmed 0-count) -- C_3 keeps its rep with no listed
+        // elements, same empty-group convention as S_10/S_12/S_13/S_17.
+        {"3a", {{"S_2", 0, {}}}},
+        {"4a", {{"S_3", 0, {"4,a"}}}},
         // "2,3,2a" removed 2026-08-21 at user request pending re-verification, despite direct
         // engine test (exact nimber vs rep "12a" across 8 varied right-side hosts, same method
         // that caught the 277a88 bug) finding zero discrepancies -- evidence pointed to it being
         // sound, but user wanted it out of the registry anyway; see
         // [[project_advanced_collections]] if this needs revisiting.
         // "233a"/"3,23a" added 2026-08-25 (user-provided).
-        {"12a", {{"S_5", 0, {"3,27a8", "25a", "2738a", "3,22a", "233a", "3,23a"}}}},
+        {"12a", {{"S_20", 0, {"3,27a8", "25a", "2738a", "3,22a", "233a", "3,23a"}}}},
         // "2,5,a"/"323a"/"222,a" added 2026-08-25 (user-provided).
-        {"1,2,a", {{"S_6", 0, {"2,23,a", "2,5,a", "323a", "222,a"}}}},
+        {"1,2,a", {{"S_9", 0, {"2,23,a", "2,5,a", "323a", "222,a"}}}},
         // "277a88" (CSV row 48) was first registered under S_7 and PROVEN UNSOUND there
         // 2026-08-21 by direct engine test (non-constant offset across right sides -- see
         // [[project_advanced_collections]]). User then identified the real cause: several
@@ -1022,7 +1067,7 @@ const std::vector<CritFamily>& singleCritFamilies() {
         // against "34a" across the SAME three hosts used to disprove it under S_7: all three now
         // agree exactly (offset 0), confirming the fix.
         // "2,33a" added 2026-08-25 (user-provided).
-        {"2,1a", {{"S_7", 0, {"227a8", "2,5a", "2,37a8", "223a", "2,33a"}}}},
+        {"2,1a", {{"S_12", 0, {"227a8", "2,5a", "2,37a8", "223a", "2,33a"}}}},
         // S_8 added 2026-08-23 (user-provided; genome (0,3,{0},{},[S_2,C_3,C_4])). Rep "12,a" is
         // the EXACT shape proven 2026-07-06 NOT to be an S_1 member (crit alone in its own
         // boundary, distinct from valid S_1 element "1,2a") and again explicitly skipped
@@ -1031,20 +1076,20 @@ const std::vector<CritFamily>& singleCritFamilies() {
         // invalid shape. Standalone, no Pairing-Theorem sibling identified (like C_3/C_4/S_5).
         // "233,a" added 2026-08-25 (user-provided). "223,a" added 2026-08-26 (user-provided) --
         // same family, an additional single-region partition.
-        {"12,a", {{"S_8", 0, {"25,a", "2728,a", "2738,a", "233,a", "223,a"}}}},
+        {"12,a", {{"S_22", 0, {"25,a", "2728,a", "2738,a", "233,a", "223,a"}}}},
         // "3,4,a"/"34,a" added 2026-08-25 (user-provided) -- distinct boundary partitions of the
         // already-registered "3,4a".
-        {"34a", {{"S_9", 0, {"277a88", "3,4a", "4,3a", "273a8", "237a8", "3,4,a", "34,a"}}}},
+        {"34a", {{"S_25", 0, {"277a88", "3,4a", "4,3a", "273a8", "237a8", "3,4,a", "34,a"}}}},
         // S_10 added 2026-08-25 (user-provided; genome (2,0,{1},{1},[C_3,S_1])). No single-region
         // elements yet -- the empty group exists purely so allCollectionRosters() still emits an
         // entry for its rep (see addFamily's per-group loop below); its only known member so far is
         // multi-region ("3A|2Aa", see multiCritFamilies()). Verified via verify_left_side.cpp
         // (offset 0) on both host sets.
-        {"4,2a", {{"S_10", 0, {}}}},
+        {"4,2a", {{"S_8", 0, {}}}},
         // S_12 added 2026-08-25 (user-provided; genome (1,3,{1},{},[S_1,C_3⊕1,S_6])) -- a single
         // known example, "obviously its own rep" (user's own words): no elements to reduce yet, same
         // empty-group rationale as S_10 above.
-        {"5,5,a", {{"S_12", 0, {}}}},
+        {"5,5,a", {{"S_9⊕1", 0, {}}}},
         // S_14 through S_20 added 2026-08-25 (user-provided). S_13 (genome (2,0,{1},{},[C_3,S_1]),
         // rep "33a") and S_16 (genome (0,3,{2},{1},[C_3,C_4,S_1⊕1]), rep "3CD|CDa", multi-region)
         // were ORIGINALLY left unregistered here on the theory that every member is already caught
@@ -1070,17 +1115,17 @@ const std::vector<CritFamily>& singleCritFamilies() {
         // S_13's fix does NOT apply here -- that was about crit-cell missing a special point
         // sharing the region, a single-region concern; this was single-vs-multi-region swap-target
         // support, unrelated.
-        {"33a", {{"S_13", 0, {}}}},
-        {"222a", {{"S_14", 0, {"2,22a"}}}},
-        {"24a", {{"S_15", 0, {"2,4a"}}}},
+        {"33a", {{"S_4", 0, {}}}},
+        {"222a", {{"S_10", 0, {"2,22a"}}}},
+        {"24a", {{"S_18", 0, {"2,4a"}}}},
         // S_17 (genome (0,3,{0,1,2},{},[C_3,C_4,S_1⊕1])) -- unique, single known example, same
         // empty-group rationale as S_10/S_12.
-        {"2728a", {{"S_17", 0, {}}}},
-        {"2,23a", {{"S_18", 0, {"2,27a8"}}}},
-        {"24,a", {{"S_19", 0, {"2,4,a"}}}},
+        {"2728a", {{"S_26", 0, {}}}},
+        {"2,23a", {{"S_14", 0, {"2,27a8"}}}},
+        {"24,a", {{"S_17", 0, {"2,4,a"}}}},
         // S_20 (genome (0,3,{0,1},{},[C_4,S_1⊕1])) -- unique so far ("another one-off"), same
         // empty-group rationale.
-        {"232a", {{"S_20", 0, {}}}},
+        {"232a", {{"S_21", 0, {}}}},
     };
     return families;
 }
@@ -1092,8 +1137,10 @@ const std::vector<CritFamily>& singleCritFamilies() {
 const std::vector<CritFamily>& doubleCritFamilies() {
     static const std::vector<CritFamily> families = {
         {"2ba",
-         {{"S_3", 0, {"0,ba", "b7a8", "2,ba", "b,2a", "2,b,a"}},
-          {"S_4", 1, {"1,ba", "22,ba", "5,ba", "23,ba", "3b,2a"}}}},
+         {{"Z_1", 0, {"0,ba", "b7a8", "2,ba", "b,2a", "2,b,a"}},
+          // "22,ba" removed 2026-08-29 (user-confirmed, same reason as "22,2a"/"22,3a" above):
+          // the 22==1 rewrite already collapses this boundary shape before this registry runs.
+          {"Z_2", 1, {"1,ba", "5,ba", "23,ba", "3b,2a"}}}},
     };
     return families;
 }
@@ -1129,10 +1176,21 @@ const std::vector<CritFamily>& multiCritFamilies() {
                   // proposed element, "CD|3DE|CEa", turned out to canonicalize to the exact same
                   // key as the already-registered "CD|3CE|DEa" above (a pure C<->D relabeling) and
                   // is skipped as a duplicate.
-                  "3C|CD|2Da", "3C|CD|7D8a", "4C|7C8a"}},
-                {"S_2", 1, {"12C|2Ca", "1CD|CD,2a"}}}},
-        {"4a", {{"C_4", 0, {"3C|Ca", "3C|C,a", "3,C|Ca", "3,C|C,a"}}}},
-        {"12a", {{"S_5", 0, {"2CD|2CDa"}}}},
+                  "3C|CD|2Da", "3C|CD|7D8a",
+                  // "4C|7C8a" removed 2026-08-29 -- same shadowed-not-dead situation as
+                  // "1,3a"/"37a8"/"0,3a" above: a legitimate S_1 multi-region member (confirmed
+                  // firing without double-crit: 66 hits at n=5 / 972 at n=6), permanently
+                  // shadowed by a double-crit registry match on the same region firing first
+                  // (see [[project_advanced_collections]]'s double-crit-masking diagnostic,
+                  // 2026-08-29). Membership stays true; just can't ever actually apply.
+                  }},
+                {"S_1⊕1", 1, {"12C|2Ca", "1CD|CD,2a"}}}},
+        // "3C|C,a"/"3,C|Ca"/"3,C|C,a" removed 2026-08-29 (user-confirmed, same reason as the
+        // singleCritFamilies removals above): each is a 2-or-3-membrane/scab-only region, already
+        // caught by crit-cell/scab-cell/special-cell congruity before this registry runs --
+        // confirmed 0-count via quick_reduction_counts.exe. "3C|Ca" stays; it fires (nonzero).
+        {"4a", {{"S_3", 0, {"3C|Ca"}}}},
+        {"12a", {{"S_20", 0, {"2CD|2CDa"}}}},
         // Two of the user's proposed S_6 additions turned out to be duplicates once corrected/
         // checked against the engine (2026-08-25): "2CD|2,CDa" is an EXACT duplicate of the
         // already-registered S_7 element of the same text (a left-side's canonical key doesn't
@@ -1141,15 +1199,15 @@ const std::vector<CritFamily>& multiCritFamilies() {
         // "CD|CE|2DaE" just above (a boundary-rotation/relabeling equivalent, not a new shape).
         // Net result: no new S_6 multi-region elements from this batch.
         // "2CD|2,CD,a" added 2026-08-26 (user-provided).
-        {"1,2,a", {{"S_6", 0, {"2CD|C2Da", "CD|CE|2DaE", "2CD|2,CD,a"}}}},
-        {"2,1a", {{"S_7", 0, {"2CD|2,CDa"}}}},
+        {"1,2,a", {{"S_9", 0, {"2CD|C2Da", "CD|CE|2DaE", "2CD|2,CD,a"}}}},
+        {"2,1a", {{"S_12", 0, {"2CD|2,CDa"}}}},
         // "2CD|2CD,a" added 2026-08-25 (user-provided) -- S_8's first multi-region element.
-        {"12,a", {{"S_8", 0, {"2CD|2CD,a"}}}},
+        {"12,a", {{"S_22", 0, {"2CD|2CD,a"}}}},
         // "3C|3Ca" added 2026-08-25 (user-provided).
-        {"34a", {{"S_9", 0, {"CD|2CE|DEa", "3C|3Ca"}}}},
+        {"34a", {{"S_25", 0, {"CD|2CE|DEa", "3C|3Ca"}}}},
         // S_10's first (and so far only) known element, added 2026-08-25 (user-provided) alongside
         // S_10's own new single-region rep entry in singleCritFamilies() above.
-        {"4,2a", {{"S_10", 0, {"3A|2Aa"}}}},
+        {"4,2a", {{"S_8", 0, {"3A|2Aa"}}}},
         // S_11 (2nd element) / S_11⊕1 added 2026-08-27, the first family here whose OWN rep is
         // genuinely multi-region (unlike every entry above, which reuses an EXISTING single-region
         // family's rep -- see this function's own doc comment) -- built on the multi-region-target
@@ -1170,13 +1228,13 @@ const std::vector<CritFamily>& multiCritFamilies() {
         // directly that this was always meant as the S_1/S_1⊕1-style oplus-suffix sibling, not a
         // separate named collection -- so it needs no genome-table entry of its own either (its
         // genome bucket IS S_11's).
-        {"4A|Aa", {{"S_11", 0, {"2AB|ABa"}}, {"S_11⊕1", 1, {"5AB|ABa", "ABa|37AB8"}}}},
+        {"4A|Aa", {{"S_5", 0, {"2AB|ABa"}}, {"S_5⊕1", 1, {"5AB|ABa", "ABa|37AB8"}}}},
         // S_16 added 2026-08-27, alongside S_11/S_11⊕1 above -- previously left unregistered (see
         // singleCritFamilies()'s own "33a"/S_13 comment block) specifically because its rep
         // "3CD|CDa" is itself multi-region and no swap machinery could target one; both elements
         // confirmed nimber-equal (4/2/4, matching the rep) via query_position --graph-ensure-only
         // before the machinery landed.
-        {"3CD|CDa", {{"S_16", 0, {"4C|CD|Da", "2CD|CDE|Ea"}}}},
+        {"3CD|CDa", {{"S_23", 0, {"4C|CD|Da", "2CD|CDE|Ea"}}}},
     };
     return families;
 }
