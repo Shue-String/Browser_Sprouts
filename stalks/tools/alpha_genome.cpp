@@ -135,27 +135,48 @@ std::string foldedKeyOf(const ResolvedGenome& g) {
     return head + ",[" + joined + "])";
 }
 
+struct NamedGenomeEntry {
+    std::string key;
+    std::string name;
+};
+
 // Registers every family at every shift 0..kMaxShift, base forms before shifted forms (in
 // genome_defs.generated.hpp's own declaration order) -- same collision-resolution priority as
 // collectAlpha.ts's buildRegistry, and for the same reason: several (family, shift) pairs compute
 // to the same (R,D,{L},{T'}) core with different [T] lists, and a genuinely NEW collision (two
 // DIFFERENT names computing the identical full genome) should throw, not silently pick one.
-std::map<std::string, std::string> buildNamedGenomes() {
-    std::map<std::string, std::string> named;
+//
+// Returns entries in REGISTRATION order (not sorted) -- this order is itself load-bearing, not
+// just a collision-detection convenience: namedGenomes()'s compact-key fallback (used at
+// kMaxFoldDepth, where a T-grandchild is folded on its bare (R,D,{L},{T'}) core alone, no [T]
+// available to disambiguate) needs "first family/shift registered in THIS priority order wins the
+// bare core" -- exactly mirroring collectAlpha.ts's withCompactKeys, which gets this for free from
+// JS's insertion-order-preserving Record. A std::map of these entries would silently reorder by
+// KEY STRING instead (verified: this was a real bug here -- since a shifted family's [T] list is
+// non-empty and a base family's own can be empty, and ']' sorts AFTER any letter, an empty-T base
+// form like S_1 would almost always LOSE its own bare core to an unrelated shifted family sharing
+// it, e.g. S_15⊕2, which is exactly backwards from the intended "base beats shifted" priority).
+std::vector<NamedGenomeEntry> buildNamedGenomes() {
+    std::vector<NamedGenomeEntry> ordered;
+    std::map<std::string, std::string> seen;  // key -> name, collision lookups only
 
     auto registerOne = [&](const std::string& family, int shift) {
         const std::string name = foldedNameOf(family, shift);
         const ResolvedGenome& g = resolveGenome(family, shift);
         const std::string key = foldedKeyOf(g);
-        const auto existing = named.find(key);
-        if (existing != named.end() && existing->second != name) {
-            throw std::runtime_error(
-                "genome_defs collision: \"" + name + "\" and \"" + existing->second +
-                "\" compute to the identical genome " + key +
-                " -- pick one name and remove the other's own genome_defs entry, keeping it "
-                "only as a T-child reference.");
+        const auto existing = seen.find(key);
+        if (existing != seen.end()) {
+            if (existing->second != name) {
+                throw std::runtime_error(
+                    "genome_defs collision: \"" + name + "\" and \"" + existing->second +
+                    "\" compute to the identical genome " + key +
+                    " -- pick one name and remove the other's own genome_defs entry, keeping it "
+                    "only as a T-child reference.");
+            }
+            return;
         }
-        named[key] = name;
+        seen.emplace(key, name);
+        ordered.push_back({key, name});
     };
 
     const auto& defs = genome_defs_generated::familyDefs();
@@ -163,19 +184,25 @@ std::map<std::string, std::string> buildNamedGenomes() {
     for (const auto& entry : defs) {
         for (int shift = 1; shift <= genome_defs_generated::kMaxShift; shift++) registerOne(entry.first, shift);
     }
-    for (const auto& legacy : genome_defs_generated::legacyFoldKeys()) named[legacy.key] = legacy.name;
+    // Legacy keys are appended last and win their own exact key unconditionally (mirrors the old
+    // `named[legacy.key] = legacy.name` unconditional overwrite -- the final assignment into `m`
+    // below, done in this same order, reproduces that).
+    for (const auto& legacy : genome_defs_generated::legacyFoldKeys())
+        ordered.push_back({legacy.key, legacy.name});
 
-    return named;
+    return ordered;
 }
 
 const std::map<std::string, std::string>& namedGenomes() {
-    static const std::map<std::string, std::string> kFull = buildNamedGenomes();
+    static const std::vector<NamedGenomeEntry> kOrdered = buildNamedGenomes();
     static const std::map<std::string, std::string> kWithCompact = [] {
-        std::map<std::string, std::string> m = kFull;
-        for (const auto& [key, name] : kFull) {
-            const auto bracket = key.find(",[");
+        std::map<std::string, std::string> m;
+        for (const auto& e : kOrdered) m[e.key] = e.name;  // exact keys; legacy overwrites last
+        for (const auto& e : kOrdered) {
+            const auto bracket = e.key.find(",[");
             if (bracket == std::string::npos) continue;
-            m.emplace(key.substr(0, bracket) + ")", name);  // compact form; never overwrites
+            m.emplace(e.key.substr(0, bracket) + ")", e.name);  // compact form; first in
+                                                                  // REGISTRATION order wins
         }
         return m;
     }();

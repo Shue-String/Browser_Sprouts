@@ -333,11 +333,18 @@ std::vector<DoubleCritCandidate> enumerateDoubleCrits(const Component& c) {
 // SINGLE new region at its family's rep).
 // ---------------------------------------------------------------------------
 
-// Cap on chunk size worth attempting: every authored multi-region roster element is tiny (<=3
+// Cap on chunk size worth attempting: every authored multi-region roster element is tiny (<=4
 // regions, a handful of tokens), and a bridge's "other" side is typically most of the position
 // -- this cheap pre-filter (checked before the expensive canonicalizeFull call) skips it
 // immediately rather than canonicalizing something that could never match a registry entry.
-constexpr std::size_t MAX_MULTI_REGIONS = 3;
+// Bumped 3->4 2026-08-29: S_11's second element "AB|AC|BD|CDa" is a genuine 4-region special-
+// point chunk (a closed 4-cycle of crossing membranes, not a simple bridge chain) -- confirmed via
+// query_position --quick-canon-only that it silently failed to reduce at all under the old cap
+// (extractChunk's size guard rejected it before any key was even computed, so it could never have
+// matched regardless of the registry entry being correct). No other code depends on this constant
+// staying at 3 -- it's a pure perf pre-filter, not an algorithmic limit (parseRepTemplate/
+// applyMultiCritSwap/extractChunk itself are already N-region general).
+constexpr std::size_t MAX_MULTI_REGIONS = 4;
 constexpr std::size_t MAX_MULTI_TOKENS = 12;
 
 // A chunk's canonical registry key: wrap it as a stand-alone one-component Position and run it
@@ -1126,6 +1133,24 @@ const std::vector<CritFamily>& singleCritFamilies() {
         // S_20 (genome (0,3,{0,1},{},[C_4,S_1⊕1])) -- unique so far ("another one-off"), same
         // empty-group rationale.
         {"232a", {{"S_21", 0, {}}}},
+        // S_13, S_15, S_6, S_7, S_11 (single-region rep only -- its multi-region element is in
+        // multiCritFamilies() below) added 2026-08-29, sourced from re-running
+        // tools/unregistered_left_sides.cpp after fixing a real bug in alpha_genome.cpp's
+        // T-grandchild-depth genome-name folding (a std::map iterated its compact-key fallback in
+        // alphabetical order instead of registration-priority order -- see
+        // [[project_advanced_collections]]/chat history for the full diagnosis). S_13/S_15 are
+        // each a single known example, same empty-group rationale as S_10/S_12/S_17/S_20/S_21
+        // above. S_6/S_7 each have two known same-offset elements; the simpler-looking of the pair
+        // is used as the rep, the other listed as its element (not independently verified which
+        // of the pair is more "canonical" -- both are equally valid quick-canon fixpoints for
+        // applyCritSwap's rebuild target, per the same reasoning as any other multi-element
+        // family here). S_11's SECOND element ("AB|AC|BD|CDa", 4-region) is in multiCritFamilies()
+        // below, keyed off this same rep "6,a".
+        {"6a", {{"S_13", 0, {}}}},
+        {"47a8", {{"S_15", 0, {}}}},
+        {"2,3,2a", {{"S_6", 0, {"2,3,3a"}}}},
+        {"2,2,2a", {{"S_7", 0, {"2,2,3a"}}}},
+        {"6,a", {{"S_11", 0, {}}}},
     };
     return families;
 }
@@ -1206,8 +1231,11 @@ const std::vector<CritFamily>& multiCritFamilies() {
         // "3C|3Ca" added 2026-08-25 (user-provided).
         {"34a", {{"S_25", 0, {"CD|2CE|DEa", "3C|3Ca"}}}},
         // S_10's first (and so far only) known element, added 2026-08-25 (user-provided) alongside
-        // S_10's own new single-region rep entry in singleCritFamilies() above.
-        {"4,2a", {{"S_8", 0, {"3A|2Aa"}}}},
+        // S_10's own new single-region rep entry in singleCritFamilies() above. "S_8⊕1" (Pairing-
+        // Theorem sibling, offset 1) added 2026-08-29, same "unregistered_left_sides re-run after
+        // the T-grandchild-fold fix" batch as the singleCritFamilies additions above -- shares
+        // S_8's rep "4,2a" as its own structural swap target, per the same reasoning as S_5/S_5⊕1.
+        {"4,2a", {{"S_8", 0, {"3A|2Aa"}}, {"S_8⊕1", 1, {"3A|2A,2a"}}}},
         // S_11 (2nd element) / S_11⊕1 added 2026-08-27, the first family here whose OWN rep is
         // genuinely multi-region (unlike every entry above, which reuses an EXISTING single-region
         // family's rep -- see this function's own doc comment) -- built on the multi-region-target
@@ -1235,6 +1263,18 @@ const std::vector<CritFamily>& multiCritFamilies() {
         // confirmed nimber-equal (4/2/4, matching the rep) via query_position --graph-ensure-only
         // before the machinery landed.
         {"3CD|CDa", {{"S_23", 0, {"4C|CD|Da", "2CD|CDE|Ea"}}}},
+        // S_11's second element (4-region, "AB|AC|BD|CDa") -- same batch as the singleCritFamilies
+        // additions above; keyed off S_11's own single-region rep "6,a" (registered there), so this
+        // just appends onto that same roster entry (see allCollectionRosters()'s "anyExisting"
+        // branch) rather than introducing a second collection.
+        {"6,a", {{"S_11", 0, {"AB|AC|BD|CDa"}}}},
+        // S_16, S_19, S_24 added 2026-08-29, same batch -- each a single known example with no
+        // existing single-region sibling to reuse, so (like S_5/S_11⊕1 above) its OWN left-side
+        // text IS the family's rep, same "obviously its own rep" rationale as the empty-group
+        // singleCritFamilies entries.
+        {"AB|2AaB", {{"S_16", 0, {}}}},
+        {"Aa|33A", {{"S_19", 0, {}}}},
+        {"AB|3AaB", {{"S_24", 0, {}}}},
     };
     return families;
 }
