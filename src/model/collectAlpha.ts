@@ -303,17 +303,32 @@ const GENOME_QUERY_RE =
  * UNION {this family at every shift 0..shift-1}. Confirmed against the real engine for C_3 and
  * S_11 (both base and shifted forms) before generalizing to every other family here.
  *
- * S_10/S_11 user-provided 2026-08-25 (S_10's genome was corrected in-session; it and S_11 were
- * originally both given as the same text). S_13/S_16 have no collectionsRoster.json entry (see
- * collections.cpp's own comment -- caught by crit-cell congruity already); present in the JSON for
- * display/T-subgenome purposes only.
+ * Two 2026-08-25 provenance notes, using THAT DAY's labels (both shapes have since been renamed --
+ * see below -- so don't read these as referring to the CURRENT S_10/S_11/S_13/S_16): the shape then
+ * called "S_10" (now "S_8") had its genome corrected in-session, having originally been given as
+ * identical to the shape then called "S_11" (now "S_5") by mistake. Separately, the shapes then
+ * called "S_13" and "S_16" (now "C_4" and "S_23") were noted as having no collectionsRoster.json
+ * entry of their own at the time (caught by crit-cell congruity instead) -- that claim no longer
+ * holds for either shape's current label (both are in the roster today, see ROSTER_TO_FOLDER_NAME),
+ * so treat it as historical only, not a live invariant to preserve.
  *
  * Renamed 2026-08-28, in sequence: the shape originally called "C_3" is now "S_2" (repurposing the
  * label the roster's real S_1-Pairing-Theorem-sibling group had already vacated -- see
  * ROSTER_TO_FOLDER_NAME below); then the shape originally called "C_4" took over the now-vacant
  * "C_3" label. Both renames needed a matching ROSTER_TO_FOLDER_NAME entry (the roster's own
  * collections.cpp-authored names don't rename themselves), and the C_4->C_3 step also needed
- * updating LEGACY_FOLD_KEYS' second entry, whose "key" string embeds the T-child's folded NAME. */
+ * updating LEGACY_FOLD_KEYS' second entry, whose "key" string embeds the T-child's folded NAME.
+ *
+ * Same day, a much larger user-directed cascade: S_13->C_4, S_11->S_5, S_10->S_8, S_6->S_9,
+ * S_14->S_10, S_7->S_12, S_18->S_14, S_19->S_17, S_15->S_18, S_5->S_20, S_20->S_21, S_8->S_22,
+ * S_16->S_23, S_9->S_25, S_17->S_26 -- 15 renames at once, several of them cyclic (S_5 and S_20
+ * swap roles, etc.), so the whole `families` object was rebuilt directly from the target state
+ * rather than edited as a sequence of individual renames (which would silently collide on shared
+ * JSON keys mid-sequence -- see the earlier chat's "mechanical footguns" note on this). The vacated
+ * labels S_6, S_7, S_11, S_13, S_15, S_16, S_19 (plus never-used S_24) were immediately reassigned
+ * to 8 BRAND NEW families, each verified against the live engine (not hand-derived) before being
+ * added: their genome and T-children matched the user's own table exactly. See
+ * ROSTER_TO_FOLDER_NAME's own doc comment for the (large) roster-aliasing fallout this required. */
 interface GenomeDef {
   R: number;
   D: number;
@@ -399,14 +414,19 @@ export interface NamedFamily {
 const LEGACY_FOLD_KEYS = GENOME_DEFS_JSON.legacyFoldKeys;
 
 /** Old names kept working for backward-compatible search-bar typing (e.g. "S_12" for what's
- * displayed everywhere else as "S_6⊕1") -- distinct from LEGACY_FOLD_KEYS above, which is about
+ * displayed everywhere else as "S_9⊕1") -- distinct from LEGACY_FOLD_KEYS above, which is about
  * unexplained fold targets, not naming history. Values are the CANONICAL (derivable) shorthand
  * text, i.e. what the alias expands to one more step. "S_2" USED to alias to "S_1+1" here, back
  * when "S_2" was only the roster's name for S_1's Pairing-Theorem sibling -- removed 2026-08-28
  * when "S_2" was repurposed as the former "C_3"'s own plain name (see GENOME_DEFS above): "S_2"
  * now has a real GENOME_DEFS entry of its own, so it must resolve directly via
- * REGISTRY.byShorthand below, not get intercepted here first. */
-const LEGACY_SEARCH_ALIASES: Record<string, string> = { S_12: 'S_6+1' };
+ * REGISTRY.byShorthand below, not get intercepted here first.
+ *
+ * Changed from "S_6+1" to "S_9+1" on 2026-08-28: the roster's "S_12" collection's shape used to
+ * live at GENOME_DEFS's "S_6" -- the same 15-family cascade rename documented on
+ * ROSTER_TO_FOLDER_NAME below moved that shape to "S_9", so the shorthand this alias expands to
+ * had to move with it (mechanically re-derived from the rename map, not hand-guessed). */
+const LEGACY_SEARCH_ALIASES: Record<string, string> = { S_12: 'S_9+1' };
 
 interface GenomeRegistry {
   /** Fold-matching table: exact plain-text (with folded T-child NAMES, not nested tuples) -> name.
@@ -503,32 +523,50 @@ interface CollectionsRosterFile {
 const COLLECTION_ROSTERS = (collectionsRosterJson as unknown as CollectionsRosterFile).collections;
 
 /** Roster name (as authored in stalks/src/collections.cpp -- "S_1", "S_2", "S_3", "S_4", ...) ->
- * the Collect pane's own folder name for the SAME collection, for cases where they differ.
- * S_1's Pairing-Theorem offset-1 sibling is folded/displayed as "S_1⊕1" throughout this file (a
- * naming convention baked into GENOME_NAMES fold-matching well before this roster sync existed --
- * see GENOME_DEFS above), not "S_2" -- so the roster's "S_2" group needs aliasing onto that
- * same folder rather than getting a second, redundant one. Same story for "S_12": discovered
- * 2026-08-25 to be S_6⊕1 under a plain name (see genomeDefs.json's own comment/GENOME_DEFS doc
- * comment on the S_12/S_6⊕1 collision) -- the roster still authors it as "S_12" (collections.cpp
- * predates the discovery), so it needs the same aliasing S_2 gets.
+ * the Collect pane's own folder name for the SAME collection, for cases where they differ. The
+ * general rule (established 2026-08-25/28 across three separate renames, see genomeDefs.json's own
+ * "Renamed" doc comments): whenever a GENOME_DEFS family's plain name changes, the roster's OLD
+ * name for that same shape needs an entry here pointing at the NEW one -- collections.cpp itself is
+ * out of scope for this file's single-source-of-truth consolidation and never renames in lockstep,
+ * so without this table the Collections panel would show a stale/duplicate folder under the old
+ * name (exactly what happened to "S_12" before it was caught and fixed).
  *
- * "C_3": "S_2" and "C_4": "C_3" added 2026-08-28 for the OPPOSITE reason -- GENOME_DEFS's former
- * "C_3" entry was itself renamed to "S_2" (repurposing the label the roster's real S_1-sibling
- * group had already vacated via the alias just above), then the former "C_4" took over the
- * now-vacant "C_3" label. Either way, the roster's own real collected members under the OLD name
- * need redirecting onto the NEW folder instead of a stale, headerless one under the old name. This
- * is the generalizable version of the SAME situation: whenever a GENOME_DEFS family's plain name
- * changes, the roster's OLD name for it needs an entry here pointing at the NEW one, since
- * collections.cpp itself is out of scope for this file's single-source-of-truth consolidation (see
- * the JSON's own comment) and isn't renamed in lockstep.
+ * 2026-08-28's 15-family cascade rename (S_5..S_20 reshuffled, C_4/S_12 labels reused for
+ * different shapes, S_6/S_7/S_11/S_13/S_15/S_16/S_19/S_24 added as brand-new families) touched
+ * nearly every entry below at once -- mechanically re-derived from the rename map rather than
+ * hand-edited one at a time, since a single missed entry here is silent (the stale folder still
+ * renders, just under the wrong name). Two non-obvious cases this pass caught: "S_12" (the
+ * roster's OWN literal name, unrelated to the ⊕1-discovery story) needed its TARGET updated from
+ * "S_6⊕1" to "S_9⊕1" since "S_6" the label moved out from under it; and "S_11⊕1" -- a roster name
+ * that never needed an entry here before, because it happened to already equal the shift-derived
+ * name GENOME_DEFS produced for "S_11"'s own Pairing-Theorem sibling -- needed a first-time entry
+ * once "S_11" the label moved to "S_5" and the auto-derived form became "S_5⊕1" instead. Watch for
+ * this class of bug on every future rename: a roster name that currently passes through unaliased
+ * can silently start needing one, if it happens to collide with an auto-derived "X⊕n" shift name.
  *
  * Everything else (S_3, S_4, and whatever gets registered later) has no such pre-existing alias
  * and passes through unchanged. */
 const ROSTER_TO_FOLDER_NAME: Record<string, string> = {
-  S_2: 'S_1⊕1',
-  S_12: 'S_6⊕1',
   C_3: 'S_2',
   C_4: 'C_3',
+  S_2: 'S_1⊕1',
+  S_5: 'S_20',
+  S_6: 'S_9',
+  S_7: 'S_12',
+  S_8: 'S_22',
+  S_9: 'S_25',
+  S_10: 'S_8',
+  S_11: 'S_5',
+  'S_11⊕1': 'S_5⊕1',
+  S_12: 'S_9⊕1',
+  S_13: 'C_4',
+  S_14: 'S_10',
+  S_15: 'S_18',
+  S_16: 'S_23',
+  S_17: 'S_26',
+  S_18: 'S_14',
+  S_19: 'S_17',
+  S_20: 'S_21',
 };
 
 function rosterFolderName(rosterName: string): string {
