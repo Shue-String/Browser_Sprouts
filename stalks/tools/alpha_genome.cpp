@@ -242,6 +242,60 @@ std::string genomeTextAt(const Position& p, const SpecDB& db, int depth) {
     return foldToName(head + ",[" + joined + "])");
 }
 
+// Advanced-Collection membership data, in the SAME resolution-priority order as collectAlpha.ts's
+// NAMED_FAMILIES: legacy fold keys FIRST (collectAlpha.ts unshifts them), then every family's own
+// shift-0 form (in genome_defs.generated.hpp's declaration order), then each family's shift 1..
+// kMaxShift forms in turn -- required because familyForCoreKey below picks the FIRST match, and
+// several distinct (family, shift) pairs collide on their bare (R,D,{L},{T'}) core with different
+// [T] lists (base forms must win those collisions). Legacy coreKey is hardcoded to S_1's own bare
+// core, exactly mirroring collectAlpha.ts's own hardcoded '(0,1,{0},{})' (both legacy entries are
+// S_1 fold targets -- see genome_defs.generated.hpp's legacyFoldKeys doc comment).
+struct NamedFamily {
+    std::string name;
+    std::string coreKey;
+    std::vector<std::string> tChildPlains;  // sorted, matches collectAlpha.ts's [...g.T].sort()
+};
+
+const std::vector<NamedFamily>& namedFamilies() {
+    static const std::vector<NamedFamily> kFamilies = [] {
+        std::vector<NamedFamily> families;
+        for (const auto& legacy : genome_defs_generated::legacyFoldKeys())
+            families.push_back({legacy.name, "(0,1,{0},{})", legacy.tChildPlains});
+
+        auto pushFamily = [&](const std::string& familyName, int shift) {
+            const ResolvedGenome& g = resolveGenome(familyName, shift);
+            families.push_back({foldedNameOf(familyName, shift), fourGeneKeyOf(g),
+                                 std::vector<std::string>(g.T.begin(), g.T.end())});
+        };
+        const auto& defs = genome_defs_generated::familyDefs();
+        for (const auto& entry : defs) pushFamily(entry.first, 0);
+        for (const auto& entry : defs) {
+            for (int shift = 1; shift <= genome_defs_generated::kMaxShift; shift++)
+                pushFamily(entry.first, shift);
+        }
+        return families;
+    }();
+    return kFamilies;
+}
+
+const NamedFamily* familyForCoreKey(const std::string& coreKey) {
+    for (const auto& f : namedFamilies())
+        if (f.coreKey == coreKey) return &f;
+    return nullptr;
+}
+
+const NamedFamily* familyForName(const std::string& name) {
+    for (const auto& f : namedFamilies())
+        if (f.name == name) return &f;
+    return nullptr;
+}
+
+std::map<std::string, bool> acMemo;  // serialize(p) -> isInAdvancedCollection(p), shared process-wide
+
+bool tChildPlainsContain(const NamedFamily& family, const std::string& plain) {
+    return std::find(family.tChildPlains.begin(), family.tChildPlains.end(), plain) != family.tChildPlains.end();
+}
+
 }  // namespace
 
 std::optional<AlphaGenome> classifyAlphaGenome(const Position& p, const SpecDB& db) {
@@ -304,6 +358,84 @@ std::string genomeKey(const AlphaGenome& g) {
 
 std::string fullGenomeText(const Position& p, const SpecDB& db) {
     return genomeTextAt(p, db, 0);
+}
+
+bool isNamedGenome(const Position& p, const SpecDB& db) {
+    const std::string folded = fullGenomeText(p, db);
+    return !folded.empty() && folded[0] != '(';
+}
+
+std::optional<std::string> resolvedGenomeName(const Position& p, const SpecDB& db) {
+    const std::string folded = fullGenomeText(p, db);
+    if (!folded.empty() && folded[0] != '(') return folded;
+
+    const auto genome = classifyAlphaGenome(p, db);
+    if (!genome) return std::nullopt;
+    const NamedFamily* family = familyForCoreKey(genomeKey(*genome));
+    if (!family) return std::nullopt;
+    return isInAdvancedCollection(p, db) ? std::optional<std::string>(family->name) : std::nullopt;
+}
+
+bool isInAdvancedCollection(const Position& p, const SpecDB& db) {
+    const std::string key = serialize(p);
+    const auto cached = acMemo.find(key);
+    if (cached != acMemo.end()) return cached->second;
+
+    const bool result = [&] {
+        const auto genome = classifyAlphaGenome(p, db);
+        if (!genome) return false;
+        if (isNamedGenome(p, db)) return true;
+
+        const NamedFamily* family = familyForCoreKey(genomeKey(*genome));
+        if (!family) return false;
+
+        // Dedup by folded plain (first T-child wins), same convention genomeParts/collect.ts uses.
+        std::map<std::string, Position> byPlain;
+        for (const Position& t : tChildrenOf(p)) {
+            const std::string plain = fullGenomeText(t, db);
+            if (byPlain.find(plain) == byPlain.end()) byPlain.emplace(plain, t);
+        }
+
+        for (const std::string& want : family->tChildPlains) {
+            if (byPlain.find(want) == byPlain.end()) return false;
+        }
+
+        // Every OTHER (extra) T-child must itself be in an Advanced Collection.
+        for (const auto& [plain, extra] : byPlain) {
+            if (tChildPlainsContain(*family, plain)) continue;
+            if (!isInAdvancedCollection(extra, db)) return false;
+        }
+        return true;
+    }();
+
+    acMemo.emplace(key, result);
+    return result;
+}
+
+bool isYellowCandidate(const Position& candidate, const SpecDB& db, const std::string& searchedFamilyName) {
+    const NamedFamily* family = familyForName(searchedFamilyName);
+    if (!family) throw std::runtime_error("isYellowCandidate: no NAMED_FAMILIES entry named \"" + searchedFamilyName + "\"");
+
+    bool noExtras = true;
+    std::set<std::string> presentNames;
+    for (const Position& t : tChildrenOf(candidate)) {
+        const std::optional<std::string> resolvedName = resolvedGenomeName(t, db);
+
+        bool hasBypass = false;
+        for (const Position& gc : tChildrenOf(t)) {
+            if (fullGenomeText(gc, db) == searchedFamilyName) { hasBypass = true; break; }
+        }
+
+        const bool satisfiesRequired = resolvedName.has_value() && tChildPlainsContain(*family, *resolvedName);
+        const bool isExtra = !satisfiesRequired && !hasBypass;
+        if (isExtra) noExtras = false;
+        if (resolvedName) presentNames.insert(*resolvedName);
+    }
+
+    for (const std::string& want : family->tChildPlains) {
+        if (presentNames.find(want) == presentNames.end()) return false;
+    }
+    return noExtras;
 }
 
 }  // namespace stalks_tools

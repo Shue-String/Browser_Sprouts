@@ -9,16 +9,18 @@
  *
  * The detail view's own T-gene table (renderTList) always shows two columns -- Position and Genome
  * -- plus a third, Bypass, that appears only once the search bar's own query resolves to a named
- * genome (see searchedGenomeName/searchedGenomeFamily). Genome is a T-child's own genome: the named
- * genome outright if its full nested genome folds to one (see isNamedGenome), else its bare four
- * genes with its own T-gene members individually name-folded or shown as a bare '+' placeholder --
- * never fully expanded, that's what the header/detail area's own genome string is for (see
- * formatGenomeCell). Bypass lists the DISTINCT genome names (not positions -- see BypassMatch) among
- * a row's OWN T-gene members that belong to the searched genome's own family (any shift of the same
- * base, see familyMembersOf) -- e.g. searching S_1⊕1 and finding S_1⊕2 inside some T-child X's own
- * T-gene shows a bypass to a SIMILAR genome, straight through X (see findBypassMatches) -- the manual
- * verification step this was built for; the point is only to know such a bypass exists, so repeat
- * witnesses of the same name are deduped down to one.
+ * genome (see searchedGenomeName). Genome is a T-child's own genome: the named genome outright if
+ * its full nested genome folds to one (see isNamedGenome), else its bare four genes with its own
+ * T-gene members individually name-folded or shown as a bare '+' placeholder -- never fully
+ * expanded, that's what the header/detail area's own genome string is for (see formatGenomeCell).
+ * Bypass lists the DISTINCT genome names (not positions -- see BypassMatch) among a row's OWN T-gene
+ * members that EXACTLY match the searched genome, offset included -- e.g. searching S_1⊕2 and
+ * finding another S_1⊕2 inside some T-child X's own T-gene shows a bypass straight through X (see
+ * findBypassMatches) -- the manual verification step this was built for; the point is only to know
+ * such a bypass exists, so repeat witnesses of the same name are deduped down to one. Critically,
+ * this is an EXACT match, not "any shift of the same base family" -- S_1, S_1⊕1, and S_1⊕2 are
+ * genuinely distinct genomes, so a T-gene member folding to S_1 is never a bypass for a search of
+ * S_1⊕2, only one folding to S_1⊕2 itself is.
  *
  * Every displayed position (the active entry itself, and each T-child) is shown in its
  * quick-canon (Advanced Collections) form -- more compact than the raw structural encoding, same
@@ -128,19 +130,14 @@ let statusIsError = false;
 let history: Entry[] = [];
 let activeLabel: string | null = null;
 let searchGen = 0;
-/** The name (e.g. "S_1⊕1") the search bar's own query resolved to, when it did -- set by loadGenome,
- * cleared by runSearch -- since only a genome/shorthand search at the top ("searched a named
- * genome", per the user's own phrasing) is meaningful for the T-gene table's Bypass column; a plain
- * position search isn't, even if that position happens to itself be named. Display-only (the header
- * title, and the empty-vs-shown decision for the Bypass column) -- see searchedGenomeFamily for the
- * actual match set. */
+/** The name (e.g. "S_1⊕1"), OFFSET INCLUDED, the search bar's own query resolved to, when it did --
+ * set by loadGenome, cleared by runSearch -- since only a genome/shorthand search at the top
+ * ("searched a named genome", per the user's own phrasing) is meaningful for the T-gene table's
+ * Bypass column; a plain position search isn't, even if that position happens to itself be named.
+ * What findBypassMatches tests each T-gene member against directly (see its own doc comment for why
+ * this must be an exact match, not any shift of the same base family) -- also the header title, and
+ * the empty-vs-shown decision for the Bypass column. */
 let searchedGenomeName: string | null = null;
-/** Every name in `searchedGenomeName`'s own family (see familyMembersOf), or null when no named
- * genome is currently searched -- kept in lockstep with searchedGenomeName (set/cleared together in
- * loadGenome/runSearch). What findBypassMatches actually tests membership against: the user wants to
- * know about bypasses to SIMILAR genomes (any shift of the same base family), not only an exact-offset
- * match. */
-let searchedGenomeFamily: Set<string> | null = null;
 /** Quick-Genome toggle: when on, a genome-string node whose exact plain-text tuple matches a
  * known GENOME_SHORTHANDS entry (see GENOME_NAMES) is folded down to its name, at any nesting
  * depth. Defaults on (checkbox in index.html is checked by default). */
@@ -512,16 +509,6 @@ function formatGenomeCell(enc: string, g: AlphaGenome | FourGeneGenome): string 
   return `${head},[${parts.join(', ')}])`;
 }
 
-/** Every name in the same family as `name` -- e.g. "S_1", "S_1⊕1", ..., "S_1⊕MAX_SHIFT" (see
- * NAMED_FAMILY_GROUPS) -- used to broaden the Bypass column's match from an exact name to "any shift
- * of the same base family," per the user's own request to see bypasses to SIMILAR genomes, not only
- * the literal one typed in. Falls back to a singleton set (just `name` itself) for a name with no
- * GENOME_DEFS family of its own (e.g. a LEGACY_FOLD_KEYS name). */
-function familyMembersOf(name: string): Set<string> {
-  const group = NAMED_FAMILY_GROUPS.find(g => g.base === name || g.offsets.includes(name));
-  return group ? new Set([group.base, ...group.offsets]) : new Set([name]);
-}
-
 /** A single Bypass-column entry: `name` is the matched genome's own folded name (e.g. "S_1⊕2"), and
  * `witness` is ONE real T-gene member that reaches it -- kept only so the name can still be clicked
  * through to inspect a concrete position, not shown itself (see the user's own request that this
@@ -532,21 +519,26 @@ interface BypassMatch {
 }
 
 /** "Bypass" column content for a T-gene table row: the DISTINCT genome names among `g`'s own T-gene
- * members that belong to the searched genome's own family (see searchedGenomeFamily) -- e.g.
- * searching S_1⊕1 also surfaces a row whose own T-gene contains S_1⊕2, a bypass to a SIMILAR genome,
- * not just an exact-offset match. Deduped by name: a row's raw, undeduped T-gene can reach the same
- * effective genome via more than one real T-child (see MoveChildRef's own doc comment), and the user
- * only wants to know a bypass to that genome exists, not see it listed once per witness. Null while
- * any member's own genome is still being resolved (see lookupGenome), so the caller can leave the
- * cell blank rather than show a false "no bypass found" before all the data is actually in. */
+ * members that EXACTLY match the searched genome (see searchedGenomeName), offset included -- e.g.
+ * searching S_1⊕2 surfaces a row whose own T-gene contains another S_1⊕2, a bypass straight through
+ * it (see findBypassMatches), but NOT one containing S_1 or S_1⊕1 -- those are a different genome,
+ * not the one searched, even though they share the same base family (an earlier version matched any
+ * shift of the base family here; that's wrong, since S_1/S_1⊕1/S_1⊕2/... are genuinely distinct
+ * genomes, not interchangeable for this check). Deduped by name: a row's raw, undeduped T-gene can
+ * reach the same effective genome via more than one real T-child (see MoveChildRef's own doc
+ * comment), and the user only wants to know a bypass to that genome exists, not see it listed once
+ * per witness -- though since the match is now a single exact name, there's at most one entry.
+ * Null while any member's own genome is still being resolved (see lookupGenome), so the caller can
+ * leave the cell blank rather than show a false "no bypass found" before all the data is actually
+ * in. */
 function findBypassMatches(g: AlphaGenome | FourGeneGenome): BypassMatch[] | null {
-  if (!isFullGenome(g) || !searchedGenomeFamily) return [];
+  if (!isFullGenome(g) || !searchedGenomeName) return [];
   const byName = new Map<string, TChild>();
   for (const child of g.T) {
     const childKnown = lookupGenome(child.enc, child.genome);
     if (childKnown === undefined) return null;
     const name = foldedPlainOf(childKnown, 0);
-    if (searchedGenomeFamily.has(name) && !byName.has(name)) byName.set(name, child);
+    if (name === searchedGenomeName && !byName.has(name)) byName.set(name, child);
   }
   return [...byName.entries()].map(([name, witness]) => ({ name, witness }));
 }
@@ -732,7 +724,6 @@ async function runSearch(raw: string): Promise<void> {
   // when the position found happens to itself be named -- the T-gene table's Bypass column only
   // makes sense relative to a genome/shorthand query typed into the search bar (see loadGenome).
   searchedGenomeName = null;
-  searchedGenomeFamily = null;
   if (trimmed.length === 0) {
     status = '';
     statusIsError = false;
@@ -768,7 +759,6 @@ async function loadGenome(raw: string, explicitName?: string): Promise<void> {
     status = "Couldn't parse that genome — expected a form like (0,1,{0},{}).";
     statusIsError = true;
     searchedGenomeName = null;
-    searchedGenomeFamily = null;
     render();
     return;
   }
@@ -783,7 +773,6 @@ async function loadGenome(raw: string, explicitName?: string): Promise<void> {
   // if no hits are found (a real search attempt still happened), and left in place for a hit with no
   // name (null) -- the Bypass column just stays hidden either way.
   searchedGenomeName = explicitName ?? GENOME_NAMES[parsed.key] ?? null;
-  searchedGenomeFamily = searchedGenomeName ? familyMembersOf(searchedGenomeName) : null;
 
   const hits = GENOME_DB[parsed.key];
   if (!hits || hits.length === 0) {
@@ -906,7 +895,7 @@ function renderRequiredLine(container: HTMLElement, family: NamedFamily, rows: T
 function renderTList(container: HTMLElement, list: TChild[]): void {
   container.innerHTML = '';
   const requiredFamily = searchedGenomeName ? NAMED_FAMILIES.find(f => f.name === searchedGenomeName) : undefined;
-  const showBypass = searchedGenomeFamily !== null;
+  const showBypass = searchedGenomeName !== null;
   const rows = computeRowInfos(list, requiredFamily, showBypass);
   if (requiredFamily) renderRequiredLine(container, requiredFamily, rows);
   if (list.length === 0) {
@@ -922,7 +911,7 @@ function renderTList(container: HTMLElement, list: TChild[]): void {
   head.innerHTML =
     '<th>Position</th><th class="collect-t-genome-head">Genome</th>' +
     (showBypass
-      ? `<th class="collect-t-bypass-head" title="T-gene members bypassing into ${escapeHtml(searchedGenomeName ?? '')}'s family">Bypass</th>`
+      ? `<th class="collect-t-bypass-head" title="T-gene members bypassing into ${escapeHtml(searchedGenomeName ?? '')}">Bypass</th>`
       : '');
   for (const { t, tGenome, matches, isExtra } of ordered) {
     const row = table.insertRow();
@@ -1083,7 +1072,8 @@ function renderDetail(): void {
   const labelEl = genomeEl.querySelector<HTMLElement>('.collect-detail-label-copyable');
   labelEl?.addEventListener('click', () => {
     const statusEl = document.getElementById('collect-export-status') as HTMLSpanElement | null;
-    void navigator.clipboard.writeText(`[${entry.position.enc}/`).then(
+    const copyText = bracketDisplaySlash(markAlpha(shiftMembraneLetters(entry.position.enc)));
+    void navigator.clipboard.writeText(copyText).then(
       () => { if (statusEl) { statusEl.textContent = 'Copied position to clipboard.'; statusEl.classList.remove('error'); } },
       () => { if (statusEl) { statusEl.textContent = "Couldn't copy to clipboard."; statusEl.classList.add('error'); } },
     );

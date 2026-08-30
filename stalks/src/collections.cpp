@@ -996,6 +996,16 @@ struct CritFamily {
 // from Sprouts_ShuePairings_20260814.csv, cross-checked against the existing registry -- see
 // [[project_advanced_collections]] for the specific rows skipped as transcription artifacts).
 // Both standalone (offset 0 only, no Pairing-Theorem sibling identified) like C_3/C_4/S_5.
+//
+// NOT registered, 2026-08-30: 3 genuine S_1/S_1⊕1 members found by the same automated-discovery
+// scan as this session's big S_1/S_1⊕1 batches below (see those batches' own comments), each
+// individually passed tools/verify_left_side.cpp -- i.e. confirmed real, not rejected. Held back
+// solely because each has 5 real regions and the user asked to keep multi-region (5+) elements out
+// of the registry for now over performance concerns (more regions -> more registry-match work per
+// lookup), not because of any correctness doubt. Add these once that concern is revisited:
+//   S_1,   offset 0: "AB|AC|BD|CE|DEa"           (5 lives)
+//   S_1⊕1, offset 1: "AB|AC|BDE|DEF|CFa"         (6 lives)
+//   S_1⊕1, offset 1: "AB|AC|DE|BDF|CEFa"         (6 lives)
 const std::vector<CritFamily>& singleCritFamilies() {
     static const std::vector<CritFamily> families = {
         {"2a",
@@ -1029,7 +1039,35 @@ const std::vector<CritFamily>& singleCritFamilies() {
             // an already-registered sibling's tokens (same "partition is significant" caution as
             // the 2026-08-23 batch above): "3,5,a" vs "3,5a"/"35a"; "35,a" vs "3,5a"/"35a"; "3738,a"
             // vs "3738a".
-            "3,5,a", "35,a", "3738,a"}},
+            "3,5,a", "35,a", "3738,a",
+            // 31 elements added 2026-08-30 (user-provided). "CDE|CDF|EFa" from this same batch was
+            // already registered below in multiCritFamilies() and dropped as an exact duplicate.
+            "1,1728a", "1,2,17a8", "1,1,2,2a", "1212a", "1217a8", "16,2a", "2,11,2a", "2,122,2a",
+            "2,1728,2a", "1,122a", "1,14a", "1222,2a", "124,2a", "12728,2a", "17228,2a", "1748,2a",
+            "177288,2a", "2224,2a", "222728,2a", "226,2a", "227228,2a", "22748,2a", "2277288,2a",
+            "244,2a", "24728,2a", "2727288,2a", "2768,2a", "277488,2a", "27772888,2a", "46,2a",
+            "4748,2a",
+            // 41 single-region elements added 2026-08-30, automated discovery (Part 2 of this
+            // session): native port of collect.ts's own isYellowCandidate/isInAdvancedCollection/
+            // resolvedGenomeName/findBypassMatches logic (stalks/tools/alpha_genome.cpp/.hpp), run
+            // over every unregistered single-alpha S_1-core left side up to 6 lives found in a
+            // 960k-node .spec scan (stalks/tools/find_yellow_candidates.cpp). Cross-checked against
+            // the live app's own T-gene table (.collect-t-required-complete) on 7 real cases before
+            // trusting it at scale; all 201 total new S_1/S_1⊕1 elements from that scan (41 here +
+            // the rest split between multiCritFamilies() below and singleCritFamilies()'s own
+            // S_1⊕1 group) individually passed tools/verify_left_side.cpp's independent exact-
+            // nimber check (offset 0 vs rep "2a", 8 hosts). 3 further genuine members found by the
+            // same scan (2 S_1⊕1, 1 S_1) were deliberately NOT registered -- each has 5 real
+            // regions and the user asked to hold multi-region (5+) elements back for now over
+            // performance concerns, not correctness; see the comment block just above
+            // singleCritFamilies() for the exact 3 left sides, kept for the record.
+            "1,2,23,2a", "1,2,5,2a", "2,15,2a", "2,2a,123", "2,2a,1738", "2a,1223", "2a,134",
+            "2a,13728", "2a,22222", "2a,2225", "2a,222738", "2a,2234", "2a,223728",
+            "2a,227238", "2a,22758", "2a,2277388", "2a,2324", "2a,232728", "2a,236",
+            "2a,23748", "2a,2377288", "2a,245", "2a,24738", "2a,25728", "2a,2727388",
+            "2a,27348", "2a,2737288", "2a,277588", "2a,27773888", "2a,344", "2a,3768",
+            "2a,377488", "2a,4758", "2a,56", "3,26,2a", "3,2a,224", "3,2a,22728", "3,2a,2748",
+            "3,2a,277288", "3,2a,44", "3a,27772888"}},
           {"S_1⊕1", 1,
            {"1a", "1,a", "5a", "5,a", "2,2a", "22a", "2,2,a", "27a8",
             "23a", "0,2a",
@@ -1058,6 +1096,9 @@ const std::vector<CritFamily>& singleCritFamilies() {
             // element) to rule out a relabeled/rotated duplicate slipping in.
             "234,2a", "23728,2a", "36,2a", "26,2a", "2222,2a", "224,2a", "22728,2a", "2748,2a",
             "277288,2a", "44,2a",
+            // 2 single-region elements added 2026-08-30, same automated-discovery batch as S_1's
+            // own addition above (see that comment for the method/validation).
+            "2a,2223", "4,4,2a",
            }}}},
         // "3,a" removed 2026-08-29 for the same reason as the S_2 removals just above (already
         // caught by crit-cell congruity, confirmed 0-count) -- C_3 keeps its rep with no listed
@@ -1082,7 +1123,12 @@ const std::vector<CritFamily>& singleCritFamilies() {
         // against "34a" across the SAME three hosts used to disprove it under S_7: all three now
         // agree exactly (offset 0), confirming the fix.
         // "2,33a" added 2026-08-25 (user-provided).
-        {"2,1a", {{"S_12", 0, {"227a8", "2,5a", "2,37a8", "223a", "2,33a"}}}},
+        // "S_12⊕1" added 2026-08-30 (user-provided; Pairing-Theorem sibling, offset 1, single-region
+        // element "5,37a8" -- verified via verify_left_side.exe against rep "2,1a"). Its multi-
+        // region sibling element "2CD|5,CDa" is appended onto this same roster entry from
+        // multiCritFamilies() below.
+        {"2,1a", {{"S_12", 0, {"227a8", "2,5a", "2,37a8", "223a", "2,33a"}},
+                   {"S_12⊕1", 1, {"5,37a8"}}}},
         // S_8 added 2026-08-23 (user-provided; genome (0,3,{0},{},[S_2,C_3,C_4])). Rep "12,a" is
         // the EXACT shape proven 2026-07-06 NOT to be an S_1 member (crit alone in its own
         // boundary, distinct from valid S_1 element "1,2a") and again explicitly skipped
@@ -1132,7 +1178,10 @@ const std::vector<CritFamily>& singleCritFamilies() {
         // support, unrelated.
         {"33a", {{"S_4", 0, {}}}},
         {"222a", {{"S_10", 0, {"2,22a"}}}},
-        {"24a", {{"S_18", 0, {"2,4a"}}}},
+        // "13,4a" added 2026-08-30 (user-provided, originally submitted as an "S_18+1" candidate --
+        // verify_left_side.exe showed it matches rep "24a" at offset 0, not 1, so it's a plain S_18
+        // member, same family as "2,4a", not a Pairing-Theorem sibling).
+        {"24a", {{"S_18", 0, {"2,4a", "13,4a"}}}},
         // S_17 (genome (0,3,{0,1,2},{},[C_3,C_4,S_1⊕1])) -- unique, single known example, same
         // empty-group rationale as S_10/S_12.
         {"2728a", {{"S_26", 0, {}}}},
@@ -1216,6 +1265,58 @@ const std::vector<CritFamily>& multiCritFamilies() {
                   // shadowed by a double-crit registry match on the same region firing first
                   // (see [[project_advanced_collections]]'s double-crit-masking diagnostic,
                   // 2026-08-29). Membership stays true; just can't ever actually apply.
+                  //
+                  // 88 elements added 2026-08-30 (user-provided), same batch as the 31-element
+                  // single-region S_1 addition above -- verified via verify_left_side.exe (offset 0
+                  // vs rep "2a") on the cheap 8-host set. "CDE|CDF|EFa" from the same submitted list
+                  // was already registered above and dropped as an exact duplicate.
+                  "1,1C|2Ca", "1,CDE|CDE,2a", "12,CD|CD,2a", "127C8|2Ca", "12CD|CD,2a",
+                  "12CD|7CD8a", "12C|1Ca", "12C|2C,2a", "12C|77C88a", "1738C|2Ca", "17C83|2Ca",
+                  "173C8|2Ca", "17CD8|CD,2a", "17CD8|7CD8a", "13CD|CD,2a", "1C3D|CD,2a",
+                  "1CDE|CDE,2a", "1CDE|7CDE8a", "1CDE|7CED8a", "1CD|3CD,2a",
+                  // "1CD|2,E|CD,7E8a" dropped 2026-08-30 -- canonicalizes to the exact same
+                  // multiRegistry key as "1CD|CD,738a" below (caught by the registry's own
+                  // duplicate-key throw at static init): a differently-partitioned/pre-compression
+                  // notation for the identical shape, not a distinct element.
+                  "1CD|CD,738a", "1CD|3,2a,CD", "2,1C|2C,2a", "0,2,C|2Ca", "C,1728|2Ca",
+                  "13,CD|CD,2a", "1,3CD|CD,2a", "3,4,CD|2a,CD", "34,CD|2a,CD", "3,1,CD|2a,CD",
+                  "CD,2738|2a,CD", "4,3CD|CD,2a", "4,CD|3CD,2a", "4,CD|3,CD,2a", "4D|738D,2a",
+                  "3,1CD|CD,2a", "3CD|CD,EF|EF,2a", "22,738C|2Ca", "3,17C8|2Ca", "C,1738|2Ca",
+                  "2,1C|77C88a", "227CD8|CD,2a", "22CDE|CDE,2a", "22CDE|7CDE8a", "22CDE|7CED8a",
+                  "25,CD|CD,2a", "34C|2C,2a", "34C|77C88a", "277CD88|CD,2a", "27CDE8|CDE,2a",
+                  "27CDE8|7CDE8a", "27CDE8|7CED8a", "1,2,C|2C,2a", "2CDEF|CDEF,2a",
+                  "377CD88|CD,2a", "37CDE8|CDE,2a", "CD,222|CD,2a", "CD,2728|CD,2a",
+                  "4,CDE|CDE,2a", "4C|1C,2a", "4CDE|CDE,2a", "5,1C|2Ca", "5,CDE|CDE,2a",
+                  "6,CD|CD,2a", "6,C|2C,2a", "1,2,C|77C88a", "C,12|77C88a", "1,1,C|2Ca",
+                  "1,5,C|2Ca", "C,122|2Ca", "12,CD|7CD8a", "227CD8|7CD8a", "277CD88|7CD8a",
+                  "CD,2728|7CD8a", "1,CDE|7CDE8a", "C,11|2Ca", "C,12|2C,2a", "C,15|2Ca",
+                  "1,5C|2Ca", "CDEFG|CDEFG,2a", "CDEF|2CDEF,2a", "CDE|2C2DE,2a",
+                  "CDE|CDFG|EFG,2a", "CD|1C2D,2a", "CD|22C2D,2a", "CD|27C2D8,2a", "CD|2C4D,2a",
+                  // 103 elements added 2026-08-30, same automated-discovery batch as
+                  // singleCritFamilies()'s own S_1 addition above (see that comment for the
+                  // method/validation) -- multi-region (2-4 regions) elements from the same scan.
+                  "1,2,A|3,A,2a", "1,ABC|3a,ABC", "12A|1,A,a", "12A|3,7A8a", "12A|3,A,2a",
+                  "12A|37A8a", "12A|A,1a", "12A|a,1A", "13AB|7AB8a", "15A|2Aa", "1A3B|7AB8a",
+                  "1ABC|3a,ABC", "1AB|1a,AB", "2,1A|1,A,a", "2,1A|3,7A8a", "2,1A|3,A,2a",
+                  "2,1A|A,1a", "2,ABCD|2a,ABCD", "22AB|1a,AB", "22AB|2a,3AB", "22AB|3,2a,AB",
+                  "23,ABC|2a,ABC", "237AB8|2a,AB", "23ABC|2a,ABC", "23ABC|7ABC8a",
+                  "27AB8|3,2a,AB", "27ABC8|3a,ABC", "2Aa|1,3,2A", "2Aa|1,37A8", "2Aa|1,A,23",
+                  "2Aa|123A", "2Aa|12A3", "2Aa|3,12A", "2Aa|577A88", "2Aa|A,123",
+                  "2a,AB|35,AB", "2a,AB|AB,223", "3,7A8a|1,2,A", "3,7A8a|A,12",
+                  "3,ABCD|2a,ABCD", "3,ABC|2a,2ABC", "34A|1,A,a", "34A|3,7A8a", "34A|3,A,2a",
+                  "34A|37A8a", "34A|A,1a", "37A8a|1,2,A", "37A8a|2,1A", "37A8a|A,12",
+                  "37ABC8|7ABC8a", "3AB|2a,22AB", "3AB|2a,27AB8", "3AB|2a,2A2B", "3AB|2a,4AB",
+                  "3AB|ABCD|2a,CD", "3AB|ABC|2C,2a", "3A|2a,227A8", "3A|2a,24A", "3A|2a,2728A",
+                  "3A|2a,277A88", "3A|2a,47A8", "3A|2a,6A", "3A|A,BCD|2a,BCD", "3A|BC|2a,2BAC",
+                  "4AB|2a,3AB", "4AB|3,2a,AB", "4A|13,Aa", "4A|1A,3a", "4A|2a,5A",
+                  "57AB8|2a,AB", "57AB8|7AB8a", "5ABC|2a,ABC", "5ABC|7ABC8a", "7AB8a|1,3,AB",
+                  "7AB8a|1,3AB", "7AB8a|13,AB", "7AB8a|237AB8", "7AB8a|25,AB", "7AB8a|3,1AB",
+                  "7AB8a|3,4,AB", "7AB8a|34,AB", "7AB8a|377AB88", "7AB8a|4,3AB",
+                  "7AB8a|AB,222", "7ABC8a|23,ABC", "7ABC8a|5,ABC", "A,12|1,A,a", "A,12|3,A,2a",
+                  "A,12|A,1a", "A,1a|1,2,A", "ABCD|2a,3ABCD", "ABC|2a,2A3BC",
+                  "ABC|ABDE|3a,CDE", "ABC|ABD|2a,3CD", "AB|2a,22A3B", "AB|2a,23A2B",
+                  "AB|2a,27A3B8", "AB|2a,2A5B", "AB|2a,2A738B", "AB|2a,3A4B", "AB|3,2a,2A2B",
+                  "AB|3,ACD|2a,BCD", "AB|3ACD|2a,BCD",
                   }},
                 {"S_1⊕1", 1,
                  {"12C|2Ca", "1CD|CD,2a",
@@ -1234,7 +1335,23 @@ const std::vector<CritFamily>& multiCritFamilies() {
                   "2CDEF|CDEFa", "2CDEF|CFEDa", "2CDEF|DCFEa", "2CDEF|CDEF,a", "2CDE|CDE,2a",
                   "2CDE|7CDE8a", "2CDE|7CED8a", "3CDE|7CDE8a", "3CDE|7CED8a", "3,CDEF|CDEFa",
                   "CD|2C3D,2a", "2,CDE|7CDE8a", "CDE|CDFG|EFG,a", "CD|CEF|DEF,2a",
-                  "2CD|2EF|CD,EFa"}}}},
+                  "2CD|2EF|CD,EFa",
+                  // 55 elements added 2026-08-30, same automated-discovery batch as
+                  // singleCritFamilies()'s own S_1 addition above (see that comment for the
+                  // method/validation) -- multi-region (2-4 regions) elements from the same scan.
+                  "1AB|7AB8a", "2,3AB|2a,AB", "2,ABC|3a,ABC", "22AB|2a,AB", "22AB|7AB8a",
+                  "2A3B|2a,AB", "2A3B|7AB8a", "2ABC|3ABCa", "2AB|1a,AB", "2AB|2a,3AB",
+                  "2AB|3,2a,AB", "2a,AB|3,3,AB", "3,ABCD|a,ABCD", "37AB8|2a,AB", "3ABCD|ABCDa",
+                  "3ABCD|a,ABCD", "3A|ABC|7BC8a", "4AB|7AB8a", "4A|1,A,a", "4A|1Aa",
+                  "4A|3,A,2a", "4A|37A8a", "4A|a,1A", "7AB8a|2,3AB", "7ABC8a|3,ABC",
+                  "ABCD|2a,ABCD", "ABC|ABD|3,CDa", "ABC|ABD|3CDa", "ABC|ABD|3a,CD",
+                  "ABC|ABD|7CD8a", "AB|2a,2A2B", "AB|3ACD|BCDa", "AB|3ACD|CBDa",
+                  "AB|3AC|7BC8a", "AB|3CAD|BCDa", "AB|3CAD|CBDa", "AB|CADa|3,BCD",
+                  "2AB|2CD|a,AB,CD", "2AB|7CD8a|AB,CD", "2Aa|BCDE|A,BCDE", "4A|2BC|A,BCa",
+                  "4A|2BC|A,a,BC", "4A|2BC|ABCa", "4A|2BC|BC,Aa", "4A|2BC|a,ABC",
+                  "AB|ACD|BEF|CEFDa", "AB|ACD|CDE|7BE8a", "AB|AC|2BDE|CDEa", "AB|AC|2BDE|DCEa",
+                  "AB|AC|2DBE|CDEa", "AB|AC|2DBE|DCEa", "AB|AC|2a,2B2C", "AB|AC|BDEF|CDEFa",
+                  "AB|AC|BDEa|2,CDE", "AB|AC|DBEa|2,CDE"}}}},
         // "3C|C,a"/"3,C|Ca"/"3,C|C,a" removed 2026-08-29 (user-confirmed, same reason as the
         // singleCritFamilies removals above): each is a 2-or-3-membrane/scab-only region, already
         // caught by crit-cell/scab-cell/special-cell congruity before this registry runs --
@@ -1250,7 +1367,15 @@ const std::vector<CritFamily>& multiCritFamilies() {
         // Net result: no new S_6 multi-region elements from this batch.
         // "2CD|2,CD,a" added 2026-08-26 (user-provided).
         {"1,2,a", {{"S_9", 0, {"2CD|C2Da", "CD|CE|2DaE", "2CD|2,CD,a"}}}},
-        {"2,1a", {{"S_12", 0, {"2CD|2,CDa"}}}},
+        // "S_12⊕1" multi-region element "2CD|5,CDa" added 2026-08-30 (user-provided), same batch as
+        // singleCritFamilies()'s own S_12⊕1 addition above -- appends onto that same roster entry.
+        {"2,1a", {{"S_12", 0, {"2CD|2,CDa"}}, {"S_12⊕1", 1, {"2CD|5,CDa"}}}},
+        // "S_7⊕1" added 2026-08-30 (user-provided; Pairing-Theorem sibling of S_7, offset 1, its
+        // only known element is multi-region -- verified via verify_left_side.exe against rep
+        // "2,2,2a"). S_7 itself gets an empty group here (no new multi-region elements of its own)
+        // purely so this entry's "anyExisting" check in allCollectionRosters() finds S_7 already
+        // registered and appends S_7⊕1 as a fresh sibling roster entry, same pattern as S_8/S_8⊕1.
+        {"2,2,2a", {{"S_7", 0, {}}, {"S_7⊕1", 1, {"4C|2,2,Ca"}}}},
         // "2CD|2CD,a" added 2026-08-25 (user-provided) -- S_8's first multi-region element.
         {"12,a", {{"S_22", 0, {"2CD|2CD,a"}}}},
         // "3C|3Ca" added 2026-08-25 (user-provided).
@@ -1260,7 +1385,13 @@ const std::vector<CritFamily>& multiCritFamilies() {
         // Theorem sibling, offset 1) added 2026-08-29, same "unregistered_left_sides re-run after
         // the T-grandchild-fold fix" batch as the singleCritFamilies additions above -- shares
         // S_8's rep "4,2a" as its own structural swap target, per the same reasoning as S_5/S_5⊕1.
-        {"4,2a", {{"S_8", 0, {"3A|2Aa"}}, {"S_8⊕1", 1, {"3A|2A,2a"}}}},
+        // 3 new S_8 elements + 4 new S_8⊕1 elements added 2026-08-30 (user-provided), verified via
+        // verify_left_side.exe against rep "4,2a" at offset 0 / offset 1 respectively. "3C|2C,2a"
+        // dropped -- canonicalizes to the exact same multiRegistry key as the already-registered
+        // "3A|2A,2a" (a pure A<->C relabeling, caught by the registry's duplicate-key throw).
+        {"4,2a", {{"S_8", 0, {"3A|2Aa", "3C|1C,2a", "1,2CD|CD,2a", "12C2|7C8a"}},
+                   {"S_8⊕1", 1, {"3A|2A,2a", "2,22C|2Ca", "2,2CD|CD,2a",
+                                  "CD|3CED|E,2a", "CD|2CE|DE,2a"}}}},
         // S_11 (2nd element) / S_11⊕1 added 2026-08-27, the first family here whose OWN rep is
         // genuinely multi-region (unlike every entry above, which reuses an EXISTING single-region
         // family's rep -- see this function's own doc comment) -- built on the multi-region-target
@@ -1281,7 +1412,14 @@ const std::vector<CritFamily>& multiCritFamilies() {
         // directly that this was always meant as the S_1/S_1⊕1-style oplus-suffix sibling, not a
         // separate named collection -- so it needs no genome-table entry of its own either (its
         // genome bucket IS S_11's).
-        {"4A|Aa", {{"S_5", 0, {"2AB|ABa"}}, {"S_5⊕1", 1, {"5AB|ABa", "ABa|37AB8"}}}},
+        // 5 new S_5 elements added 2026-08-30 (user-provided), verified via verify_left_side.exe
+        // against rep "4A|Aa" at offset 0. Both submitted "S5+1" candidates turned out to be
+        // relabeled duplicates of S_5⊕1's existing elements, caught by the registry's duplicate-key
+        // throw: "738CD|CDa" == already-registered "ABa|37AB8"; "5CD|CDa" == already-registered
+        // "5AB|ABa". No new S_5⊕1 elements from this batch.
+        {"4A|Aa", {{"S_5", 0, {"2AB|ABa", "13,CD|CDa", "4C|2C,DE|DEa", "CDE|CDF|EF,GH|GHa",
+                                "7C8DE|4C|DEa", "CD|CEF|GH,DEF|GHa"}},
+                    {"S_5⊕1", 1, {"5AB|ABa", "ABa|37AB8"}}}},
         // S_16 added 2026-08-27, alongside S_11/S_11⊕1 above -- previously left unregistered (see
         // singleCritFamilies()'s own "33a"/S_13 comment block) specifically because its rep
         // "3CD|CDa" is itself multi-region and no swap machinery could target one; both elements
@@ -1297,9 +1435,14 @@ const std::vector<CritFamily>& multiCritFamilies() {
         // existing single-region sibling to reuse, so (like S_5/S_11⊕1 above) its OWN left-side
         // text IS the family's rep, same "obviously its own rep" rationale as the empty-group
         // singleCritFamilies entries.
-        {"AB|2AaB", {{"S_16", 0, {}}}},
-        {"Aa|33A", {{"S_19", 0, {}}}},
-        {"AB|3AaB", {{"S_24", 0, {}}}},
+        // Relettered 2026-08-30 (user-provided) to the conventional C/D naming used everywhere
+        // else in this file, replacing the original A/B letters -- same position, verified
+        // equivalent via verify_left_side.exe (old text as candidate against new text as rep,
+        // offset 0). S_19's two regions are also swapped to lead with the boundary-heavy one,
+        // matching the user's preferred ordering.
+        {"CD|2CaD", {{"S_16", 0, {}}}},
+        {"33C|Ca", {{"S_19", 0, {}}}},
+        {"CD|3CaD", {{"S_24", 0, {}}}},
     };
     return families;
 }
@@ -1333,7 +1476,8 @@ const std::map<std::string, CritMatch>& registry() {
                     const std::string key = leftSideKey(e);
                     if (!m.emplace(key, CritMatch{g.offset, head, e}).second)
                         throw std::logic_error("collections registry: duplicate left-side key '" +
-                                                key + "' (from element '" + e + "')");
+                                                key + "' (from element '" + e + "', first was '" +
+                                                m.at(key).display + "')");
                 }
         }
         return m;
@@ -1356,7 +1500,7 @@ const std::map<std::string, CritMatch>& multiRegistry() {
                     if (!m.emplace(key, CritMatch{g.offset, head, e}).second)
                         throw std::logic_error(
                             "collections multiRegistry: duplicate left-side key '" + key +
-                            "' (from element '" + e + "')");
+                            "' (from element '" + e + "', first was '" + m.at(key).display + "')");
                 }
         }
         return m;
@@ -2129,12 +2273,25 @@ std::vector<CollectionRoster> allCollectionRosters() {
             addFamily(fam);
             continue;
         }
-        for (const auto& g : fam.groups)
+        // A group here can still be brand new even though anyExisting is true for the family as a
+        // whole -- e.g. S_8⊕1's ONLY elements live here, co-listed with S_8 (already emitted via
+        // singleCritFamilies) purely so this branch fires. Bug fixed 2026-08-30: the per-group
+        // lookup below used to do nothing when a group's name had no existing `out` entry to append
+        // onto, silently dropping that group (and its whole roster.json entry, incl. "S_8⊕1" itself
+        // -- caught while adding "S_7⊕1"/"S_12⊕1" the same way). Now falls back to creating a fresh
+        // entry with an empty rep (the paired-sibling convention -- see addFamily's own repShown
+        // comment), same as if it had been the family's own non-first group all along.
+        for (const auto& g : fam.groups) {
+            bool found = false;
             for (auto& r : out)
                 if (r.name == g.name) {
                     r.elements.insert(r.elements.end(), g.elements.begin(), g.elements.end());
+                    found = true;
                     break;
                 }
+            if (!found)
+                out.push_back({g.name, g.offset, {g.elements.begin(), g.elements.end()}, std::string()});
+        }
     }
     return out;
 }

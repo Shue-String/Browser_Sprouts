@@ -49,4 +49,36 @@ std::string genomeKey(const AlphaGenome& g);
 // only be possible for a T-child that itself happens to be a disconnected sum.
 std::string fullGenomeText(const stalks::Position& p, const stalks::SpecDB& db);
 
+// True iff `p`'s own full recursive fold (fullGenomeText at depth 0) is itself a name, not a bare
+// "(...)" tuple -- i.e. `p` IS a named genome outright, not just containing one as a T-child.
+// Mirrors collect.ts's isNamedGenome (checked "as if Quick-Genome were on", which fullGenomeText
+// always is -- see foldToName's own use in genomeTextAt).
+bool isNamedGenome(const stalks::Position& p, const stalks::SpecDB& db);
+
+// `p`'s own display name for Advanced-Collection purposes: its exact fold (isNamedGenome) if it has
+// one, else the matching NAMED_FAMILIES entry's name if `p` qualifies via isInAdvancedCollection
+// below, else nullopt. Mirrors collect.ts's resolvedGenomeName (synchronous here -- no fire-once-
+// and-settle needed, since this always has a live SpecDB to resolve against immediately).
+std::optional<std::string> resolvedGenomeName(const stalks::Position& p, const stalks::SpecDB& db);
+
+// Is `p` (a single-alpha position) either itself a named genome, or a bigger position that still
+// qualifies for the SAME family per the Advanced-Collection rule: its own (R,D,{L},{T'}) core
+// matches a named family's exactly; its own T-children are a superset of that family's lowest-order
+// T-children (by resolved/folded name); and every OTHER (extra) T-child itself qualifies
+// recursively. Mirrors collect.ts's isInAdvancedCollection exactly (see that function's own doc
+// comment for the full rule and termination argument). Memoized internally by `p`'s own
+// serialization, shared across calls within one process.
+bool isInAdvancedCollection(const stalks::Position& p, const stalks::SpecDB& db);
+
+// True iff `candidate` "goes yellow" when searched for the named family `searchedFamilyName` (e.g.
+// "S_1", "S_1⊕1") -- mirrors collect.ts's renderRequiredLine/computeRowInfos exactly: every one of
+// the family's own lowest-order T-children (family.tChildPlains) must appear among `candidate`'s own
+// top-level T-children (by resolvedGenomeName), AND every top-level T-child must be accounted for --
+// either itself satisfying that requirement, or carrying a direct one-level "bypass" (one of ITS OWN
+// T-children, i.e. a grandchild of `candidate`, whose exact fold equals `searchedFamilyName` itself,
+// not any AC-recursion -- see collect.ts's findBypassMatches). Throws if `searchedFamilyName` isn't
+// a NAMED_FAMILIES entry.
+bool isYellowCandidate(const stalks::Position& candidate, const stalks::SpecDB& db,
+                        const std::string& searchedFamilyName);
+
 }  // namespace stalks_tools

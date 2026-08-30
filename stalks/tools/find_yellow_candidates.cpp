@@ -1,0 +1,166 @@
+// Offline discovery tool: of every single-subposition (minimal), single-alpha left side reachable
+// from the given .spec file(s) whose (R,D,{L},{T'}) core matches S_1 or S_1⊕1 exactly and whose
+// left-side lives (leftSideLives2()/2) is <= 6, and which is NOT already registered under any
+// Advanced Collection (same repCanon check as unregistered_left_sides.cpp) -- report which ones
+// "go yellow" per isYellowCandidate (see alpha_genome.hpp), i.e. are genuine new S_1/S_1⊕1 members
+// by the same rule collect.ts's renderRequiredLine uses. See SESSION_NOTES_2026-08-30.md Part 2.
+//
+// Shares its scanning/dedup/repCanon machinery with unregistered_left_sides.cpp (see that file's
+// own doc comments for the reasoning behind quick-canon identity and the rep-set membership check);
+// duplicated here rather than factored out since each tool's own filter/output shape differs enough
+// that a shared helper would need its own parameterization anyway.
+//
+// Usage: find_yellow_candidates <out.tsv> <spec1.spec> [spec2.spec ...]
+#include "alpha_genome.hpp"
+#include "canon.hpp"
+#include "collections.hpp"
+#include "encoding.hpp"
+#include "moves.hpp"
+#include "position.hpp"
+#include "specfile.hpp"
+#include "tokens.hpp"
+
+#include <algorithm>
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <set>
+#include <string>
+#include <vector>
+
+using namespace stalks;
+using namespace stalks_tools;
+
+namespace {
+
+bool isSingleAlpha(const std::string& enc) {
+    int count = 0;
+    bool sawAlpha = false;
+    for (char ch : enc) {
+        if (ch >= 'a' && ch <= 'j') {
+            ++count;
+            if (ch == 'a') sawAlpha = true;
+        }
+    }
+    return count == 1 && sawAlpha;
+}
+
+int distinctPortLetters(const std::string& s) {
+    std::set<char> letters;
+    for (char ch : s)
+        if (ch >= 'a' && ch <= 'z') letters.insert(ch);
+    return static_cast<int>(letters.size());
+}
+
+// See unregistered_left_sides.cpp's own doc comment for why this must be quickCanon, not
+// canonicalize().
+std::set<std::string> buildRepCanonSet() {
+    std::set<std::string> out;
+    for (const CollectionRoster& r : allCollectionRosters()) {
+        if (r.rep.empty()) continue;
+        if (distinctPortLetters(r.rep) != 1) continue;
+        const QuickCanonResult qc = quickCanon(parsePosition("[" + r.rep + "]"));
+        out.insert(serialize(qc.rep));
+    }
+    return out;
+}
+
+const std::string kS1Core = "(0,1,{0},{})";
+const std::string kS1Plus1Core = "(1,0,{1},{})";
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc < 3) {
+        std::cerr << "usage: find_yellow_candidates <out.tsv> <spec1.spec> [spec2.spec ...]\n";
+        return 1;
+    }
+    const std::string outPath = argv[1];
+    const std::set<std::string> repCanon = buildRepCanonSet();
+    std::cerr << "rep set: " << repCanon.size() << " distinct canonical forms\n";
+
+    std::set<std::string> seenQuickEnc;
+    struct Row {
+        int lives;
+        std::string quickEnc;
+        std::string family;
+        std::string genome;
+    };
+    std::vector<Row> yellowRows;
+    long long candidatesChecked = 0;
+
+    for (int i = 2; i < argc; ++i) {
+        const std::string path = argv[i];
+        SpecDB db;
+        try {
+            db = loadSpecGraphFromFile(path);
+        } catch (const std::exception& e) {
+            std::cerr << "skipping " << path << ": " << e.what() << "\n";
+            continue;
+        }
+        std::cerr << path << ": " << db.size() << " nodes\n";
+
+        std::size_t scanned = 0, qualifying = 0;
+        for (const SpecNode& node : db.nodes()) {
+            ++scanned;
+            if (scanned % 500000 == 0) { std::cerr << "  ..." << scanned << "/" << db.size() << "\n"; std::cerr.flush(); }
+            if (!isSingleAlpha(node.enc)) continue;
+
+            Position pBase;
+            try {
+                pBase = canonicalize(parsePosition(node.enc));
+            } catch (const EncodingError&) {
+                continue;
+            }
+            if (!hasSpecialPoint(pBase)) continue;
+
+            const QuickCanonResult qc = quickCanon(pBase);
+            const std::string quickEnc = serialize(qc.rep);
+            if (!seenQuickEnc.insert(quickEnc).second) continue;
+            ++qualifying;
+
+            const int lives = qc.rep.leftSideLives2() / 2;
+            if (lives < 1 || lives > 6) continue;
+
+            if (repCanon.count(quickEnc) > 0) continue;  // already registered somewhere
+
+            const auto genome = classifyAlphaGenome(pBase, db);
+            if (!genome) continue;
+            const std::string core = genomeKey(*genome);
+
+            std::string family;
+            if (core == kS1Core) family = "S_1";
+            else if (core == kS1Plus1Core) family = "S_1\xE2\x8A\x95" "1";  // "S_1⊕1"
+            else continue;
+
+            ++candidatesChecked;
+            if (candidatesChecked % 100 == 0) { std::cerr << "  checked " << candidatesChecked << " candidates...\n"; std::cerr.flush(); }
+
+            if (isYellowCandidate(pBase, db, family)) {
+                yellowRows.push_back({lives, quickEnc, family, fullGenomeText(pBase, db)});
+            }
+        }
+        std::cerr << "  scanned " << scanned << ", qualifying single-alpha " << qualifying << "\n";
+    }
+
+    std::cerr << "checked " << candidatesChecked << " S_1/S_1\xE2\x8A\x95" "1-core candidates, "
+              << yellowRows.size() << " went yellow\n";
+
+    std::sort(yellowRows.begin(), yellowRows.end(), [](const Row& a, const Row& b) {
+        if (a.lives != b.lives) return a.lives < b.lives;
+        if (a.family != b.family) return a.family < b.family;
+        return a.quickEnc < b.quickEnc;
+    });
+
+    std::ofstream f(outPath, std::ios::binary);
+    if (!f) {
+        std::cerr << "cannot open output file: " << outPath << "\n";
+        return 1;
+    }
+    f << "lives\tfamily\tquickEnc\tgenome\n";
+    for (const Row& r : yellowRows)
+        f << r.lives << "\t" << r.family << "\t" << r.quickEnc << "\t" << r.genome << "\n";
+    std::cerr << "wrote " << yellowRows.size() << " yellow candidates to " << outPath << "\n";
+
+    return 0;
+}

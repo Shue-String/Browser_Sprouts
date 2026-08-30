@@ -38,7 +38,7 @@
 // genome under movetype classification).
 //
 // Usage: unregistered_left_sides <out_dir> <spec1.spec> [spec2.spec ...]
-// Writes <out_dir>/unregistered_1_life.txt .. unregistered_4_life.txt.
+// Writes <out_dir>/unregistered_1_life.txt .. unregistered_6_lives.txt.
 
 #include "alpha_genome.hpp"
 #include "canon.hpp"
@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
             ++qualifying;
 
             const int lives = qc.rep.leftSideLives2() / 2;
-            if (lives < 1 || lives > 4) continue;
+            if (lives < 1 || lives > 6) continue;
             ++totalByLives[lives];
 
             const bool inCollection = repCanon.count(quickEnc) > 0;
@@ -229,7 +229,7 @@ int main(int argc, char** argv) {
     // that's already a folded name like "C_3" means the PARENT shape is new but built from familiar
     // pieces; a raw unfolded tuple means even the T-child itself isn't recognized yet).
     std::map<std::string, long long> tSubgenomeCounts;
-    for (int lives = 1; lives <= 4; ++lives) {
+    for (int lives = 1; lives <= 6; ++lives) {
         const std::string path = outDir + "/unregistered_" + std::to_string(lives) +
                                   (lives == 1 ? "_life" : "_lives") + ".txt";
         std::ofstream f(path, std::ios::binary);
