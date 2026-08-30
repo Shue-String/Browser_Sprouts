@@ -2,7 +2,8 @@
 // and report how many times each Advanced-Collection member (and the crit-cell/scab-cell
 // boundary-merge trick) actually fired as the applied reduction -- "how much mileage are we
 // getting out of each Shue Collection member." See collections.hpp's quickReductionCounts for
-// what's counted and how the key text is built.
+// what's counted and how the key text is built. Every registered collection element is reported
+// even if it never fired (count 0) -- seeded from allCollectionRosters(), see below.
 //
 // Usage: quick_reduction_counts <n> [out.csv]
 // Default output path: "<n>_spot_quick_reductions.csv" in the current directory.
@@ -62,9 +63,20 @@ int main(int argc, char** argv) {
             ++quickSingle;
     }
 
+    // Seed every registered collection element's key at 0 before folding in the observed counts,
+    // so an element that never fired still shows up (previously the map only ever held keys that
+    // had fired at least once -- silently indistinguishable from "not a registered element at
+    // all"). Only registry-based elements (single-crit/double-crit/multi-region -- the ones with
+    // an authored `display` text) are enumerable this way; the crit-cell/scab-cell/special-cell
+    // congruity tricks have no fixed roster (their key is a freshly-computed region text), so they
+    // aren't seeded and simply won't appear unless they actually fire, same as before.
+    std::map<std::string, long long> withZeros = quickReductionCounts();
+    for (const auto& roster : allCollectionRosters())
+        for (const auto& element : roster.elements)
+            withZeros.emplace("[" + element + "/", 0);
+
     // Sort by count descending, then key ascending, for a readable report.
-    std::vector<std::pair<std::string, long long>> rows(quickReductionCounts().begin(),
-                                                          quickReductionCounts().end());
+    std::vector<std::pair<std::string, long long>> rows(withZeros.begin(), withZeros.end());
     std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) {
         if (a.second != b.second)
             return a.second > b.second;

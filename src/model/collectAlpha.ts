@@ -134,36 +134,54 @@ async function quickRef(enc: string): Promise<PositionRef> {
   return qc.ok ? { enc, quickEnc: qc.enc, quickOffset: qc.offset } : { enc, quickEnc: enc, quickOffset: 0 };
 }
 
-/** A position's quick-canon representative, split into "the component still containing alpha"
- * (what movetype classification runs on) and every other ("away") component -- kept as their own
- * real encodings, not collapsed to a single nimber, so their OWN moves can be enumerated as
- * genuine T-children by computeAlphaGenomeAt (a move purely within an away component never
- * touches alpha, so it's a T move by definition). Falls back to treating `enc` itself as its own
- * (unsplit, offset-0) representative if the quickCanonOf call fails outright, rather than losing
- * the genome entirely over a display-only lookup failure. */
-async function quickAlphaSplitOf(enc: string): Promise<{ alphaEnc: string; awayEncs: string[]; offset: number }> {
-  const qc = await quickCanonOf(enc);
-  const repEnc = qc.ok ? qc.enc : enc;
-  const offset = qc.ok ? qc.offset : 0;
-  const parts = repEnc.split('+');
-  const alphaEnc = parts.find(p => p.includes('a')) ?? repEnc;
-  const awayEncs = parts.filter(p => p !== alphaEnc && p !== 'N');
-  return { alphaEnc, awayEncs, offset };
+/** `enc`'s REAL structural components, split into "the one still containing alpha" (`realAlphaEnc`)
+ * and every other ("away") component (`awayEncs`) -- a pure syntactic split (Sprouts positions use
+ * '+' as the literal disjoint-sum separator, so this needs no engine call), with NO quick-canon
+ * reduction applied to either side. computeAlphaGenomeAt classifies movetypes directly on
+ * `realAlphaEnc` itself (not a quick-canon rep -- see that function's own doc comment for why an
+ * earlier version's rep-based classification was unsound), and away-component-move candidates
+ * reattach whichever side DIDN'T move using these same real encodings verbatim -- never a quick-canon
+ * stand-in, which would report a T-child that's only nimber-equivalent to a reachable position, not
+ * actually reachable itself (e.g. for `enc` = "1a+22", the away move on "22" actually reaches "1a", a
+ * genuine S_1⊕1 member -- reattaching alpha's quick-canon rep "2a" instead claimed the reached
+ * position was "2a", i.e. S_1 exactly: an impossible T-child, since a collection member can't lead
+ * back into its own collection). */
+function quickAlphaSplitOf(enc: string): { realAlphaEnc: string; awayEncs: string[] } {
+  const parts = enc.split('+').filter(p => p !== 'N');
+  const realAlphaEnc = parts.find(p => p.includes('a')) ?? enc;
+  const awayEncs = parts.filter(p => p !== realAlphaEnc);
+  return { realAlphaEnc, awayEncs };
 }
 
-/** Compute the genome of `enc`, classifying movetypes on its QUICK-CANON representative's
- * alpha-bearing component (see quickAlphaSplitOf) -- not the real structural encoding. Several
- * distinct T-children commonly reduce to the exact same quick-canon rep (see the module header's
- * "2AB|2a,AB" example), so computing genomes this way is what lets [T] dedup meaningfully instead
- * of listing near-identical structural variants separately.
+/** Compute the genome of `enc`, classifying movetypes directly on its REAL alpha-bearing component
+ * (see quickAlphaSplitOf) -- an earlier version of this function ran classification on that
+ * component's quick-canon REP instead (to dedup quick-canon-equivalent alpha shapes to the same
+ * genome), but that's unsound: a rep is only proven NIMBER-equivalent to the real component, not
+ * proven to share its move graph, so reusing the rep's own children as if they were the real
+ * component's own real T-children can silently drop or misreport moves that only the real structure
+ * actually has. Concretely, searching S_5 and opening a T-child that quick-canons to "S_5 ⊕ 1"
+ * (i.e. its own alpha component's real-to-rep offset is 1, with no away component to blame the
+ * offset on) showed T=[S_1,S_2] -- S_5's OWN unshifted T-list, verbatim, recomputed from the rep with
+ * the offset applied only to R/D/L/T', never to T -- instead of the mathematically required
+ * T=[S_1⊕1,S_2⊕1,S_5] (S_5's T-children shifted the same way, per the "family at every shift
+ * 0..shift-1" rule genomeDefs.json's resolveGenome already applies for NAMED families -- see its own
+ * doc comment). Classifying on the real component directly sidesteps the whole issue: its own real
+ * moves already reach genuinely real positions (here, real structural variants that themselves
+ * happen to quick-canon to S_1⊕1, S_5, and S_2⊕1 respectively -- confirmed against the live engine),
+ * with no offset bookkeeping needed for the alpha side at all. Dedup of quick-canon-equivalent alpha
+ * shapes still happens, just one level up: two different real structures reaching the same FOLDED
+ * NAME display identically regardless of which real variant produced it, which is what a reader
+ * actually sees -- the raw candidate encodings never needed to match for that.
  *
- * When the rep is a split (a sum of components, only one bearing alpha), the away component(s)'
- * nim-summed nimber and the quick-canon offset are XORed directly into R/D/L/T' (a real component
- * of nimber n forces moves to every nimber 0..n-1 by mex, so this is what actually happens to the
- * position's values when it's played as a disjoint sum -- not a display-only correction), and each
- * away component's own moves are enumerated as additional T-children (see quickAlphaSplitOf's own
+ * When `enc` is a split (a sum of components, only one bearing alpha), the away component(s)'
+ * nim-summed (real, exact) nimber is XORed directly into R/D/L/T' (a real component of nimber n
+ * forces moves to every nimber 0..n-1 by mex, so this is what actually happens to the position's
+ * values when it's played as a disjoint sum -- not a display-only correction), and each away
+ * component's own real moves are enumerated as additional T-children (see quickAlphaSplitOf's own
  * doc comment) -- this is what lets shapes like S_3⊕1/S_3⊕2 arise as real, named T-children instead
  * of only ever showing up as an approximate "⊕N" suffix on the alpha component's own tuple.
+ * Whichever side DIDN'T move in a given candidate is reattached using its REAL encoding
+ * (split.realAlphaEnc / split.awayEncs), never a quick-canon stand-in.
  *
  * `depth` controls how far [T] nests -- see MAX_GENOME_DEPTH/MAX_NESTED_GENOME_LIVES: at
  * MAX_GENOME_DEPTH, the result is truncated to a bare FourGeneGenome (no T-children computed at all,
@@ -173,19 +191,21 @@ async function computeAlphaGenomeAt(
   enc: string,
   depth: number,
 ): Promise<{ position: PositionRef; genome: AlphaGenome | FourGeneGenome } | null> {
-  const [position, split] = await Promise.all([quickRef(enc), quickAlphaSplitOf(enc)]);
-  const awayResults = await Promise.all(split.awayEncs.map(e => analyze(e)));
+  const split = quickAlphaSplitOf(enc);
+  const [position, res, awayResults] = await Promise.all([
+    quickRef(enc),
+    analyze(split.realAlphaEnc),
+    Promise.all(split.awayEncs.map(e => analyze(e))),
+  ]);
+  if (!res.ok) return null;
+  if (!isSingleAlpha(res.canon)) return null;
+
   let awayNimberXor = 0;
   let awayLivesSum = 0;
   for (const r of awayResults) {
     if (r.ok) { awayNimberXor ^= r.nimber; awayLivesSum += r.lives ?? 0; }
   }
-  const oplus = split.offset ^ awayNimberXor;
   const awayPrefix = split.awayEncs.length ? split.awayEncs.join('+') + '+' : '';
-
-  const res = await analyze(split.alphaEnc);
-  if (!res.ok) return null;
-  if (!isSingleAlpha(res.canon)) return null;
 
   let R: number | null = null;
   let D: number | null = null;
@@ -196,13 +216,14 @@ async function computeAlphaGenomeAt(
   const Lc: MoveChildRef[] = [];
   const TprimeC: MoveChildRef[] = [];
   // Every T-move candidate reachable from the full split position: one per real move of the
-  // alpha component (away part(s) carried through unchanged) plus one per real move of each away
-  // component (alpha part carried through unchanged) -- see this function's own doc comment.
+  // alpha component (away part(s) carried through unchanged, at their REAL encoding) plus one per
+  // real move of each away component (alpha part carried through unchanged, at ITS real encoding) --
+  // see this function's own doc comment.
   const candidates: { enc: string; nimber: number; lives: number }[] = [];
   for (const child of res.children) {
     const mt = child.move?.movetype;
     if (!mt) continue;
-    const shifted = child.nimber ^ oplus;
+    const shifted = child.nimber ^ awayNimberXor;
     switch (mt) {
       case 1: R = shifted; Rc = { enc: child.enc, nimber: child.nimber }; break;
       case 2: D = shifted; Dc = { enc: child.enc, nimber: child.nimber }; break;
@@ -212,6 +233,8 @@ async function computeAlphaGenomeAt(
       default: break;
     }
   }
+  // Away-component moves: alpha stays untouched at its own real encoding/nimber (`res`, already the
+  // real alpha's own analyze() result -- see this function's own doc comment).
   for (let i = 0; i < split.awayEncs.length; i++) {
     const awayRes = awayResults[i];
     if (!awayRes.ok) continue;
@@ -219,10 +242,10 @@ async function computeAlphaGenomeAt(
     const otherAwayNimberXor = awayNimberXor ^ awayRes.nimber;
     const otherAwayLivesSum = awayLivesSum - (awayRes.lives ?? 0);
     for (const awayChild of awayRes.children) {
-      const parts = [split.alphaEnc, ...otherAway, awayChild.enc].filter(p => p !== 'N');
+      const parts = [split.realAlphaEnc, ...otherAway, awayChild.enc].filter(p => p !== 'N');
       candidates.push({
         enc: parts.join('+'),
-        nimber: res.nimber ^ otherAwayNimberXor ^ awayChild.nimber ^ split.offset,
+        nimber: res.nimber ^ otherAwayNimberXor ^ awayChild.nimber,
         lives: (res.lives ?? 0) + otherAwayLivesSum + awayChild.lives,
       });
     }

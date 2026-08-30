@@ -719,6 +719,8 @@
         margin-bottom: 14px;
       }
       .collect-detail-label { flex: none; word-break: break-all; }
+      .collect-detail-label-copyable { cursor: pointer; }
+      .collect-detail-label-copyable:hover { background: #eee; }
       .collect-detail-genome {
         flex: 1;
         min-width: 0;
@@ -744,14 +746,28 @@
         font: 600 10.5px/1.3 system-ui, sans-serif; color: #888; text-align: left;
         padding: 2px 6px 4px; font-weight: 600;
       }
-      .collect-t-table th.collect-t-relevancy-head { text-align: left; padding-left: 12px; }
+      .collect-t-table th.collect-t-genome-head,
+      .collect-t-table th.collect-t-bypass-head { text-align: left; padding-left: 12px; }
       .collect-t-row { border-radius: 3px; }
       .collect-t-row.collect-t-clickable { cursor: pointer; }
       .collect-t-row.collect-t-clickable:hover td { background: #eee; }
+      .collect-t-row-extra td { background: #fbe1e1; }
+      .collect-t-row-extra.collect-t-clickable:hover td { background: #f6cdcd; }
       .collect-t-row td { padding: 1px 6px; vertical-align: baseline; }
       .collect-t-label { word-break: break-all; }
-      .collect-t-relevancy { padding-left: 12px !important; word-break: break-all; color: #555; }
-      .collect-t-relevancy.collect-t-relevancy-none { color: #aaa; font-style: italic; }
+      .collect-t-genome { padding-left: 12px !important; word-break: break-all; color: #555; }
+      .collect-t-bypass { padding-left: 12px !important; word-break: break-all; color: #555; }
+      .collect-t-bypass.collect-t-bypass-none { color: #aaa; font-style: italic; }
+      .collect-t-bypass-match { cursor: pointer; text-decoration: underline dotted; }
+      .collect-t-bypass-match:hover { color: #2255cc; }
+      .collect-t-required-line {
+        display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+        font: 700 12px/1.4 monospace; padding: 2px 6px 6px;
+      }
+      .collect-t-required-names { display: flex; flex-wrap: wrap; gap: 10px; }
+      .collect-t-required-present { color: #c00; }
+      .collect-t-required-missing { color: #000; }
+      .collect-t-required-line.collect-t-required-complete { background: #fff6b0; }
       .collect-empty { color: #888; font: 13px/1.5 system-ui, sans-serif; padding: 20px 4px; }
       #collect-export-btn { flex: none; }
       #collect-export-status { flex: none; font: 11px/1.4 system-ui, sans-serif; color: #2a8a2a; }

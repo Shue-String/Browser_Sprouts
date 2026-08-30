@@ -1050,6 +1050,14 @@ const std::vector<CritFamily>& singleCritFamilies() {
             // registry) already merges it before a registry lookup ever runs -- confirmed
             // unreachable via quick_reduction_counts.exe's 0-count report (n=5/n=6, see
             // [[project_quick_reduction_counters]]), same rationale as S_13's empty group above.
+            // 10 elements added 2026-08-29 (user-provided), same batch as multiCritFamilies()'s own
+            // S_1⊕1 addition below. Verified via tools/verify_left_side.cpp (offset 1 vs rep "2a")
+            // on the cheap 8-host set; also cross-checked pairwise via query_position --canon-only
+            // (every one of these plus the whole batch's multi-region siblings below canonicalizes
+            // to a distinct structural encoding, and none collides with an already-registered
+            // element) to rule out a relabeled/rotated duplicate slipping in.
+            "234,2a", "23728,2a", "36,2a", "26,2a", "2222,2a", "224,2a", "22728,2a", "2748,2a",
+            "277288,2a", "44,2a",
            }}}},
         // "3,a" removed 2026-08-29 for the same reason as the S_2 removals just above (already
         // caught by crit-cell congruity, confirmed 0-count) -- C_3 keeps its rep with no listed
@@ -1209,7 +1217,24 @@ const std::vector<CritFamily>& multiCritFamilies() {
                   // (see [[project_advanced_collections]]'s double-crit-masking diagnostic,
                   // 2026-08-29). Membership stays true; just can't ever actually apply.
                   }},
-                {"S_1⊕1", 1, {"12C|2Ca", "1CD|CD,2a"}}}},
+                {"S_1⊕1", 1,
+                 {"12C|2Ca", "1CD|CD,2a",
+                  // 21 elements added 2026-08-29 (user-provided), same batch as
+                  // singleCritFamilies()'s own S_1⊕1 addition above. Verified via
+                  // tools/verify_left_side.cpp (offset 1 vs rep "2a") on the cheap 8-host set, plus
+                  // a query_position --canon-only pairwise cross-check (all 31 of this batch's
+                  // elements canonicalize to distinct structural encodings, and none collides with
+                  // an already-registered element) -- ruling out both an accidental duplicate
+                  // within the batch and a relabeled/rotated repeat of an existing entry (the same
+                  // caution as the "CD|3DE|CEa" duplicate caught above). Partition-sensitive pairs
+                  // kept deliberately distinct per that same caution: "2,CDEF|CDEF,a" (region0 =
+                  // two boundaries "2"/"CDEF") vs "2CDEF|CDEF,a" (region0 = one boundary "2CDEF"),
+                  // and likewise "2,CDE|CDE,2a"/"2CDE|CDE,2a" and "2,CDE|7CDE8a"/"2CDE|7CDE8a".
+                  "2,1C|2Ca", "2,CDEF|CDEF,a", "2,CDE|CDE,2a", "1,2,C|2Ca", "6,C|2Ca", "12,C|2Ca",
+                  "2CDEF|CDEFa", "2CDEF|CFEDa", "2CDEF|DCFEa", "2CDEF|CDEF,a", "2CDE|CDE,2a",
+                  "2CDE|7CDE8a", "2CDE|7CED8a", "3CDE|7CDE8a", "3CDE|7CED8a", "3,CDEF|CDEFa",
+                  "CD|2C3D,2a", "2,CDE|7CDE8a", "CDE|CDFG|EFG,a", "CD|CEF|DEF,2a",
+                  "2CD|2EF|CD,EFa"}}}},
         // "3C|C,a"/"3,C|Ca"/"3,C|C,a" removed 2026-08-29 (user-confirmed, same reason as the
         // singleCritFamilies removals above): each is a 2-or-3-membrane/scab-only region, already
         // caught by crit-cell/scab-cell/special-cell congruity before this registry runs --
