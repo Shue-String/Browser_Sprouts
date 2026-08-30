@@ -57,6 +57,7 @@ import {
   computeAlphaGenome,
   expandGenomeShorthand,
   genomeKey,
+  nameForShorthand,
   parseGenomeQuery,
   shiftMembraneLetters,
 } from '../model/collectAlpha';
@@ -761,7 +762,7 @@ async function runSearch(raw: string): Promise<void> {
   render();
 }
 
-async function loadGenome(raw: string): Promise<void> {
+async function loadGenome(raw: string, explicitName?: string): Promise<void> {
   const parsed = parseGenomeQuery(raw);
   if (!parsed) {
     status = "Couldn't parse that genome — expected a form like (0,1,{0},{}).";
@@ -772,12 +773,16 @@ async function loadGenome(raw: string): Promise<void> {
     return;
   }
 
-  // GENOME_NAMES' compact (four-gene-only) keys resolve the searched tuple to a name whenever one
-  // exists (see withCompactKeys) -- driving the T-gene table's Bypass column below for every entry
-  // this search populates, per the user's own request ("only appears if the user has searched a
-  // named genome"). Set even if no hits are found (a real search attempt still happened), and left
-  // in place for a hit with no name (null) -- the Bypass column just stays hidden either way.
-  searchedGenomeName = GENOME_NAMES[parsed.key] ?? null;
+  // `explicitName` -- the exact family a shorthand search (e.g. "S_1+2") named -- always wins over
+  // re-deriving a name from the bare four-gene tuple: several different named families can share
+  // the exact same (R,D,{L},{T'}) core with different T-lists (e.g. S_1⊕2 and S_15 both key to
+  // "(2,3,{2},{})"), so GENOME_NAMES' compact-key lookup would otherwise silently pick whichever
+  // family happened to register first, not the one actually typed (see nameForShorthand's own doc
+  // comment). Only a raw typed-in tuple (no name attached at all) falls back to that lookup, which
+  // stays inherently ambiguous in that case -- there's no explicit name to prefer instead. Set even
+  // if no hits are found (a real search attempt still happened), and left in place for a hit with no
+  // name (null) -- the Bypass column just stays hidden either way.
+  searchedGenomeName = explicitName ?? GENOME_NAMES[parsed.key] ?? null;
   searchedGenomeFamily = searchedGenomeName ? familyMembersOf(searchedGenomeName) : null;
 
   const hits = GENOME_DB[parsed.key];
@@ -1412,9 +1417,10 @@ export function initCollect(): void {
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const trimmed = expandGenomeShorthand(input.value.trim());
+      const raw = input.value.trim();
+      const trimmed = expandGenomeShorthand(raw);
       if (trimmed.startsWith('(')) {
-        void loadGenome(trimmed);
+        void loadGenome(trimmed, nameForShorthand(raw));
       } else {
         void runSearch(input.value);
       }

@@ -477,6 +477,11 @@ interface GenomeRegistry {
   families: NamedFamily[];
   /** name (as typed with '+', e.g. "S_6+1") -> resolved genome, for expandGenomeShorthand. */
   byShorthand: Record<string, ResolvedGenome>;
+  /** name (as typed with '+', e.g. "S_6+1") -> the exact canonical name it denotes (e.g. "S_6⊕1"),
+   * for nameForShorthand. Kept separate from byShorthand's ResolvedGenome values because a search
+   * for a specific shorthand needs the family it explicitly named, not whichever family happens to
+   * share its bare (R,D,{L},{T'}) core -- see nameForShorthand's own doc comment. */
+  shorthandNames: Record<string, string>;
 }
 
 /** Everything derivable from GENOME_DEFS, built once at module load.
@@ -498,6 +503,7 @@ function buildRegistry(): GenomeRegistry {
   const genomeTextByName: Record<string, string> = {};
   const families: NamedFamily[] = [];
   const byShorthand: Record<string, ResolvedGenome> = {};
+  const shorthandNames: Record<string, string> = {};
 
   function register(family: string, shift: number): void {
     const name = nameOf(family, shift);
@@ -514,7 +520,9 @@ function buildRegistry(): GenomeRegistry {
     named[key] = name;
     genomeTextByName[name] = key;
     families.push({ name, coreKey: fourGeneKeyOf(g), tChildPlains: [...g.T].sort() });
-    byShorthand[name.replace(/⊕/g, '+')] = g;
+    const shorthand = name.replace(/⊕/g, '+');
+    byShorthand[shorthand] = g;
+    shorthandNames[shorthand] = name;
   }
 
   for (const family of Object.keys(GENOME_DEFS)) register(family, 0);
@@ -524,7 +532,7 @@ function buildRegistry(): GenomeRegistry {
   for (const { key, name } of LEGACY_FOLD_KEYS) named[key] = name;
   families.unshift(...LEGACY_FOLD_KEYS.map(({ name, tChildPlains }) => ({ name, coreKey: '(0,1,{0},{})', tChildPlains })));
 
-  return { named, genomeTextByName, families, byShorthand };
+  return { named, genomeTextByName, families, byShorthand, shorthandNames };
 }
 
 const REGISTRY = buildRegistry();
@@ -538,6 +546,20 @@ export function expandGenomeShorthand(input: string): string {
   const canonical = LEGACY_SEARCH_ALIASES[trimmed] ?? trimmed;
   const g = REGISTRY.byShorthand[canonical];
   return g ? fourGeneKeyOf(g) : input;
+}
+
+/** The exact family name (e.g. "S_1⊕2") a search-bar shorthand explicitly denotes, or undefined if
+ * `input` isn't a recognized shorthand -- e.g. a raw "(R,D,{L},{T'})" tuple, or free text. Exists
+ * because expandGenomeShorthand only carries the bare four-gene query forward, and re-deriving the
+ * searched name from that bare tuple afterward (GENOME_NAMES[key]) is lossy: several different
+ * named families can share the exact same (R,D,{L},{T'}) core with different T-lists (e.g. S_1⊕2
+ * and S_15 both key to "(2,3,{2},{})"), so that reverse lookup silently picks whichever family
+ * happened to register first -- not necessarily the one actually typed. Called BEFORE expansion, on
+ * the user's own raw input, so it can return the exact name unambiguously. */
+export function nameForShorthand(input: string): string | undefined {
+  const trimmed = input.trim();
+  const canonical = LEGACY_SEARCH_ALIASES[trimmed] ?? trimmed;
+  return REGISTRY.shorthandNames[canonical];
 }
 
 function withCompactKeys(names: Record<string, string>): Record<string, string> {
