@@ -62,19 +62,6 @@ using namespace stalks;
 
 namespace {
 
-// Same filter as collect_alpha_genetics.cpp: exactly one special-point character, and it's alpha.
-bool isSingleAlpha(const std::string& enc) {
-    int count = 0;
-    bool sawAlpha = false;
-    for (char ch : enc) {
-        if (ch >= 'a' && ch <= 'j') {
-            ++count;
-            if (ch == 'a') sawAlpha = true;
-        }
-    }
-    return count == 1 && sawAlpha;
-}
-
 // Index of the character matching the bracket/paren opened at `open` (one of '(','['), tracking
 // combined depth across both delimiter kinds (well-nested by construction, so simple aggregate
 // depth is sufficient -- see fullGenomeText's own doc comment on the "(R,D,{L},{T'},[T])" shape).
@@ -125,38 +112,6 @@ std::vector<std::string> topLevelTChildren(const std::string& genomeText) {
     return out;
 }
 
-// Distinct lowercase crit-port letters ('a'-'z') appearing in a roster's authored left-side text.
-int distinctPortLetters(const std::string& s) {
-    std::set<char> letters;
-    for (char ch : s)
-        if (ch >= 'a' && ch <= 'z')
-            letters.insert(ch);
-    return static_cast<int>(letters.size());
-}
-
-// The canonical serialized form of every single-crit family's own rep, built by substituting the
-// rep's one crit port with the real ALPHA token and running it through quickCanon -- i.e. exactly
-// the form a genuine member of that family reduces to under quickCanon.
-//
-// MUST be quickCanon, not plain canonicalize(): canonicalize() unconditionally DEcompresses any
-// DisaPoint/Hollow/Split/Triplet token already present in its input before recompressing
-// structural-only (see collections.cpp's own doc comment on this), so a rep that is ITSELF written
-// with a compressed token -- "3a" (C_3), "4a" (C_4), "34a" (S_9) -- would canonicalize() back to
-// its decompressed multi-region expansion instead of staying "3a"/"4a"/"34a". quickCanon's own
-// final step DOES recompress (applyDisaPoints), and a position already in rep form is a fixpoint
-// for it (verified: quickCanon("[3a]") == "3a"), so this matches what qc.rep actually equals for a
-// genuine member.
-std::set<std::string> buildRepCanonSet() {
-    std::set<std::string> out;
-    for (const CollectionRoster& r : allCollectionRosters()) {
-        if (r.rep.empty()) continue;               // shares a sibling's rep; already covered by it
-        if (distinctPortLetters(r.rep) != 1) continue;  // double-crit rep; can't match a single-alpha
-        const QuickCanonResult qc = quickCanon(parsePosition("[" + r.rep + "]"));
-        out.insert(serialize(qc.rep));
-    }
-    return out;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -165,7 +120,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     const std::string outDir = argv[1];
-    const std::set<std::string> repCanon = buildRepCanonSet();
+    const std::set<std::string> repCanon = stalks_tools::buildRepCanonSet();
     std::cerr << "rep set: " << repCanon.size() << " distinct canonical forms\n";
 
     std::set<std::string> seenQuickEnc;  // dedup by quick-canon identity, across files/spec-nodes
@@ -188,7 +143,7 @@ int main(int argc, char** argv) {
         for (const SpecNode& node : db.nodes()) {
             ++scanned;
             if (scanned % 500000 == 0) { std::cerr << "  ..." << scanned << "/" << db.size() << "\n"; std::cerr.flush(); }
-            if (!isSingleAlpha(node.enc)) continue;
+            if (!stalks_tools::isSingleAlpha(node.enc)) continue;
 
             Position pBase;
             try {

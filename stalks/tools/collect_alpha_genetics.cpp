@@ -99,21 +99,6 @@ std::string setStrBare(const std::set<int>& s) {
     return out;
 }
 
-// Exactly one special-point character present in `enc`, and it's specifically alpha ('a') -- see
-// tokens.hpp's tokenChar/charToken convention (special points are the only lowercase letters this
-// format's decoded text ever contains; membranes use uppercase A-V).
-bool isSingleAlpha(const std::string& enc) {
-    int count = 0;
-    bool sawAlpha = false;
-    for (char ch : enc) {
-        if (ch >= 'a' && ch <= 'j') {
-            ++count;
-            if (ch == 'a') sawAlpha = true;
-        }
-    }
-    return count == 1 && sawAlpha;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -140,7 +125,7 @@ int main(int argc, char** argv) {
         for (const SpecNode& node : db.nodes()) {
             ++scanned;
             if (scanned % 200000 == 0) { std::cerr << "  ..." << scanned << "/" << db.size() << "\n"; std::cerr.flush(); }
-            if (!isSingleAlpha(node.enc)) continue;
+            if (!stalks_tools::isSingleAlpha(node.enc)) continue;
             if (byEnc.count(node.enc)) continue;  // already found via an earlier file
 
             Position p;

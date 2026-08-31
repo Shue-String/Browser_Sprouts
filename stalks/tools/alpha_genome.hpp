@@ -85,4 +85,31 @@ bool isYellowCandidate(const stalks::Position& candidate, const stalks::SpecDB& 
 // without re-deriving the NAMED_FAMILIES table.
 std::optional<std::string> familyNameForCoreKey(const std::string& coreKey);
 
+// Exactly one special-point character present in `enc`, and it's specifically alpha ('a') -- see
+// tokens.hpp's tokenChar/charToken convention (special points are the only lowercase letters this
+// format's decoded text ever contains; membranes use uppercase A-V). Shared by collect_alpha_genetics,
+// find_yellow_candidates, and unregistered_left_sides -- all three scan the same single-alpha
+// population.
+bool isSingleAlpha(const std::string& enc);
+
+// Distinct lowercase crit-port letters ('a'-'z') appearing in a roster's authored left-side text.
+int distinctPortLetters(const std::string& s);
+
+// The canonical serialized form of every single-crit family's own rep, built by substituting the
+// rep's one crit port with the real ALPHA token and running it through quickCanon -- i.e. exactly
+// the form a genuine member of that family reduces to under quickCanon. Double-crit reps are
+// skipped (distinctPortLetters != 1): they require two distinct crit ports, which no single-alpha
+// position (exactly one special-point token) can ever supply, so they can never match here.
+//
+// MUST be quickCanon, not plain canonicalize(): canonicalize() unconditionally DEcompresses any
+// DisaPoint/Hollow/Split/Triplet token already present in its input before recompressing
+// structural-only (see collections.cpp's own doc comment on this), so a rep that is ITSELF written
+// with a compressed token -- "3a" (C_3), "4a" (C_4), "34a" (S_9) -- would canonicalize() back to
+// its decompressed multi-region expansion instead of staying "3a"/"4a"/"34a". quickCanon's own
+// final step DOES recompress (applyDisaPoints), and a position already in rep form is a fixpoint
+// for it (verified: quickCanon("[3a]") == "3a"), so this matches what qc.rep actually equals for a
+// genuine member. Shared by find_yellow_candidates and unregistered_left_sides (both need the same
+// "is this left side already registered" rep-set membership check).
+std::set<std::string> buildRepCanonSet();
+
 }  // namespace stalks_tools

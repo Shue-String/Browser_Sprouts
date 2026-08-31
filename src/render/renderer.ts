@@ -14,7 +14,7 @@ import { rotateSpherePoint, unrotateSpherePoint, normalize, project, projectRect
 import { chaikin } from '../math/chaikin';
 import { pointInPolygon } from '../math/intersect';
 import { edgeRepellers } from '../model/smooth';
-import { edgePtsForEntry, pointAtBearing, bearingFrom } from '../model/moves';
+import { edgePtsForEntry, pointAtBearing, bearingFrom, boundarySphereLoop, windingAround, regionContainsPoint } from '../model/moves';
 
 export type ProjectionType = 'lambert' | 'rect';
 
@@ -1117,24 +1117,12 @@ export class Renderer {
       this.lastScreenOuterVersion = state.nextRegionId;
     }
     const n = normalize(unrotateSpherePoint({ x: 0, y: 0, z: 1 }, camera));
-    const ang = (p: SpherePoint) => bearingFrom(n, p);
     const winding = new Map<RegionId, number>();
     let bestId: RegionId | null = null, bestW = 0;
     for (const r of state.regions.values()) {
       let total = 0;
-      for (const b of r.boundaries) {
-        const loop = this.boundarySphereLoop(b.entries, state);
-        if (loop.length < 2) continue;
-        let prev = ang(loop[loop.length - 1]);
-        for (const p of loop) {
-          const a = ang(p);
-          let da = a - prev;
-          while (da > Math.PI) da -= 2 * Math.PI;
-          while (da < -Math.PI) da += 2 * Math.PI;
-          total += da; prev = a;
-        }
-      }
-      const wn = Math.abs(total) / (2 * Math.PI);
+      for (const b of r.boundaries) total += windingAround(boundarySphereLoop(b.entries, state), n);
+      const wn = Math.abs(total);
       winding.set(r.id, wn);
       if (wn > bestW) { bestW = wn; bestId = r.id; }
     }
@@ -1171,25 +1159,6 @@ export class Renderer {
   private lastScreenOuterVersion = -1;
   /** Reusable offscreen canvas for Voronoi rasterization (subregions debug). */
   private voronoiOffscreen: HTMLCanvasElement | null = null;
-
-  /** A region boundary as an ordered list of sphere points (following edgeId). */
-  private boundarySphereLoop(
-    entries: import('../model/types').BoundaryEntry[],
-    state: GameState,
-  ): SpherePoint[] {
-    const loop: SpherePoint[] = [];
-    for (const e of entries) {
-      const edge = e.edgeId !== undefined ? state.edges.get(e.edgeId) : undefined;
-      if (edge) {
-        const pts = edgePtsForEntry(e, edge);
-        for (let j = 0; j < pts.length - 1; j++) loop.push(pts[j]);
-      } else {
-        const v = state.vertices.get(e.vertexId);
-        if (v) loop.push(v.pos);
-      }
-    }
-    return loop;
-  }
 
   /**
    * Project a boundary walk to a canvas polygon, following the exact physical
@@ -1618,47 +1587,13 @@ export class Renderer {
     //      — the hard case — resolved by winding number now instead of 2D
     //      polygon containment, but still marked with a dashed border so a
     //      close call never looks as confident as a verified one.
-    const windingAround = (loop: SpherePoint[], point: SpherePoint): number => {
-      if (loop.length < 2) return 0;
-      const ang = (p: SpherePoint) => bearingFrom(point, p);
-      // A wedge is always probed right next to ITS OWN vertex, and every
-      // adjacent region's boundary loop necessarily passes through/near that
-      // same vertex — bearingFrom(point, p) is only singular when p is very
-      // close to `point` (or its antipode), which is exactly this case. One
-      // near-degenerate sample poisons the whole running sum (a wild jump
-      // gets wrapped into [-π,π] as a plausible-looking but wrong delta),
-      // which is exactly what happened for vertex 2/6: every candidate region
-      // came back ~0 winding instead of one of them reading ±1. Skip loop
-      // points too close to the probed point, the same "near-degenerate
-      // tangent" skip stablePt already applies elsewhere in this codebase.
-      const NEAR_EPS = 1e-3; // ~2.5 degrees
-      const kept = loop.filter(p => p.x * point.x + p.y * point.y + p.z * point.z <= 1 - NEAR_EPS);
-      if (kept.length < 2) return 0;
-      let total = 0;
-      let prev = ang(kept[kept.length - 1]);
-      for (const p of kept) {
-        const a = ang(p);
-        let da = a - prev;
-        while (da > Math.PI) da -= 2 * Math.PI;
-        while (da < -Math.PI) da += 2 * Math.PI;
-        total += da; prev = a;
-      }
-      return total / (2 * Math.PI);
-    };
+    // Shared with screenOuterRegion/moves.ts's computeSpliceSlots — see
+    // moves.ts's windingAround/regionContainsPoint for the near-degenerate-
+    // point handling (this is what caught the vertex 2/6 ~0-winding bug).
     const insideRegion = (rid: RegionId, point: SpherePoint): boolean => {
       const region = state.regions.get(rid);
       if (!region) return false;
-      let total = 0;
-      for (const b of region.boundaries) total += windingAround(this.boundarySphereLoop(b.entries, state), point);
-      // +1 specifically, not just |winding| large: recomputeRegions' "interior
-      // always on the left" convention makes genuine containment wind +1. A
-      // DIFFERENT, UNRELATED region's loop can wind -1 (or, rarely, +1) around
-      // this same point as a numerical artifact of that loop passing near this
-      // point's antipode (bearingFrom's local tangent frame is singular
-      // there) — searching every region in probeAnyRegion below, rather than
-      // just the ones actually adjacent to this vertex, let such an artifact
-      // match before the real region was ever reached.
-      return total > 0.5;
+      return regionContainsPoint(state, region, point);
     };
     // Restrict the search to regions actually touching this vertex (dead or
     // live) rather than every region in the state — an edge's own bookkeeping

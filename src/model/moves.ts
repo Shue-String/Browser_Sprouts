@@ -191,7 +191,7 @@ interface SpliceSlot {
 
 /** The raw SpherePoint loop a boundary walk traces, following each entry's
  *  actual physical edge (or the bare vertex position for an isolated spot). */
-function boundarySphereLoop(entries: BoundaryEntry[], state: GameState): SpherePoint[] {
+export function boundarySphereLoop(entries: BoundaryEntry[], state: GameState): SpherePoint[] {
   const loop: SpherePoint[] = [];
   for (const e of entries) {
     const edge = e.edgeId !== undefined ? state.edges.get(e.edgeId) : undefined;
@@ -210,7 +210,7 @@ function boundarySphereLoop(entries: BoundaryEntry[], state: GameState): SphereP
  *  swept by the loop, in full turns (~1 means enclosed, ~0 means not). Entirely
  *  camera/projection-independent — rotating the view can never change the
  *  answer, unlike a 2D pointInPolygon test on any projected polygon. */
-function windingAround(loop: SpherePoint[], point: SpherePoint): number {
+export function windingAround(loop: SpherePoint[], point: SpherePoint): number {
   if (loop.length < 2) return 0;
   // A near-degenerate sample (loop point very close to `point`, where
   // bearingFrom's local tangent frame is singular) poisons the whole running
@@ -236,7 +236,7 @@ function windingAround(loop: SpherePoint[], point: SpherePoint): number {
  *  genuine containment wind +1, not just |winding| large — an unrelated loop
  *  can wind -1, or rarely +1, around the SAME point purely as a numerical
  *  artifact of passing near that point's antipode.) */
-function regionContainsPoint(state: GameState, region: { boundaries: { entries: BoundaryEntry[] }[] }, point: SpherePoint): boolean {
+export function regionContainsPoint(state: GameState, region: { boundaries: { entries: BoundaryEntry[] }[] }, point: SpherePoint): boolean {
   let total = 0;
   for (const b of region.boundaries) total += windingAround(boundarySphereLoop(b.entries, state), point);
   return total > 0.5;

@@ -10,10 +10,11 @@
 // families -- isYellowCandidate/familyNameForCoreKey were already fully general, only this driver's
 // two-family hardcoding needed to change.
 //
-// Shares its scanning/dedup/repCanon machinery with unregistered_left_sides.cpp (see that file's
-// own doc comments for the reasoning behind quick-canon identity and the rep-set membership check);
-// duplicated here rather than factored out since each tool's own filter/output shape differs enough
-// that a shared helper would need its own parameterization anyway.
+// Shares its isSingleAlpha/distinctPortLetters/buildRepCanonSet machinery with
+// unregistered_left_sides.cpp -- factored into alpha_genome.hpp/.cpp (2026-08-31) after both tools'
+// copies were found byte-identical; see that header's own doc comments for the reasoning behind
+// quick-canon identity and the rep-set membership check. Each tool's own scan/filter/output shape
+// still differs enough that only these three predicates were worth sharing, not the whole loop.
 //
 // Usage: find_yellow_candidates <out.tsv> <spec1.spec> [spec2.spec ...]
 #include "alpha_genome.hpp"
@@ -36,49 +37,13 @@
 using namespace stalks;
 using namespace stalks_tools;
 
-namespace {
-
-bool isSingleAlpha(const std::string& enc) {
-    int count = 0;
-    bool sawAlpha = false;
-    for (char ch : enc) {
-        if (ch >= 'a' && ch <= 'j') {
-            ++count;
-            if (ch == 'a') sawAlpha = true;
-        }
-    }
-    return count == 1 && sawAlpha;
-}
-
-int distinctPortLetters(const std::string& s) {
-    std::set<char> letters;
-    for (char ch : s)
-        if (ch >= 'a' && ch <= 'z') letters.insert(ch);
-    return static_cast<int>(letters.size());
-}
-
-// See unregistered_left_sides.cpp's own doc comment for why this must be quickCanon, not
-// canonicalize().
-std::set<std::string> buildRepCanonSet() {
-    std::set<std::string> out;
-    for (const CollectionRoster& r : allCollectionRosters()) {
-        if (r.rep.empty()) continue;
-        if (distinctPortLetters(r.rep) != 1) continue;
-        const QuickCanonResult qc = quickCanon(parsePosition("[" + r.rep + "]"));
-        out.insert(serialize(qc.rep));
-    }
-    return out;
-}
-
-}  // namespace
-
 int main(int argc, char** argv) {
     if (argc < 3) {
         std::cerr << "usage: find_yellow_candidates <out.tsv> <spec1.spec> [spec2.spec ...]\n";
         return 1;
     }
     const std::string outPath = argv[1];
-    const std::set<std::string> repCanon = buildRepCanonSet();
+    const std::set<std::string> repCanon = stalks_tools::buildRepCanonSet();
     std::cerr << "rep set: " << repCanon.size() << " distinct canonical forms\n";
 
     std::set<std::string> seenQuickEnc;

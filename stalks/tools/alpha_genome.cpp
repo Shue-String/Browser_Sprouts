@@ -1,6 +1,7 @@
 #include "alpha_genome.hpp"
 
 #include "canon.hpp"
+#include "collections.hpp"
 #include "encoding.hpp"
 #include "genome_defs.generated.hpp"
 #include "moves.hpp"
@@ -398,6 +399,36 @@ bool isYellowCandidate(const Position& candidate, const SpecDB& db, const std::s
         if (presentNames.find(want) == presentNames.end()) return false;
     }
     return noExtras;
+}
+
+bool isSingleAlpha(const std::string& enc) {
+    int count = 0;
+    bool sawAlpha = false;
+    for (char ch : enc) {
+        if (ch >= 'a' && ch <= 'j') {
+            ++count;
+            if (ch == 'a') sawAlpha = true;
+        }
+    }
+    return count == 1 && sawAlpha;
+}
+
+int distinctPortLetters(const std::string& s) {
+    std::set<char> letters;
+    for (char ch : s)
+        if (ch >= 'a' && ch <= 'z') letters.insert(ch);
+    return static_cast<int>(letters.size());
+}
+
+std::set<std::string> buildRepCanonSet() {
+    std::set<std::string> out;
+    for (const CollectionRoster& r : allCollectionRosters()) {
+        if (r.rep.empty()) continue;
+        if (distinctPortLetters(r.rep) != 1) continue;
+        const QuickCanonResult qc = quickCanon(parsePosition("[" + r.rep + "]"));
+        out.insert(serialize(qc.rep));
+    }
+    return out;
 }
 
 }  // namespace stalks_tools
