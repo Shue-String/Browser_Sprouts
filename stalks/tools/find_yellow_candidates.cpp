@@ -1,9 +1,14 @@
 // Offline discovery tool: of every single-subposition (minimal), single-alpha left side reachable
-// from the given .spec file(s) whose (R,D,{L},{T'}) core matches S_1 or S_1⊕1 exactly and whose
-// left-side lives (leftSideLives2()/2) is <= 6, and which is NOT already registered under any
-// Advanced Collection (same repCanon check as unregistered_left_sides.cpp) -- report which ones
-// "go yellow" per isYellowCandidate (see alpha_genome.hpp), i.e. are genuine new S_1/S_1⊕1 members
-// by the same rule collect.ts's renderRequiredLine uses. See SESSION_NOTES_2026-08-30.md Part 2.
+// from the given .spec file(s) whose (R,D,{L},{T'}) core matches ANY currently-named family exactly
+// (via familyNameForCoreKey) and whose left-side lives (leftSideLives2()/2) is <= 6, and which is NOT
+// already registered under any Advanced Collection (same repCanon check as
+// unregistered_left_sides.cpp) -- report which ones "go yellow" per isYellowCandidate (see
+// alpha_genome.hpp), i.e. are genuine new members of THEIR OWN matching family by the same rule
+// collect.ts's renderRequiredLine uses. Originally scoped to S_1/S_1⊕1 only (see
+// SESSION_NOTES_2026-08-30.md Part 2); generalized to every named family 2026-08-30 (later session)
+// after the user noticed the Collect pane still showing many uncaptured left sides outside those two
+// families -- isYellowCandidate/familyNameForCoreKey were already fully general, only this driver's
+// two-family hardcoding needed to change.
 //
 // Shares its scanning/dedup/repCanon machinery with unregistered_left_sides.cpp (see that file's
 // own doc comments for the reasoning behind quick-canon identity and the rep-set membership check);
@@ -65,9 +70,6 @@ std::set<std::string> buildRepCanonSet() {
     return out;
 }
 
-const std::string kS1Core = "(0,1,{0},{})";
-const std::string kS1Plus1Core = "(1,0,{1},{})";
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -128,10 +130,9 @@ int main(int argc, char** argv) {
             if (!genome) continue;
             const std::string core = genomeKey(*genome);
 
-            std::string family;
-            if (core == kS1Core) family = "S_1";
-            else if (core == kS1Plus1Core) family = "S_1\xE2\x8A\x95" "1";  // "S_1⊕1"
-            else continue;
+            const auto familyName = familyNameForCoreKey(core);
+            if (!familyName) continue;
+            const std::string family = *familyName;
 
             ++candidatesChecked;
             if (candidatesChecked % 100 == 0) { std::cerr << "  checked " << candidatesChecked << " candidates...\n"; std::cerr.flush(); }
@@ -143,7 +144,7 @@ int main(int argc, char** argv) {
         std::cerr << "  scanned " << scanned << ", qualifying single-alpha " << qualifying << "\n";
     }
 
-    std::cerr << "checked " << candidatesChecked << " S_1/S_1\xE2\x8A\x95" "1-core candidates, "
+    std::cerr << "checked " << candidatesChecked << " named-family-core candidates, "
               << yellowRows.size() << " went yellow\n";
 
     std::sort(yellowRows.begin(), yellowRows.end(), [](const Row& a, const Row& b) {

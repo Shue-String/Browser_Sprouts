@@ -412,6 +412,11 @@ bool isInAdvancedCollection(const Position& p, const SpecDB& db) {
     return result;
 }
 
+std::optional<std::string> familyNameForCoreKey(const std::string& coreKey) {
+    const NamedFamily* family = familyForCoreKey(coreKey);
+    return family ? std::optional<std::string>(family->name) : std::nullopt;
+}
+
 bool isYellowCandidate(const Position& candidate, const SpecDB& db, const std::string& searchedFamilyName) {
     const NamedFamily* family = familyForName(searchedFamilyName);
     if (!family) throw std::runtime_error("isYellowCandidate: no NAMED_FAMILIES entry named \"" + searchedFamilyName + "\"");

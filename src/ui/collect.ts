@@ -72,10 +72,10 @@ interface GenomeHit extends PositionRef {
 
 /** A single-alpha position's own (R,D,{L},{T'},[T]) as computed offline by
  * stalks/tools/collect_alpha_genetics.cpp -- one entry per position, keyed by its real (non-quick-
- * canon) encoding. Used purely as a fast local lookup (see collect.ts's byEncLookup) so
- * isInAdvancedCollection never needs a fresh engine call for any position already covered by this
- * data file -- see the module doc comment on GENOME_DB below for why this exists as a SEPARATE
- * section from the genome-bucket data rather than embedded per-T-child. */
+ * canon) encoding. Used purely as a fast local lookup (see collect.ts's byEncGenome) so
+ * resolvedGenomeName/foldedPlainOfTChild never need a fresh engine call for any position already
+ * covered by this data file -- see the module doc comment on GENOME_DB below for why this exists as
+ * a SEPARATE section from the genome-bucket data rather than embedded per-T-child. */
 interface ByEncHit {
   R: number;
   D: number;
@@ -89,9 +89,9 @@ interface ByEncHit {
  * positions reachable from the game's early boards. `genomes` buckets positions by their (R,D,{L},
  * {T'}) tuple -- what typing a genome/shorthand into the search bar looks up (see loadGenome).
  * `byEnc` is the SAME underlying position set, flat-indexed by real encoding instead -- a pure
- * local-lookup fast path for isInAdvancedCollection/foldedPlainOfTChild so a position's own genome
- * (and its T-children') doesn't need a fresh engine call just because the "!!" check reaches it,
- * whenever it's already covered by this file. (An earlier version tried embedding each T-child's
+ * local-lookup fast path for resolvedGenomeName/foldedPlainOfTChild so a position's own genome
+ * (and its T-children') doesn't need a fresh engine call whenever it's already covered by this
+ * file. (An earlier version tried embedding each T-child's
  * own genome data recursively INLINE inside `genomes` instead of as a separate flat section --
  * with heavy fan-in among common low-order T-children that blew the file up ~1000x, since the same
  * T-child's data got duplicated everywhere it was referenced; `byEnc` avoids that by storing each
@@ -148,7 +148,7 @@ let quickGenome = true;
 // genomes for any split T-child are stale/wrong-shaped.
 const HISTORY_STORAGE_KEY = 'sprouts-collect-alpha-v3';
 
-/** Coalesces render() calls triggered by async completions (acMarker/lookupGenome resolving) --
+/** Coalesces render() calls triggered by async completions (lookupGenome resolving) --
  * NOT for direct user-triggered calls (search, toggle, select), which still call render()
  * immediately. Without this, a genome search with N hits whose classification isn't cached yet
  * (e.g. S_1's 1000+-entry bucket) fires up to N separate completions, EACH doing a full history-
@@ -214,54 +214,6 @@ function loadHistory(): void {
 function addToHistory(entry: Entry, persist = true): void {
   history = [entry, ...history.filter(h => h.label !== entry.label)];
   if (persist) saveHistory();
-}
-
-const AC_STORAGE_KEY = 'sprouts-collect-alpha-ac-v1';
-
-/** Persist resolved (not pending) Advanced-Collection results, keyed by position encoding -- see
- * acResult below. A position's membership never changes (it's a pure function of the position), so
- * this is a permanent cache across sessions: once a position has been checked once, ANY future
- * search that reaches it again (as a top-level entry, a T-child, or an extra-T-child's own
- * T-grandchild during someone else's check) shows its "!!" immediately with no recomputation at
- * all, instead of
- * repeating the same recursive engine calls every time the Collect pane is reopened. */
-let acSaveScheduled = false;
-/** Debounced the same way scheduleRender is (see its doc comment): acResult only ever grows, so
- * this write's cost (a full JSON.stringify of the WHOLE map) grows with it -- and an Advanced-
- * Collection check for a family match can resolve a whole cluster of T-children/extra-children in
- * one go (see isInAdvancedCollection's recursion), each independently calling this. Without
- * coalescing, one search could re-serialize the entire (ever-growing, cross-session-persisted) map
- * several times over, once per position resolved in that burst, instead of once for the whole
- * batch. */
-function scheduleAcSave(): void {
-  if (acSaveScheduled) return;
-  acSaveScheduled = true;
-  setTimeout(() => {
-    acSaveScheduled = false;
-    try {
-      localStorage.setItem(AC_STORAGE_KEY, JSON.stringify([...acResult.entries()]));
-    } catch {
-      /* ignore quota/availability errors */
-    }
-  }, 0);
-}
-
-function loadAcResults(): void {
-  try {
-    const stored = localStorage.getItem(AC_STORAGE_KEY);
-    if (stored) {
-      const parsed: unknown = JSON.parse(stored);
-      if (Array.isArray(parsed)) {
-        for (const entry of parsed) {
-          if (Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && typeof entry[1] === 'boolean') {
-            acResult.set(entry[0], entry[1]);
-          }
-        }
-      }
-    }
-  } catch {
-    /* fall through to empty */
-  }
 }
 
 function markAlpha(enc: string): string {
@@ -380,7 +332,7 @@ function foldToName(plain: string, html: string, cls: string): { plain: string; 
  * defined in already-folded form), independent of what the user currently has the toggle set to.
  * Safe across the module-level `quickGenome` flag because every call here is synchronous end to
  * end (genomeParts never awaits), so the save/restore always brackets cleanly even when called
- * from inside an async function like isInAdvancedCollection. */
+ * from inside an async function like computeRelevancy. */
 function foldedPlainOf(g: AlphaGenome | FourGeneGenome, depth: number): string {
   const wasQuick = quickGenome;
   quickGenome = true;
@@ -434,8 +386,7 @@ const genomeLookupPending = new Set<string>();
  * findBypassMatches) -- prefers, in order, an already-loaded nested genome, the offline BY_ENC
  * lookup, and a permanent per-session cache of prior fresh computeAlphaGenome() calls; triggers
  * (and caches, then re-renders on completion) exactly one such call for any `enc` not covered by any
- * of those, the same fire-once-and-settle pattern acMarker uses elsewhere in this file. Returns
- * undefined while a first-time fetch for `enc` is still pending. */
+ * of those. Returns undefined while a first-time fetch for `enc` is still pending. */
 function lookupGenome(enc: string, known?: AlphaGenome | FourGeneGenome): AlphaGenome | FourGeneGenome | undefined {
   if (known) return known;
   const direct = byEncGenome(enc);
@@ -453,58 +404,34 @@ function lookupGenome(enc: string, known?: AlphaGenome | FourGeneGenome): AlphaG
   return undefined;
 }
 
-const acFallbackNameCache = new Map<string, string | null>();
-const acFallbackNamePending = new Set<string>();
-
-/** `enc`'s own display name for the Genome column: its exact fold (see isNamedGenome) if it has one,
- * else -- since computeAlphaGenomeAt now classifies on the REAL structure (see its own doc comment),
- * many registered collection elements genuinely have real T-moves their bare rep doesn't, so they no
- * longer fold exactly even though they're still legitimate members -- the Advanced Collection family
- * name if `enc` qualifies via the same superset rule the "!!" bang marker uses elsewhere (see
- * isInAdvancedCollection). Returns null once BOTH checks have failed (fall through to the raw tuple/
- * '+' placeholder), or undefined while the (async) Advanced-Collection check is still pending -- same
- * fire-once-and-settle pattern as acMarker. A genome whose core doesn't match ANY named family at all
- * skips the async check entirely (isInAdvancedCollection would just reject it anyway). */
-function resolvedGenomeName(enc: string, g: AlphaGenome | FourGeneGenome): string | null | undefined {
+/** `g`'s own display name for the Genome column: its exact fold if it has one (every T-child
+ * accounted for, recursively), else null (falls through to the raw tuple/'+' placeholder in
+ * formatGenomeCell). The old Advanced-Collection fallback (matching on bare core + "every extra
+ * T-child is itself in SOME Advanced Collection") was removed -- it let unrelated named genomes
+ * excuse an extra T-child regardless of relevance to the family actually being searched, which is
+ * exactly the gap the Yellow-Line's own family-scoped satisfiesRequired/hasBypass logic
+ * (computeRowInfos/findBypassMatches) is built to avoid. This function is now purely the exact-fold
+ * check -- synchronous, no engine call, no fallback. */
+function resolvedGenomeName(g: AlphaGenome | FourGeneGenome): string | null {
   const folded = foldedPlainOf(g, 0);
-  if (!folded.startsWith('(')) return folded;
-
-  const cached = acFallbackNameCache.get(enc);
-  if (cached !== undefined) return cached;
-
-  const family = familyForGenome(g);
-  if (!family) {
-    acFallbackNameCache.set(enc, null);
-    return null;
-  }
-  if (!acFallbackNamePending.has(enc)) {
-    acFallbackNamePending.add(enc);
-    void isInAdvancedCollection(enc, g).then(result => {
-      acFallbackNamePending.delete(enc);
-      acFallbackNameCache.set(enc, result ? family.name : null);
-      scheduleRender();
-    });
-  }
-  return undefined;
+  return folded.startsWith('(') ? null : folded;
 }
 
-/** "Genome" column text for a T-gene table row: `g`'s own resolved name (exact fold or Advanced
- * Collection fallback -- see resolvedGenomeName) if it has one, else its bare four genes followed by
- * its own T-gene members, each shown by name (same two-tier resolution) if THAT one has one, else a
- * bare '+' placeholder -- never a fully-expanded nested tuple (that's what genomeParts' unbounded
- * recursive rendering is for, and it gets messy fast for anything more than one level, per the
- * user's own request). Returns undefined while `enc`'s OWN resolution is still pending, so the
- * caller can leave the whole cell blank rather than show a premature raw tuple; a still-pending
- * GRANDCHILD's resolution just shows '+' for now (same as a confirmed non-member) and corrects
- * itself on the next render once it settles. */
-function formatGenomeCell(enc: string, g: AlphaGenome | FourGeneGenome): string | undefined {
-  const resolved = resolvedGenomeName(enc, g);
+/** "Genome" column text for a T-gene table row: `g`'s own exact fold (see resolvedGenomeName) if it
+ * has one, else its bare four genes followed by its own T-gene members, each shown by name if THAT
+ * one has an exact fold, else a bare '+' placeholder (covers both "genuinely not named" and "not
+ * loaded yet" -- a still-pending grandchild just shows '+' for now and corrects itself on the next
+ * render once lookupGenome settles) -- never a fully-expanded nested tuple (that's what genomeParts'
+ * unbounded recursive rendering is for, and it gets messy fast for anything more than one level, per
+ * the user's own request). */
+function formatGenomeCell(g: AlphaGenome | FourGeneGenome): string {
+  const resolved = resolvedGenomeName(g);
   if (resolved !== null) return resolved;
   const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}}`;
   if (!isFullGenome(g)) return head + ')';
   const parts = g.T.map(child => {
     const childKnown = lookupGenome(child.enc, child.genome);
-    return (childKnown && resolvedGenomeName(child.enc, childKnown)) || '+';
+    return (childKnown && resolvedGenomeName(childKnown)) || '+';
   });
   return `${head},[${parts.join(', ')}])`;
 }
@@ -562,16 +489,15 @@ function familyForGenome(g: { R: number | null; D: number | null; L: number[]; T
 
 /** A T row's "Relevancy" verdict, matching the paper's genome sequencing table format (see the
  * module header): either (1) `name` -- the T-child is ITSELF a recognized named genome (its own
- * plain folds entirely to a name -- same test as the row's own "!" marker, see renderTList) --
+ * plain folds entirely to a name -- same test as isNamedGenome) --
  * covering both a root family's own required lowest-order T-children (whose plains are always
  * names themselves, see NAMED_FAMILIES) and any other directly-named T-child regardless of the
  * root's family -- or (2) `position` -- an "extra" T-child whose own T-children (one level down
  * only -- a Grandparent Bypass check, not open recursion) contain one that itself folds entirely to
  * a name (cited by ITS OWN position, not by name again, matching the paper's own convention), or
- * (3) `none` -- no such one-level bypass was found (which does NOT necessarily mean the T-child
- * fails Advanced-Collection membership outright -- see isInAdvancedCollection's own unbounded
- * recursion, used for the "!!" marker elsewhere -- only that this shallow, paper-matching check
- * didn't find one). Used only by buildExportLatex now (for the shifted-letter LaTeX form's own
+ * (3) `none` -- no such one-level bypass was found (this is a shallow, paper-matching check only,
+ * not a claim about Advanced-Collection membership more broadly). Used only by buildExportLatex now
+ * (for the shifted-letter LaTeX form's own
  * Relevancy column, matching the paper's table format) -- the in-app T-gene table shows a plain
  * Genome column instead (see formatGenomeCell), a different, non-paper-matching view. */
 type RelevancyVerdict = { kind: 'name'; name: string } | { kind: 'position'; ref: TChild } | { kind: 'none' };
@@ -591,97 +517,6 @@ async function computeRelevancy(rootGenome: AlphaGenome | FourGeneGenome, t: TCh
     }
   }
   return { kind: 'none' };
-}
-
-/** Genome to use for a position already resolved as an Advanced-Collection member/non-member --
- * short-circuits acMarker/isInAdvancedCollection entirely for anything the permanent AC_STORAGE_KEY
- * cache (loaded at startup, see loadAcResults) or this session already settled, which is the
- * pre-computation the user asked for: a position, once checked anywhere, never triggers the
- * recursive engine-call chain again. */
-const acResult = new Map<string, boolean>();
-const acPending = new Set<string>();
-
-/** Is `enc` (a single-alpha position) either itself a named genome, OR a bigger, non-lowest-order
- * position that still qualifies for the same family per the user's rule: (1) its own (R,D,{L},{T'})
- * core matches a named family's exactly; (2) its own T-children are a superset of that family's
- * lowest-order T-children; and (3) every OTHER (extra) T-child has at least one T-child of its
- * own that's already in an Advanced Collection (checked recursively). Recursion only ever proceeds
- * to strictly smaller positions (a T-grandchild has fewer lives again than its own T-child), so
- * this always
- * terminates -- "calculate from the smallest positions upward" is naturally satisfied by evaluating
- * top-down and letting the base case (an exact GENOME_NAMES match) stop the recursion, rather than
- * needing an explicit precomputed bottom-up pass.
- *
- * `known`, when given, is a genome for `enc` already sitting in memory (an Entry's own genome, or a
- * T-child's nested `.genome`, populated up to collectAlpha.ts's depth/lives caps) -- reusing it
- * skips a redundant computeAlphaGenome() round-trip whenever it's already a complete AlphaGenome
- * (has a T array), and even a depth-capped FourGeneGenome (R/D/L/T' only, no T) is enough to reject
- * outright on a coreKey mismatch, which is the overwhelmingly common case (most positions don't
- * belong to any named family at all) -- so most calls never touch the engine a second time. */
-const acCache = new Map<string, Promise<boolean>>();
-function isInAdvancedCollection(enc: string, known?: AlphaGenome | FourGeneGenome): Promise<boolean> {
-  const resolved = acResult.get(enc);
-  if (resolved !== undefined) return Promise.resolve(resolved);
-  const cached = acCache.get(enc);
-  if (cached) return cached;
-  const promise = (async (): Promise<boolean> => {
-    if (known) {
-      if (isNamedGenome(known)) return true;
-      if (!NAMED_FAMILIES.some(f => f.coreKey === coreKeyOf(known))) return false;
-    }
-    const genome = (known && isFullGenome(known) ? known : undefined) ?? byEncGenome(enc) ?? (await computeAlphaGenome(enc))?.genome;
-    if (!genome) return false;
-    if (isNamedGenome(genome)) return true;
-
-    const family = NAMED_FAMILIES.find(f => f.coreKey === coreKeyOf(genome));
-    if (!family) return false;
-
-    // Dedup by folded plain (first T-child wins), same convention genomeParts uses for display.
-    const byPlain = new Map<string, TChild>();
-    for (const t of genome.T) {
-      const plain = await foldedPlainOfTChild(t);
-      if (!byPlain.has(plain)) byPlain.set(plain, t);
-    }
-
-    if (!family.tChildPlains.every(w => byPlain.has(w))) return false;
-
-    // Every OTHER (extra) T-child -- one beyond the lowest-order's own required set -- must
-    // itself be in an Advanced Collection (named outright, or recursively qualifying by this same
-    // rule): "any T move that's not the lowest order's T moves must have ... a child (through a T
-    // move) that's in the Advanced Collection" -- the "child (through a T move)" IS the extra
-    // T-child itself (that's what a T move produces), not one further step past it. A T-child with
-    // no T-children of its own (e.g. an away-shifted copy of a lowest-order genome like S_1⊕1,
-    // T:[]) can still satisfy this by being named directly -- it's its own NAMED_GENOME_DEFS entry,
-    // see collectAlpha.ts's FourGeneGenome doc comment.
-    for (const [plain, extra] of byPlain) {
-      if (family.tChildPlains.includes(plain)) continue;
-      const extraKnown = extra.genome ?? byEncGenome(extra.enc);
-      if (!(await isInAdvancedCollection(extra.enc, extraKnown))) return false;
-    }
-    return true;
-  })();
-  acCache.set(enc, promise);
-  void promise.then(result => {
-    acResult.set(enc, result);
-    scheduleAcSave();
-  });
-  return promise;
-}
-
-/** "!!" if `enc` is a confirmed (non-lowest-order) Advanced Collection member, else "" (including
- * while the check is still pending). Call only for genomes that already failed isNamedGenome --
- * an exact match gets "!" instead, from the caller. `known`, when available (an already-loaded
- * genome), lets isInAdvancedCollection skip redundant engine calls -- see its doc comment. */
-function acMarker(enc: string, known?: AlphaGenome | FourGeneGenome): string {
-  if (acResult.has(enc)) return acResult.get(enc) ? '!!' : '';
-  if (!acPending.has(enc)) {
-    acPending.add(enc);
-    void isInAdvancedCollection(enc, known).then(result => {
-      acPending.delete(enc);
-      if (result) scheduleRender();
-    });
-  }
-  return '';
 }
 
 function buildEntry(position: PositionRef, genome: AlphaGenome, lives: number | null): Entry {
@@ -818,14 +653,14 @@ async function selectTEntry(t: PositionRef): Promise<void> {
 /** Precomputed per-row data for the T-gene table -- shared between renderRequiredLine (the header
  * line) and renderTList's own row rendering/ordering, so both agree on exactly the same notion of
  * "satisfied" and neither re-derives it independently. `pending` is true while any piece (the row's
- * own resolved name, or its bypass matches) hasn't settled yet -- see lookupGenome/resolvedGenomeName/
- * findBypassMatches's own fire-once-and-settle pattern; `isExtra` is only ever asserted once
- * everything has actually settled, so a row never gets flagged (and reordered/highlighted) on stale
- * pending data, only corrected via the next scheduleRender once resolution lands. */
+ * own genome, or its bypass matches) hasn't settled yet -- see lookupGenome/findBypassMatches's own
+ * fire-once-and-settle pattern; `isExtra` is only ever asserted once everything has actually
+ * settled, so a row never gets flagged (and reordered/highlighted) on stale pending data, only
+ * corrected via the next scheduleRender once resolution lands. */
 interface TRowInfo {
   t: TChild;
   tGenome: AlphaGenome | FourGeneGenome | undefined;
-  resolvedName: string | null | undefined;
+  resolvedName: string | null;
   matches: BypassMatch[] | null;
   /** True once settled and confirmed to satisfy neither the required-name check nor the Bypass
    * check -- i.e. an unexplained "extra" T-child relative to `family`. Always false without a
@@ -836,9 +671,9 @@ interface TRowInfo {
 function computeRowInfos(list: TChild[], family: NamedFamily | undefined, showBypass: boolean): TRowInfo[] {
   return list.map(t => {
     const tGenome = lookupGenome(t.enc, t.genome);
-    const resolvedName = tGenome ? resolvedGenomeName(t.enc, tGenome) : null;
+    const resolvedName = tGenome ? resolvedGenomeName(tGenome) : null;
     const matches = showBypass && tGenome ? findBypassMatches(tGenome) : null;
-    const pending = tGenome === undefined || resolvedName === undefined || (showBypass && matches === null);
+    const pending = tGenome === undefined || (showBypass && matches === null);
     const satisfiesRequired = typeof resolvedName === 'string' && !!family && family.tChildPlains.includes(resolvedName);
     const hasBypass = !!matches && matches.length > 0;
     const isExtra = !!family && !pending && !satisfiesRequired && !hasBypass;
@@ -917,21 +752,15 @@ function renderTList(container: HTMLElement, list: TChild[]): void {
     const row = table.insertRow();
     row.className = 'collect-t-row collect-t-clickable' + (isExtra ? ' collect-t-row-extra' : '');
 
-    const named = tGenome ? isNamedGenome(tGenome) : false;
-    const bang = named ? '!' : acMarker(t.enc, tGenome);
-
     const label = row.insertCell();
     label.className = 'collect-t-label';
-    label.textContent = quickLabel(t) + bang;
+    label.textContent = quickLabel(t);
 
     const genomeCell = row.insertCell();
     genomeCell.className = 'collect-t-genome';
     if (tGenome) {
-      const text = formatGenomeCell(t.enc, tGenome);
-      if (text !== undefined) {
-        genomeCell.textContent = text;
-        genomeCell.title = genomeParts(tGenome, 0).plain;
-      }
+      genomeCell.textContent = formatGenomeCell(tGenome);
+      genomeCell.title = genomeParts(tGenome, 0).plain;
     }
 
     if (showBypass) {
@@ -1141,14 +970,11 @@ async function buildExportLatex(entry: Entry): Promise<string> {
   if (!fresh) throw new Error("couldn't re-analyze this position for export");
   const { position, genome } = fresh;
 
+  // TODO: the Advanced-Collection fallback label (position isn't itself exactly named, but still
+  // qualifies for a family) was removed along with isInAdvancedCollection -- the Export feature
+  // needs its own replacement for this case, not yet designed.
   const foldedTop = foldedPlainOf(genome, 0);
-  let label = '';
-  if (!foldedTop.startsWith('(')) {
-    label = foldedTop;
-  } else {
-    const family = familyForGenome(genome);
-    if (family && (await isInAdvancedCollection(position.enc, genome))) label = family.name;
-  }
+  const label = foldedTop.startsWith('(') ? 'TODO' : foldedTop;
 
   const leftRows: { mt: string; enc: string; nimber: number }[] = [];
   if (genome.Rc) leftRows.push({ mt: 'R', enc: genome.Rc.enc, nimber: genome.Rc.nimber });
@@ -1285,14 +1111,11 @@ function folderSortKey(name: string): [number, string, number] {
   return m ? [0, m[1], Number(m[2])] : [1, name, 0];
 }
 
-/** Render the Collections side panel (see index.html's #collect-collections-panel): every position
- * currently in `history` (i.e. every partial-position the user has looked at in this pane, quick-
- * canon-reduced same as everywhere else in Collect), grouped by which NAMED_FAMILIES entry it
- * belongs to -- exact match ("!") or Advanced-Collection member ("!!"), same test collect-t-table's
- * own bang markers use. Anything that matches no family isn't shown here at all (dropped the old
- * catch-all "Other" bucket, which added little and tended to balloon with every unrelated position
- * ever looked at). A no-op (and leaves the panel's previous content alone) while the panel is
- * closed, so building this tree doesn't run every render() call for no reason.
+/** Render the Collections side panel (see index.html's #collect-collections-panel): one folder per
+ * known collection/family, pre-populated with its static roster members (KNOWN_COLLECTION_MEMBERS,
+ * straight from src/data/collectionsRoster.json / genomeDefs.json). A no-op (and leaves the panel's
+ * previous content alone) while the panel is closed, so building this tree doesn't run every
+ * render() call for no reason.
  *
  * TOP-LEVEL folders are NAMED_FAMILY_GROUPS' bases (S_1, S_2, S_3, ...) unioned with
  * COLLECTION_ROSTER_FOLDER_NAMES (every collection currently registered in stalks/src/
@@ -1301,29 +1124,19 @@ function folderSortKey(name: string): [number, string, number] {
  * (reachable via a roster alias, e.g. "S_5⊕1" -- see ROSTER_TO_FOLDER_NAME) -- those get nested
  * inside their own base's group instead (see renderCollectionGroup), never their own top-level
  * folder. So a brand-new Stalks-side collection still gets a folder (with its static roster
- * content, via KNOWN_COLLECTION_MEMBERS) with NO TypeScript change needed, even before anyone
- * teaches this file how to classify a REAL analyzed position into it. Sorted by folderSortKey --
- * per the user's request to see them "in order" -- rather than left in registration order.
+ * content, via KNOWN_COLLECTION_MEMBERS) with NO TypeScript change needed.
  *
- * Reuses isNamedGenome/acMarker/familyForGenome rather than re-deriving membership: acMarker's
- * pending-check + re-render-on-resolve pattern means a freshly-added entry can appear in no folder
- * at all until its "!!" check resolves, then move into its real family on the next render() --
- * exactly the same lazy-settle behavior the main list's own bang markers already have. */
+ * Shows ONLY the static roster content per folder -- real `history` entries are no longer
+ * classified into folders here (that used isInAdvancedCollection's acMarker-driven bucketing,
+ * removed along with the rest of the Exclamation-logic system; it wasn't worth the false-positive
+ * risk). `byFamily` stays empty on purpose -- renderCollectionGroup/renderOffsetBlock already
+ * degrade cleanly to roster-only content when passed no real members. */
 function renderCollections(): void {
   const dialog = document.getElementById('collect-dialog');
   const panel = document.getElementById('collect-collections-panel');
   if (!dialog || !panel || !dialog.classList.contains('collections-open')) return;
 
   const byFamily = new Map<string, Entry[]>();
-  for (const entry of history) {
-    const named = isNamedGenome(entry.genome);
-    const bang = named ? '!' : acMarker(entry.position.enc, entry.genome);
-    const family = named || bang === '!!' ? familyForGenome(entry.genome) : undefined;
-    if (family) {
-      if (!byFamily.has(family.name)) byFamily.set(family.name, []);
-      byFamily.get(family.name)!.push(entry);
-    }
-  }
 
   const offsetNames = new Set(NAMED_FAMILY_GROUPS.flatMap(g => g.offsets));
   const groupByBase = new Map<string, NamedFamilyGroup>(NAMED_FAMILY_GROUPS.map(g => [g.base, g]));
@@ -1358,13 +1171,8 @@ function render(): void {
   history.forEach(entry => {
     const btn = document.createElement('button');
     btn.className = 'collect-entry' + (entry.label === activeLabel ? ' active' : '');
-    // "!" flags positions whose own genome folds entirely to a named genome (see GENOME_NAMES) --
-    // not just containing one as a T-child, but BEING one at the top level. "!!" flags a bigger
-    // position that isn't itself named but still qualifies for the family per the Advanced
-    // Collection rule (see isInAdvancedCollection).
-    const bang = isNamedGenome(entry.genome) ? '!' : acMarker(entry.position.enc, entry.genome);
     btn.innerHTML =
-      `<span class="collect-entry-label">${escapeHtml(entry.label)}${bang}</span>` +
+      `<span class="collect-entry-label">${escapeHtml(entry.label)}</span>` +
       `<span class="collect-entry-nimber">${entry.lives === null ? '' : entry.lives}</span>`;
     btn.addEventListener('click', () => selectEntry(entry.label));
     listEl.appendChild(btn);
@@ -1383,7 +1191,6 @@ export function initCollect(): void {
   if (wired) { render(); return; }
   wired = true;
   loadHistory();
-  loadAcResults();
 
   const quickToggle = document.getElementById('collect-tog-quick') as HTMLInputElement;
   quickGenome = quickToggle.checked;

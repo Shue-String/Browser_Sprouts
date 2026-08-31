@@ -81,4 +81,12 @@ bool isInAdvancedCollection(const stalks::Position& p, const stalks::SpecDB& db)
 bool isYellowCandidate(const stalks::Position& candidate, const stalks::SpecDB& db,
                         const std::string& searchedFamilyName);
 
+// The NAMED_FAMILIES entry (by name) whose bare (R,D,{L},{T'}) core equals `coreKey` exactly (e.g.
+// `genomeKey(*classifyAlphaGenome(p, db))`), or nullopt if no family has that core. Same
+// first-match-wins resolution order as resolvedGenomeName/isInAdvancedCollection (legacy fold keys,
+// then each family's shift-0 form, then shift 1..kMaxShift) -- exposed so callers outside this file
+// (e.g. tools/find_yellow_candidates.cpp) can discover which family a position's own core belongs to
+// without re-deriving the NAMED_FAMILIES table.
+std::optional<std::string> familyNameForCoreKey(const std::string& coreKey);
+
 }  // namespace stalks_tools
