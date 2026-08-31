@@ -290,8 +290,6 @@ const NamedFamily* familyForName(const std::string& name) {
     return nullptr;
 }
 
-std::map<std::string, bool> acMemo;  // serialize(p) -> isInAdvancedCollection(p), shared process-wide
-
 bool tChildPlainsContain(const NamedFamily& family, const std::string& plain) {
     return std::find(family.tChildPlains.begin(), family.tChildPlains.end(), plain) != family.tChildPlains.end();
 }
@@ -368,48 +366,7 @@ bool isNamedGenome(const Position& p, const SpecDB& db) {
 std::optional<std::string> resolvedGenomeName(const Position& p, const SpecDB& db) {
     const std::string folded = fullGenomeText(p, db);
     if (!folded.empty() && folded[0] != '(') return folded;
-
-    const auto genome = classifyAlphaGenome(p, db);
-    if (!genome) return std::nullopt;
-    const NamedFamily* family = familyForCoreKey(genomeKey(*genome));
-    if (!family) return std::nullopt;
-    return isInAdvancedCollection(p, db) ? std::optional<std::string>(family->name) : std::nullopt;
-}
-
-bool isInAdvancedCollection(const Position& p, const SpecDB& db) {
-    const std::string key = serialize(p);
-    const auto cached = acMemo.find(key);
-    if (cached != acMemo.end()) return cached->second;
-
-    const bool result = [&] {
-        const auto genome = classifyAlphaGenome(p, db);
-        if (!genome) return false;
-        if (isNamedGenome(p, db)) return true;
-
-        const NamedFamily* family = familyForCoreKey(genomeKey(*genome));
-        if (!family) return false;
-
-        // Dedup by folded plain (first T-child wins), same convention genomeParts/collect.ts uses.
-        std::map<std::string, Position> byPlain;
-        for (const Position& t : tChildrenOf(p)) {
-            const std::string plain = fullGenomeText(t, db);
-            if (byPlain.find(plain) == byPlain.end()) byPlain.emplace(plain, t);
-        }
-
-        for (const std::string& want : family->tChildPlains) {
-            if (byPlain.find(want) == byPlain.end()) return false;
-        }
-
-        // Every OTHER (extra) T-child must itself be in an Advanced Collection.
-        for (const auto& [plain, extra] : byPlain) {
-            if (tChildPlainsContain(*family, plain)) continue;
-            if (!isInAdvancedCollection(extra, db)) return false;
-        }
-        return true;
-    }();
-
-    acMemo.emplace(key, result);
-    return result;
+    return std::nullopt;
 }
 
 std::optional<std::string> familyNameForCoreKey(const std::string& coreKey) {

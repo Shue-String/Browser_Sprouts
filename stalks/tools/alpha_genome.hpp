@@ -55,20 +55,16 @@ std::string fullGenomeText(const stalks::Position& p, const stalks::SpecDB& db);
 // always is -- see foldToName's own use in genomeTextAt).
 bool isNamedGenome(const stalks::Position& p, const stalks::SpecDB& db);
 
-// `p`'s own display name for Advanced-Collection purposes: its exact fold (isNamedGenome) if it has
-// one, else the matching NAMED_FAMILIES entry's name if `p` qualifies via isInAdvancedCollection
-// below, else nullopt. Mirrors collect.ts's resolvedGenomeName (synchronous here -- no fire-once-
-// and-settle needed, since this always has a live SpecDB to resolve against immediately).
+// `p`'s own display name: its exact fold (isNamedGenome) if it has one -- every T-child accounted
+// for, recursively -- else nullopt. Mirrors collect.ts's resolvedGenomeName exactly (synchronous
+// here -- no fire-once-and-settle needed, since this always has a live SpecDB to resolve against
+// immediately). The old Advanced-Collection fallback (matching on bare core + "every extra T-child
+// is itself in SOME Advanced Collection", via the now-removed isInAdvancedCollection) let unrelated
+// named genomes excuse an extra T-child regardless of relevance to the family actually being
+// searched -- exactly the gap that let a false positive (Aa|6,2A, claimed S_2⊕3) through undetected
+// in 2026-08-30's earlier session. Removed to match collect.ts's own fix -- this is now purely the
+// exact-fold check, no engine-side fallback at all.
 std::optional<std::string> resolvedGenomeName(const stalks::Position& p, const stalks::SpecDB& db);
-
-// Is `p` (a single-alpha position) either itself a named genome, or a bigger position that still
-// qualifies for the SAME family per the Advanced-Collection rule: its own (R,D,{L},{T'}) core
-// matches a named family's exactly; its own T-children are a superset of that family's lowest-order
-// T-children (by resolved/folded name); and every OTHER (extra) T-child itself qualifies
-// recursively. Mirrors collect.ts's isInAdvancedCollection exactly (see that function's own doc
-// comment for the full rule and termination argument). Memoized internally by `p`'s own
-// serialization, shared across calls within one process.
-bool isInAdvancedCollection(const stalks::Position& p, const stalks::SpecDB& db);
 
 // True iff `candidate` "goes yellow" when searched for the named family `searchedFamilyName` (e.g.
 // "S_1", "S_1⊕1") -- mirrors collect.ts's renderRequiredLine/computeRowInfos exactly: every one of
@@ -83,8 +79,8 @@ bool isYellowCandidate(const stalks::Position& candidate, const stalks::SpecDB& 
 
 // The NAMED_FAMILIES entry (by name) whose bare (R,D,{L},{T'}) core equals `coreKey` exactly (e.g.
 // `genomeKey(*classifyAlphaGenome(p, db))`), or nullopt if no family has that core. Same
-// first-match-wins resolution order as resolvedGenomeName/isInAdvancedCollection (legacy fold keys,
-// then each family's shift-0 form, then shift 1..kMaxShift) -- exposed so callers outside this file
+// first-match-wins resolution order as the rest of this file's NAMED_FAMILIES lookups (legacy fold
+// keys, then each family's shift-0 form, then shift 1..kMaxShift) -- exposed so callers outside this file
 // (e.g. tools/find_yellow_candidates.cpp) can discover which family a position's own core belongs to
 // without re-deriving the NAMED_FAMILIES table.
 std::optional<std::string> familyNameForCoreKey(const std::string& coreKey);

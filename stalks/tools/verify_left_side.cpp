@@ -40,9 +40,15 @@ std::string toEmbeddable(const std::string& raw) {
     return out;
 }
 
-int exactNimber(const std::string& posText) {
+// `g` is shared across the whole run (see main()) rather than built fresh per call: GameGraph
+// memoizes every node it builds by canonical position (graph.cpp's `index_`), so a single shared
+// instance means the same rep|host position -- recomputed identically for every candidate in a
+// family, since the rep and host set never change within one run -- and any overlapping subtree
+// between different candidates' positions are each solved ONCE, not once per call. A fresh
+// GameGraph per call (the old behavior) threw all of that reuse away, forcing the exact same
+// rep|host solve from scratch hundreds of times over for a large family.
+int exactNimber(GameGraph& g, const std::string& posText) {
     Position p = canonicalize(parsePosition(posText));
-    GameGraph g(GameGraph::Mode::Exact);
     return g.ensure(p)->nimber;
 }
 
@@ -79,26 +85,47 @@ int main(int argc, char** argv) {
     const std::string rep = toEmbeddable(argv[1]);
     const int expectedOffset = std::atoi(argv[2]);
     const std::vector<std::string> hosts = hostsFromEnv();
+    const int total = argc - 3;
 
+    // One graph for the whole run -- see exactNimber's own doc comment for why this matters.
+    GameGraph g(GameGraph::Mode::Exact);
+
+    // Progress heartbeat, per candidate AND per host: a single candidate can take well over a
+    // minute across a few hosts (the joint-bearing STALKS_VERIFY_HOSTS battery especially), so
+    // printing only the final PASS/FAIL line leaves long silent stretches with no way to tell a
+    // slow-but-alive run from a hung one. Both lines are flushed immediately, so a caller tailing
+    // this process's stdout (even redirected to a file) sees live progress, not a batch dump at exit.
     int failCount = 0;
     for (int i = 3; i < argc; ++i) {
+        const int idx = i - 2;  // 1-based position among the candidates on this invocation
         const std::string cand = toEmbeddable(argv[i]);
+        std::cout << "[" << idx << "/" << total << "] testing " << argv[i] << " ("
+                   << hosts.size() << " hosts)...\n";
+        std::cout.flush();
         std::vector<std::string> mismatches;
         const auto t0 = std::chrono::steady_clock::now();
-        for (const auto& host : hosts) {
+        for (std::size_t h = 0; h < hosts.size(); ++h) {
+            const auto& host = hosts[h];
+            const auto hostT0 = std::chrono::steady_clock::now();
             int repN = -1, candN = -1;
+            bool hostFailed = false;
             try {
-                repN = exactNimber(rep + "|" + host);
-                candN = exactNimber(cand + "|" + host);
+                repN = exactNimber(g, rep + "|" + host);
+                candN = exactNimber(g, cand + "|" + host);
             } catch (const std::exception& e) {
                 mismatches.push_back(host + ": ERROR " + e.what());
-                continue;
+                hostFailed = true;
             }
-            if (candN != (repN ^ expectedOffset)) {
+            const double hostSecs = std::chrono::duration<double>(std::chrono::steady_clock::now() - hostT0).count();
+            if (!hostFailed && candN != (repN ^ expectedOffset)) {
                 mismatches.push_back(host + ": rep=" + std::to_string(repN) +
                                       " cand=" + std::to_string(candN) +
                                       " (want cand==" + std::to_string(repN ^ expectedOffset) + ")");
+                hostFailed = true;
             }
+            std::cout << "    host " << (h + 1) << "/" << hosts.size() << " \"" << host
+                       << "\": " << (hostFailed ? "mismatch" : "ok") << "  (" << hostSecs << "s)\n";
+            std::cout.flush();
         }
         const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         if (mismatches.empty()) {

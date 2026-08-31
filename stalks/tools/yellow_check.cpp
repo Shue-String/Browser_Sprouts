@@ -1,8 +1,8 @@
-// Ad-hoc verification tool for isYellowCandidate/isInAdvancedCollection/resolvedGenomeName (see
-// alpha_genome.hpp) -- ports collect.ts's renderRequiredLine/computeRowInfos/isInAdvancedCollection/
-// findBypassMatches to native code (see SESSION_NOTES_2026-08-30.md Part 2). This tool exists to
-// cross-check that native port against the real browser app's own "yellow bar" on a handful of known
-// cases BEFORE trusting it at scale over thousands of candidates.
+// Ad-hoc verification tool for isYellowCandidate/resolvedGenomeName (see alpha_genome.hpp) -- ports
+// collect.ts's renderRequiredLine/computeRowInfos/findBypassMatches to native code (see
+// SESSION_NOTES_2026-08-30.md Part 2). This tool exists to cross-check that native port against the
+// real browser app's own "yellow bar" on a handful of known cases BEFORE trusting it at scale over
+// thousands of candidates.
 //
 // Each candidate is given as roster left-side text (e.g. "17a8", "1a") -- same syntax as
 // collections.cpp's own registry strings, with lowercase 'a' as the ALPHA special-point token --
@@ -21,7 +21,6 @@
 #include "position.hpp"
 #include "specfile.hpp"
 
-#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -73,64 +72,13 @@ std::string expandPlusShorthand(const std::string& s) {
 
 }  // namespace
 
-// Batch cross-check mode: reads a TSV of "enc\tmarker\tlives" (marker is "!", "!!", or "" -- e.g.
-// straight off the Collect pane's own history list, browser-alpha and all) and compares each row's
-// own isInAdvancedCollection() against the marker's implied verdict (non-empty marker => the real
-// app confirmed membership -- see collect.ts's acMarker/isNamedGenome doc comments). Prints only
-// mismatches plus a final tally, so this scales to hundreds of rows pulled straight from a live
-// Collect-pane session.
-int runVerifyAc(const std::string& path) {
-    std::ifstream f(path);
-    if (!f) {
-        std::cerr << "cannot open " << path << "\n";
-        return 1;
-    }
-    std::string line;
-    std::getline(f, line);  // header
-    int total = 0, matches = 0, mismatches = 0, errors = 0;
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        std::size_t t1 = line.find('\t');
-        std::size_t t2 = line.find('\t', t1 == std::string::npos ? t1 : t1 + 1);
-        if (t1 == std::string::npos || t2 == std::string::npos) continue;
-        const std::string rawEnc = line.substr(0, t1);
-        const std::string marker = line.substr(t1 + 1, t2 - t1 - 1);
-        const bool expected = !marker.empty();
-        ++total;
-        try {
-            const std::string raw = toEmbeddable(rawEnc);
-            Position root = canonicalize(parsePosition("[" + raw + "]"));
-            GameGraph g;
-            Node* rootNode = g.ensure(root);
-            std::vector<const Node*> roots = {rootNode};
-            std::stringstream ss;
-            saveSpecGraph(g, roots, ss);
-            const SpecDB db = loadSpecGraph(ss);
-            const bool actual = isInAdvancedCollection(root, db);
-            if (actual == expected) {
-                ++matches;
-            } else {
-                ++mismatches;
-                std::cout << "MISMATCH enc=" << rawEnc << " expected(marker=\"" << marker
-                          << "\")=" << expected << " actual=" << actual << "\n";
-            }
-        } catch (const std::exception& e) {
-            ++errors;
-            std::cout << "ERROR enc=" << rawEnc << ": " << e.what() << "\n";
-        }
-    }
-    std::cout << "total=" << total << " matches=" << matches << " mismatches=" << mismatches
-              << " errors=" << errors << "\n";
-    return mismatches == 0 && errors == 0 ? 0 : 1;
-}
-
+// The old "--verify-ac" batch mode (cross-checked isInAdvancedCollection() against the Collect
+// pane's "!"/"!!" marker column) was removed along with isInAdvancedCollection/acMarker themselves
+// (see alpha_genome.hpp's resolvedGenomeName doc comment) -- there is no longer a marker column in
+// the browser to cross-check against.
 int main(int argc, char** argv) {
-    if (argc >= 3 && std::string(argv[1]) == "--verify-ac") {
-        return runVerifyAc(argv[2]);
-    }
     if (argc < 3) {
         std::cerr << "usage: yellow_check <searchedFamilyName> <candidate1> [<candidate2> ...]\n";
-        std::cerr << "       yellow_check --verify-ac <enc-marker-lives.tsv>\n";
         return 1;
     }
     const std::string searchedFamilyName = expandPlusShorthand(argv[1]);
@@ -158,7 +106,6 @@ int main(int argc, char** argv) {
 
             const auto topResolved = resolvedGenomeName(root, db);
             std::cout << "  own resolvedGenomeName: " << (topResolved ? *topResolved : "(none)") << "\n";
-            std::cout << "  own isInAdvancedCollection: " << (isInAdvancedCollection(root, db) ? "true" : "false") << "\n";
 
             const bool yellow = isYellowCandidate(root, db, searchedFamilyName);
             std::cout << "  YELLOW vs " << searchedFamilyName << ": " << (yellow ? "YES" : "no") << "\n";
