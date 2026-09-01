@@ -210,9 +210,88 @@ const std::map<std::string, std::string>& namedGenomes() {
     return kWithCompact;
 }
 
+// Advanced-Collection membership data, in the SAME resolution-priority order as collectAlpha.ts's
+// NAMED_FAMILIES (post-2026-08-31 fix): every family's own shift-0 form first (in genome_defs.
+// generated.hpp's declaration order), then each family's shift 1..kMaxShift forms, THEN the legacy
+// fold keys last -- required because familyForCoreKey below picks the FIRST match, and several
+// distinct (family, shift) pairs collide on their bare (R,D,{L},{T'}) core with different [T]
+// lists (base forms must win those collisions). Legacy entries used to be pushed FIRST (mirroring
+// collectAlpha.ts's own now-fixed `unshift`), which silently shadowed the real S_1 entry (whose
+// tChildPlains is genuinely empty -- S_1/S_2 are the Pairing Theorem's base pair, bypass-only, no
+// T-gene requirement at all) with a legacy one claiming "S_1⊕1" is required. That's what made
+// isYellowCandidate below say "no" for a genuine S_1 element like [1212a/ whose own T-list doesn't
+// happen to be one of the two legacy forms -- same root cause as the bug fixed in collect.ts/
+// collectAlpha.ts this session, just independently reimplemented here in C++ and independently
+// broken. Legacy coreKey is hardcoded to S_1's own bare core, exactly mirroring collectAlpha.ts's
+// own hardcoded '(0,1,{0},{})' (both legacy entries are S_1 fold targets -- see genome_defs.
+// generated.hpp's legacyFoldKeys doc comment).
+struct NamedFamily {
+    std::string name;
+    std::string coreKey;
+    std::vector<std::string> tChildPlains;  // sorted, matches collectAlpha.ts's [...g.T].sort()
+};
+
+const std::vector<NamedFamily>& namedFamilies() {
+    static const std::vector<NamedFamily> kFamilies = [] {
+        std::vector<NamedFamily> families;
+
+        auto pushFamily = [&](const std::string& familyName, int shift) {
+            const ResolvedGenome& g = resolveGenome(familyName, shift);
+            families.push_back({foldedNameOf(familyName, shift), fourGeneKeyOf(g),
+                                 std::vector<std::string>(g.T.begin(), g.T.end())});
+        };
+        const auto& defs = genome_defs_generated::familyDefs();
+        for (const auto& entry : defs) pushFamily(entry.first, 0);
+        for (const auto& entry : defs) {
+            for (int shift = 1; shift <= genome_defs_generated::kMaxShift; shift++)
+                pushFamily(entry.first, shift);
+        }
+        for (const auto& legacy : genome_defs_generated::legacyFoldKeys())
+            families.push_back({legacy.name, "(0,1,{0},{})", legacy.tChildPlains});
+        return families;
+    }();
+    return kFamilies;
+}
+
+const NamedFamily* familyForCoreKey(const std::string& coreKey) {
+    for (const auto& f : namedFamilies())
+        if (f.coreKey == coreKey) return &f;
+    return nullptr;
+}
+
+const NamedFamily* familyForName(const std::string& name) {
+    for (const auto& f : namedFamilies())
+        if (f.name == name) return &f;
+    return nullptr;
+}
+
+bool tChildPlainsContain(const NamedFamily& family, const std::string& plain) {
+    return std::find(family.tChildPlains.begin(), family.tChildPlains.end(), plain) != family.tChildPlains.end();
+}
+
+// A genome's name via the bypass-only fallback rule -- mirrors collect.ts's bypassOnlyFoldName
+// exactly (see that function's own doc comment): a family whose OWN tChildPlains is empty (S_1/S_2
+// today) asserts no T-gene requirement at all, so core match alone is its complete definition, no
+// matter what real T-list a particular member happens to have. Not the old, broader "any extra
+// T-child excused by any named genome" Advanced-Collection fallback (removed from collect.ts
+// 2026-08-30 as unsound) -- this never excuses anything via an unrelated genome, it only fires when
+// the family itself has nothing to require.
+std::string bypassOnlyFoldName(const std::string& coreKey) {
+    const NamedFamily* family = familyForCoreKey(coreKey);
+    return family && family->tChildPlains.empty() ? family->name : std::string();
+}
+
+// Exact-fold match first (namedGenomes(), the finite hand-authored/derived set of full "(R,D,{L},
+// {T'},[T])" strings); failing that, the bypass-only core fallback above -- a finite string table
+// can never enumerate every real T-list a bypass-only family's members can have, which is exactly
+// what broke on [1212a/ (core (0,1,{0},{}), matching S_1) before this fix.
 std::string foldToName(const std::string& plainText) {
     const auto it = namedGenomes().find(plainText);
-    return it != namedGenomes().end() ? it->second : plainText;
+    if (it != namedGenomes().end()) return it->second;
+    const auto bracket = plainText.find(",[");
+    const std::string coreKey = bracket != std::string::npos ? plainText.substr(0, bracket) + ")" : plainText;
+    const std::string fallback = bypassOnlyFoldName(coreKey);
+    return fallback.empty() ? plainText : fallback;
 }
 
 // depth 0 = the position itself, 1 = its T-children (full, with their own [T]), 2 = T-of-T
@@ -241,58 +320,6 @@ std::string genomeTextAt(const Position& p, const SpecDB& db, int depth) {
         joined += t;
     }
     return foldToName(head + ",[" + joined + "])");
-}
-
-// Advanced-Collection membership data, in the SAME resolution-priority order as collectAlpha.ts's
-// NAMED_FAMILIES: legacy fold keys FIRST (collectAlpha.ts unshifts them), then every family's own
-// shift-0 form (in genome_defs.generated.hpp's declaration order), then each family's shift 1..
-// kMaxShift forms in turn -- required because familyForCoreKey below picks the FIRST match, and
-// several distinct (family, shift) pairs collide on their bare (R,D,{L},{T'}) core with different
-// [T] lists (base forms must win those collisions). Legacy coreKey is hardcoded to S_1's own bare
-// core, exactly mirroring collectAlpha.ts's own hardcoded '(0,1,{0},{})' (both legacy entries are
-// S_1 fold targets -- see genome_defs.generated.hpp's legacyFoldKeys doc comment).
-struct NamedFamily {
-    std::string name;
-    std::string coreKey;
-    std::vector<std::string> tChildPlains;  // sorted, matches collectAlpha.ts's [...g.T].sort()
-};
-
-const std::vector<NamedFamily>& namedFamilies() {
-    static const std::vector<NamedFamily> kFamilies = [] {
-        std::vector<NamedFamily> families;
-        for (const auto& legacy : genome_defs_generated::legacyFoldKeys())
-            families.push_back({legacy.name, "(0,1,{0},{})", legacy.tChildPlains});
-
-        auto pushFamily = [&](const std::string& familyName, int shift) {
-            const ResolvedGenome& g = resolveGenome(familyName, shift);
-            families.push_back({foldedNameOf(familyName, shift), fourGeneKeyOf(g),
-                                 std::vector<std::string>(g.T.begin(), g.T.end())});
-        };
-        const auto& defs = genome_defs_generated::familyDefs();
-        for (const auto& entry : defs) pushFamily(entry.first, 0);
-        for (const auto& entry : defs) {
-            for (int shift = 1; shift <= genome_defs_generated::kMaxShift; shift++)
-                pushFamily(entry.first, shift);
-        }
-        return families;
-    }();
-    return kFamilies;
-}
-
-const NamedFamily* familyForCoreKey(const std::string& coreKey) {
-    for (const auto& f : namedFamilies())
-        if (f.coreKey == coreKey) return &f;
-    return nullptr;
-}
-
-const NamedFamily* familyForName(const std::string& name) {
-    for (const auto& f : namedFamilies())
-        if (f.name == name) return &f;
-    return nullptr;
-}
-
-bool tChildPlainsContain(const NamedFamily& family, const std::string& plain) {
-    return std::find(family.tChildPlains.begin(), family.tChildPlains.end(), plain) != family.tChildPlains.end();
 }
 
 }  // namespace

@@ -280,7 +280,7 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
   const cls = depthClass(depth);
   if (!isFullGenome(g)) {
     const plain = head + ')';
-    return foldToName(plain, `<span class="${cls}">${escapeHtml(plain)}</span>`, cls);
+    return foldToName(g, plain, `<span class="${cls}">${escapeHtml(plain)}</span>`, cls);
   }
 
   const seen = new Set<string>();
@@ -315,14 +315,35 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
     `<span class="${cls}">${escapeHtml(head)},[</span>` +
     childHtmls.join(`<span class="${cls}">,</span>`) +
     `<span class="${cls}">])</span>`;
-  return foldToName(plain, html, cls);
+  return foldToName(g, plain, html, cls);
+}
+
+/** A genome's name via the bypass-only fallback rule: NAMED_FAMILIES has an entry (S_1/S_2 today)
+ * whose OWN `tChildPlains` is empty, meaning that family asserts no T-gene requirement at all --
+ * core match alone is its complete definition (the Pairing Theorem's base pair; every other
+ * T-child relationship is a bypass, never a requirement -- see the user's 2026-08-31
+ * clarification). Shared by foldToName (main genome display) and resolvedGenomeName (T-gene
+ * table), so both agree on the same notion of "is this actually S_1" rather than drifting --
+ * before this was extracted, only resolvedGenomeName had it, so a bypass-only-eligible position's
+ * OWN header still showed its raw tuple even though its T-gene table cells correctly named it. */
+function bypassOnlyFoldName(g: { R: number | null; D: number | null; L: number[]; Tprime: number[] }): string | null {
+  const family = familyForGenome(g);
+  return family && family.tChildPlains.length === 0 ? family.name : null;
 }
 
 /** When the Quick-Genome toggle is on, fold a genome node whose exact plain-text tuple matches a
- * known shorthand (see GENOME_NAMES) down to its name, replacing the full tuple rendering. */
-function foldToName(plain: string, html: string, cls: string): { plain: string; html: string } {
+ * known shorthand (see GENOME_NAMES) down to its name, replacing the full tuple rendering -- or,
+ * failing that, whose bare core matches a bypass-only family (see bypassOnlyFoldName), since a
+ * finite hand-authored GENOME_NAMES table can never enumerate every real T-list such a family's
+ * members can have. */
+function foldToName(
+  g: { R: number | null; D: number | null; L: number[]; Tprime: number[] },
+  plain: string,
+  html: string,
+  cls: string,
+): { plain: string; html: string } {
   if (!quickGenome) return { plain, html };
-  const name = GENOME_NAMES[plain];
+  const name = GENOME_NAMES[plain] ?? bypassOnlyFoldName(g);
   if (!name) return { plain, html };
   return { plain: name, html: `<span class="${cls}">${escapeHtml(name)}</span>` };
 }
@@ -406,12 +427,19 @@ function lookupGenome(enc: string, known?: AlphaGenome | FourGeneGenome): AlphaG
 
 /** `g`'s own display name for the Genome column: its exact fold if it has one (every T-child
  * accounted for, recursively), else null (falls through to the raw tuple/'+' placeholder in
- * formatGenomeCell). The old Advanced-Collection fallback (matching on bare core + "every extra
- * T-child is itself in SOME Advanced Collection") was removed -- it let unrelated named genomes
- * excuse an extra T-child regardless of relevance to the family actually being searched, which is
- * exactly the gap the Yellow-Line's own family-scoped satisfiesRequired/hasBypass logic
- * (computeRowInfos/findBypassMatches) is built to avoid. This function is now purely the exact-fold
- * check -- synchronous, no engine call, no fallback. */
+ * formatGenomeCell). `foldedPlainOf` already applies the bypass-only fallback too (see
+ * bypassOnlyFoldName/foldToName, both shared with the main genome header) -- e.g. S_1/S_2, whose
+ * NAMED_FAMILIES entry has an empty `tChildPlains`, fold by bare core alone regardless of their
+ * real T-list, since a finite hand-authored GENOME_NAMES table can never enumerate every T-list
+ * such a family's members can actually have (added 2026-08-31 after the user reported [1212a/,
+ * core (0,1,{0},{}), failing to register as S_1). This is NOT a reintroduction of the old
+ * Advanced-Collection fallback removed 2026-08-30 (matching on bare core + "every extra T-child is
+ * itself in SOME Advanced Collection", which let unrelated named genomes excuse an extra T-child
+ * regardless of relevance to the family actually being searched -- the exact gap the Yellow-Line's
+ * own family-scoped satisfiesRequired/hasBypass logic, computeRowInfos/findBypassMatches, is built
+ * to avoid): the rule here never excuses anything via an unrelated genome, and only ever fires for
+ * a family whose OWN tChildPlains is empty, i.e. that family itself asserts no T-child requirement
+ * exists. Synchronous, no engine call. */
 function resolvedGenomeName(g: AlphaGenome | FourGeneGenome): string | null {
   const folded = foldedPlainOf(g, 0);
   return folded.startsWith('(') ? null : folded;
