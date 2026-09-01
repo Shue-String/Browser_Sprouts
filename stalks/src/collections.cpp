@@ -1799,13 +1799,23 @@ QuickCanonResult quickCanon(const Position& p) {
 
 std::vector<CollectionRoster> allCollectionRosters() {
     std::vector<CollectionRoster> out;
+    // Tracks every repEncoding already attached to some emitted roster entry, GLOBALLY across the
+    // whole function (not just within one addFamily call) -- a multi-region family can share its
+    // repEncoding with an EARLIER single-/double-crit family without sharing its group NAME (e.g.
+    // S_4's own "33a" single-crit entry vs. the separate "33a" multi-region family whose only group
+    // is "S_4⊕1", not "S_4"), so a per-call-local flag would wrongly treat that later family as the
+    // rep's first sighting and re-emit "33a" a second time -- exactly the S_4/S_4⊕1 duplicate-rep
+    // bug reported against the Collect pane's Collections panel (S_6/S_6⊕1 and S_7/S_7⊕1 had the
+    // identical bug, same root cause). Keying by repEncoding rather than name is what the paired-
+    // sibling convention actually means: one rep, shown once, no matter which family or group name
+    // first carries it.
+    std::set<std::string> repShownFor;
     auto addFamily = [&](const CritFamily& fam) {
-        bool repShown = false;
+        bool showRep = repShownFor.insert(fam.repEncoding).second;  // true only this rep's first sighting anywhere
         for (const auto& g : fam.groups) {
             out.push_back({g.name, g.offset, {g.elements.begin(), g.elements.end()},
-                            repShown ? std::string() : fam.repEncoding});
-            repShown = true;  // only the family's first-listed group carries the rep; a paired
-                               // sibling (S_2 sharing S_1's; S_4 sharing S_3's) shares it instead
+                            showRep ? fam.repEncoding : std::string()});
+            showRep = false;  // only the very first emitted group for this repEncoding carries it
         }
     };
     for (const auto& fam : singleCritFamilies())
