@@ -71,6 +71,14 @@ std::string leftSideKey(const std::string& leftSideEncoding);
 // position as given (no canonicalization). Each key is registry-lookup ready.
 std::vector<std::string> detachableLeftSideKeys(const Position& p);
 
+// As detachableLeftSideKeys, but for multi-region candidate chunks (enumerateMultiCrits: >=2
+// regions joined by their own internal real membranes, detachable by cutting exactly one crit --
+// see that function's own doc comment in collections.cpp). Exposed for the same reason as
+// detachableLeftSideKeys: lets an offline discovery tool enumerate multi-region candidates
+// straight from the real structural game tree, without a pre-built single-alpha .spec corpus --
+// the single-region-only detachableLeftSideKeys above misses this whole shape class.
+std::vector<std::string> detachableMultiCritLeftSideKeys(const Position& p);
+
 // One authored Advanced-Collection roster, exposed for UI/tooling sync -- see
 // tools/dump_collections_roster.cpp, which writes this out for the Collect pane's Collections
 // panel (src/data/collectionsRoster.json) so a change here is reflected there automatically,

@@ -920,6 +920,14 @@ std::vector<std::string> detachableLeftSideKeys(const Position& p) {
     return out;
 }
 
+std::vector<std::string> detachableMultiCritLeftSideKeys(const Position& p) {
+    std::vector<std::string> out;
+    for (const auto& c : p.components)
+        for (const auto& cand : enumerateMultiCrits(c))
+            out.push_back(cand.leftKey);
+    return out;
+}
+
 bool collectionsEnabled() {
     const char* v = std::getenv("STALKS_COLLECTIONS");
     return v && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');

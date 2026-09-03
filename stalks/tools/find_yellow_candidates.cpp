@@ -55,6 +55,7 @@ int main(int argc, char** argv) {
     };
     std::vector<Row> yellowRows;
     long long candidatesChecked = 0;
+    std::map<std::string, long long> checkedByFamily, yellowByFamily;
 
     for (int i = 2; i < argc; ++i) {
         const std::string path = argv[i];
@@ -95,15 +96,23 @@ int main(int argc, char** argv) {
             if (!genome) continue;
             const std::string core = genomeKey(*genome);
 
-            const auto familyName = familyNameForCoreKey(core);
-            if (!familyName) continue;
-            const std::string family = *familyName;
+            // Check EVERY family sharing this core, not just familyNameForCoreKey's single
+            // priority-order pick -- several distinct families legitimately share a bare core and
+            // differ only in required T-genes (S_1/S_15, S_6/S_8/S_17/S_20, S_7/S_10, S_12/S_25,
+            // S_14/S_26, S_21/S_24, at every shift); testing only the winner can never discover a
+            // new member of a lower-priority sibling. See allFamilyNamesForCoreKey's own doc comment.
+            const auto families = allFamilyNamesForCoreKey(core);
+            if (families.empty()) continue;
 
             ++candidatesChecked;
+            for (const std::string& family : families) ++checkedByFamily[family];
             if (candidatesChecked % 100 == 0) { std::cerr << "  checked " << candidatesChecked << " candidates...\n"; std::cerr.flush(); }
 
-            if (isYellowCandidate(pBase, db, family)) {
-                yellowRows.push_back({lives, quickEnc, family, fullGenomeText(pBase, db)});
+            for (const std::string& family : families) {
+                if (isYellowCandidate(pBase, db, family)) {
+                    yellowRows.push_back({lives, quickEnc, family, fullGenomeText(pBase, db)});
+                    ++yellowByFamily[family];
+                }
             }
         }
         std::cerr << "  scanned " << scanned << ", qualifying single-alpha " << qualifying << "\n";
@@ -111,6 +120,12 @@ int main(int argc, char** argv) {
 
     std::cerr << "checked " << candidatesChecked << " named-family-core candidates, "
               << yellowRows.size() << " went yellow\n";
+    std::cerr << "per-family breakdown (checked / yellow), " << checkedByFamily.size()
+              << " distinct families had at least one core-matching candidate:\n";
+    for (const auto& [fam, n] : checkedByFamily) {
+        const auto it = yellowByFamily.find(fam);
+        std::cerr << "  " << fam << ": " << n << " / " << (it != yellowByFamily.end() ? it->second : 0) << "\n";
+    }
 
     std::sort(yellowRows.begin(), yellowRows.end(), [](const Row& a, const Row& b) {
         if (a.lives != b.lives) return a.lives < b.lives;

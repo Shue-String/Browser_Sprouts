@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace stalks_tools {
 
@@ -84,6 +85,20 @@ bool isYellowCandidate(const stalks::Position& candidate, const stalks::SpecDB& 
 // (e.g. tools/find_yellow_candidates.cpp) can discover which family a position's own core belongs to
 // without re-deriving the NAMED_FAMILIES table.
 std::optional<std::string> familyNameForCoreKey(const std::string& coreKey);
+
+// EVERY named family whose bare (R,D,{L},{T'}) core equals `coreKey`, not just the first
+// (priority-order) match familyNameForCoreKey returns -- several distinct (family, shift) pairs
+// legitimately share the same bare core and differ only in required T-genes (S_1/S_15, S_6/S_8/
+// S_17/S_20, S_7/S_10, S_12/S_25, S_14/S_26, S_21/S_24, at every shift -- see the 2026-09-02
+// findBypassMatches/lookupGenome fix in src/ui/collect.ts for how this was first discovered).
+// familyNameForCoreKey's first-match-wins is correct for DISPLAY/folding, but a discovery scan
+// that tests a core-matching candidate against only the highest-priority name can never find a new
+// member of a lower-priority sibling -- confirmed 2026-09-03: a real find_yellow_candidates.exe run
+// found core-matching candidates for 47 families and zero went yellow anywhere except the two
+// collision-immune bypass-only families (S_1/S_1⊕1), with several documented collision-losers never
+// appearing in the checked list at all. Callers doing DISCOVERY (not display) should use this and
+// try isYellowCandidate against every name returned, not just familyNameForCoreKey's single pick.
+std::vector<std::string> allFamilyNamesForCoreKey(const std::string& coreKey);
 
 // Exactly one special-point character present in `enc`, and it's specifically alpha ('a') -- see
 // tokens.hpp's tokenChar/charToken convention (special points are the only lowercase letters this

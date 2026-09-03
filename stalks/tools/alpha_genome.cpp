@@ -259,6 +259,26 @@ const NamedFamily* familyForCoreKey(const std::string& coreKey) {
     return nullptr;
 }
 
+// EVERY family whose bare core equals coreKey, not just the first (priority-order) match --
+// several distinct (family, shift) pairs legitimately share the same bare (R,D,{L},{T'}) core and
+// differ only in their required T-gene list (see namedFamilies()'s own doc comment: S_1/S_15,
+// S_6/S_8/S_17/S_20, S_7/S_10, S_12/S_25, S_14/S_26, S_21/S_24, at every shift). familyForCoreKey's
+// first-match-wins is correct for DISPLAY purposes (folding a genome to its one canonical name), but
+// a discovery scan that only ever tests a core-matching candidate against the single highest-priority
+// name can NEVER find a new member of any lower-priority sibling in a collision group -- confirmed
+// empirically 2026-09-03: a real scan found core-matching candidates for 47 families, zero went
+// yellow anywhere except the two collision-immune bypass-only families (S_1/S_1⊕1, whose empty
+// tChildPlains means core alone is a complete definition, no collision possible), and several
+// documented collision-losers (S_10/S_16/S_17/S_18/S_20/S_24/S_25/S_26) never appeared in the
+// checked list AT ALL -- every one of their candidates was silently being tested against a
+// higher-priority sibling instead and rejected there.
+std::vector<const NamedFamily*> allFamiliesForCoreKey(const std::string& coreKey) {
+    std::vector<const NamedFamily*> out;
+    for (const auto& f : namedFamilies())
+        if (f.coreKey == coreKey) out.push_back(&f);
+    return out;
+}
+
 const NamedFamily* familyForName(const std::string& name) {
     for (const auto& f : namedFamilies())
         if (f.name == name) return &f;
@@ -400,6 +420,12 @@ std::optional<std::string> resolvedGenomeName(const Position& p, const SpecDB& d
 std::optional<std::string> familyNameForCoreKey(const std::string& coreKey) {
     const NamedFamily* family = familyForCoreKey(coreKey);
     return family ? std::optional<std::string>(family->name) : std::nullopt;
+}
+
+std::vector<std::string> allFamilyNamesForCoreKey(const std::string& coreKey) {
+    std::vector<std::string> out;
+    for (const NamedFamily* f : allFamiliesForCoreKey(coreKey)) out.push_back(f->name);
+    return out;
 }
 
 bool isYellowCandidate(const Position& candidate, const SpecDB& db, const std::string& searchedFamilyName) {
