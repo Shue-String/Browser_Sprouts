@@ -344,8 +344,23 @@ std::vector<DoubleCritCandidate> enumerateDoubleCrits(const Component& c) {
 // matched regardless of the registry entry being correct). No other code depends on this constant
 // staying at 3 -- it's a pure perf pre-filter, not an algorithmic limit (parseRepTemplate/
 // applyMultiCritSwap/extractChunk itself are already N-region general).
-constexpr std::size_t MAX_MULTI_REGIONS = 4;
-constexpr std::size_t MAX_MULTI_TOKENS = 12;
+// Bumped 4->6 / 12->20 2026-09-02: a fresh discovery scan (see [[project_advanced_collections]])
+// re-found 12 already-registered S_1/S_1⊕1/S_2 multi-region elements (5-6 regions, 13-17 tokens)
+// as "new" candidates -- direct testing (query_position --quick-canon-only, properly embedded via
+// a real host per verify_left_side's own Z-port convention) proved they'd been silently DEAD ever
+// since registration: extractChunk's size guard rejected them before any key was even computed, so
+// they could never have matched regardless of the registry entry being correct -- same root cause
+// as the 2026-08-29 bump, just not caught at the time. Real A/B timing (STALKS_DUMP_MULTI_REJECT_HIST
+// instrumentation, since removed) measured the actual cost before raising: a full n<=6 exhaustive
+// sweep costs 533s at the old caps vs 537s at these caps (+4s, <1%) -- candidate discovery is
+// bridge-count-bounded (not combinatorial in region count), and per-candidate canonicalization
+// (multiChunkKey -> canonicalizeFull) reuses the same machinery already proven fast on much larger
+// real positions, so raising these is not the perf risk it might look like at a glance. n<=6 reject
+// histogram at the old caps: region-count 69 rejections (all size=5), token-count 6160 rejections
+// (13:2728, 14:2387, 15:872, 16:52, 17:121) -- 20 raised to comfortably clear the observed range
+// with headroom, not tuned to the exact 12 candidates that prompted this.
+constexpr std::size_t MAX_MULTI_REGIONS = 6;
+constexpr std::size_t MAX_MULTI_TOKENS = 20;
 
 // A chunk's canonical registry key: wrap it as a stand-alone one-component Position and run it
 // through the real structural canon + serializer (see the section doc comment above). Prefixed

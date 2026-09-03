@@ -91,7 +91,32 @@
             "3,2a,2748",
             "3,2a,277288",
             "3,2a,44",
-            "3a,27772888"
+            "3a,27772888",
+            "1,1,2,2a",
+            "1,122a",
+            "1,132a",
+            "1,14a",
+            "1,1728a",
+            "1,2,17a8",
+            "1,2,23,2a",
+            "1,2,5,2a",
+            "1212a",
+            "1217a8",
+            "137228a",
+            "1377288a",
+            "2,11,2a",
+            "2,15,2a",
+            "2,2a,122",
+            "2,2a,123",
+            "2,2a,1728",
+            "2,2a,1738",
+            "2a,1232",
+            "2a,17238",
+            "5,2a,222",
+            "5,2a,2728",
+            "5,2a,2738",
+            "5,2a,34",
+            "5,6,2a"
           ]
         },
         {
@@ -196,6 +221,15 @@
             "2,37a8",
             "223a",
             "2,33a"
+          ]
+        },
+        {
+          "name": "S_12⊕1",
+          "offset": 1,
+          "elements": [
+            "5,1a",
+            "5,37a8",
+            "5,5a"
           ]
         }
       ]
@@ -650,7 +684,49 @@
             "AB|3,2a,2A2B",
             "AB|3,ACD|2a,BCD",
             "AB|3ACD|2a,BCD",
-            "AB|3CAD|2a,BCD"
+            "AB|3CAD|2a,BCD",
+            "1ABCD|a,ABCD",
+            "1ABC|3ABCa",
+            "1ABC|3ACBa",
+            "1ABC|3BACa",
+            "1ABC|7ABC8a",
+            "1ABC|7ACB8a",
+            "2,ABCD|2a,ABCD",
+            "22ABC|7ABC8a",
+            "22ABC|7ACB8a",
+            "23ABC|7ABC8a",
+            "23ABC|7ACB8a",
+            "23ABC|7BAC8a",
+            "27ABC8|7ABC8a",
+            "27ABC8|7ACB8a",
+            "2ABCD|2a,ABCD",
+            "2ABCD|3a,ABCD",
+            "2Aa|0,2,A",
+            "2Aa|123A",
+            "2Aa|127A8",
+            "2Aa|12A3",
+            "2Aa|3,12A",
+            "2Aa|3,BCD|A,BCD",
+            "2Aa|577A88",
+            "2Aa|A,122",
+            "2Aa|A,123",
+            "2Aa|A,1728",
+            "3,ABCD|2a,ABCD",
+            "3,ABC|2,2a,ABC",
+            "37ABC8|7ABC8a",
+            "37ABC8|7ACB8a",
+            "3ABCD|2a,ABCD",
+            "3ABCa|27ABC8",
+            "3ABCa|27ACB8",
+            "3ABCa|27BAC8",
+            "5ABCD|ABCDa",
+            "5ABCD|ADCBa",
+            "5ABCD|BADCa",
+            "5ABC|7ABC8a",
+            "5ABC|7ACB8a",
+            "ABCDE|2a,ABCDE",
+            "ABCDE|3a,ABCDE",
+            "AB|2a,1A3B"
           ]
         },
         {
@@ -798,7 +874,18 @@
             "AB|AC|DBEa|2,CDE",
             "AB|AC|DE|BDF|CEFa",
             "AB|AC|DE|BDF|ECFa",
-            "AB|CD|AEF|CEF|BDa"
+            "AB|CD|AEF|CEF|BDa",
+            "2ABC|3ABCa",
+            "2ABC|3ACBa",
+            "2ABC|3BACa",
+            "3,ABCD|a,ABCD",
+            "3ABCD|ABCDa",
+            "3ABCD|ADCBa",
+            "3ABCD|BADCa",
+            "3ABCD|a,ABCD",
+            "2AB|2CD|a,AB,CD",
+            "AB|ACD|BEF|CEFDa",
+            "AB|AC|BDEF|CDEFa"
           ]
         },
         {
@@ -866,7 +953,8 @@
             "37AB8|2,ABa",
             "5AB|2,ABa",
             "2AB|2AC|2,BCa",
-            "AB|ACD|BCE|2,DEa"
+            "AB|ACD|BCE|2,DEa",
+            "2AB|5,ABa"
           ]
         }
       ]
@@ -942,7 +1030,16 @@
           "name": "S_5",
           "offset": 0,
           "elements": [
-            "2AB|ABa"
+            "2AB|ABa",
+            "ABa|13,AB",
+            "ABa|35,AB",
+            "ABa|AB,3738",
+            "4A|BCa|2A,BC",
+            "4A|BCa|7A8BC",
+            "ABC|ABD|EFa|CD,EF",
+            "ABC|ABD|EFa|CDEF",
+            "AB|3AC|DEa|BC,DE",
+            "AB|ACD|EFa|EF,BCD"
           ]
         },
         {
@@ -1014,6 +1111,13 @@
           "elements": [
             "2AB|2AC|BCa"
           ]
+        },
+        {
+          "name": "S_4",
+          "offset": 0,
+          "elements": [
+            "1AB|2AC|BCa"
+          ]
         }
       ]
     },
@@ -1067,6 +1171,17 @@
           "offset": 0,
           "elements": [
             "AB|AC|BD|CE|Fa|DEF"
+          ]
+        },
+        {
+          "name": "S_2⊕1",
+          "offset": 1,
+          "elements": [
+            "Aa|3,BCDE|A,BCDE",
+            "Aa|3BCDE|A,BCDE",
+            "Aa|3BCDE|ABCDE",
+            "Aa|3BCDE|ABEDC",
+            "Aa|3BCDE|ACBED"
           ]
         }
       ]

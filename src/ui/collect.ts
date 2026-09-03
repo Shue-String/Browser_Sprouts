@@ -270,6 +270,16 @@ function depthClass(depth: number): string {
   return 'gs-d2';
 }
 
+/** Hard ceiling on how far genomeParts' own recursive descent (see its `lookupGenome` call below)
+ * will trigger a fresh computeAlphaGenome() fetch to resolve an otherwise-truncated T-child --
+ * without this, a resolved position's own (possibly truncated) grandchildren could keep triggering
+ * further fetches indefinitely, each one settling and re-rendering into yet another truncated layer
+ * one level deeper. Set a couple of levels past MAX_GENOME_DEPTH (collectAlpha.ts's own embedding
+ * cap, =2): that's enough slack to resolve the one-level-further ambiguity a truncated core-collision
+ * grandchild needs (see lookupGenome's own doc comment), without opening the door to unbounded
+ * cascading fetches over a large position's whole reachable subtree. */
+const MAX_LOOKUP_FETCH_DEPTH = 4;
+
 /** Plain-text and colored-HTML renderings of a genome string "(R,D,{L},{T'},[T])", built together
  * so [T] can be deduped by its PLAIN-text representation (two T-children whose genomes print
  * identically are the same gene, even if they're different positions) while still producing
@@ -286,15 +296,16 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
   const seen = new Set<string>();
   const children: { plain: string; html: string }[] = [];
   for (const t of g.T) {
-    // Falls back to the offline byEnc index (see byEncGenome) when this T-child's own nested
-    // genome wasn't loaded (either truncated by MAX_GENOME_DEPTH/MAX_NESTED_GENOME_LIVES, or
-    // sourced from a GENOME_DB stand-in entry, whose T-children never carry `.genome` at all) --
-    // without this, folding/isNamedGenome couldn't recognize a T-child's OWN T-child as a named
-    // genome (e.g. "2,2a"'s child "2a" IS literally S_1, but with no genome and no byEnc lookup
-    // it would only ever print as its bracket label, never fold, silently breaking every check
-    // one level further up the tree). A lookup only, never an engine call -- byEnc doesn't cover
-    // every position, so this can still legitimately miss and fall through to quickLabel.
-    const childGenome = t.genome ?? byEncGenome(t.enc);
+    // Routed through lookupGenome (not a bare `t.genome ?? byEncGenome(t.enc)`, per a 2026-09-02
+    // fix -- see lookupGenome's own doc comment) so a T-child whose only embedded `.genome` is a
+    // TRUNCATED bare tuple (MAX_GENOME_DEPTH/MAX_NESTED_GENOME_LIVES cut it off) doesn't get folded
+    // on that ambiguous stand-in: two different named families can share the exact same bare core
+    // (e.g. S_12/S_25), and folding a truncated grandchild on core alone can silently mislabel it.
+    // lookupGenome also triggers (and re-renders on) a background fresh computeAlphaGenome() call
+    // when even byEnc misses, instead of giving up forever -- still synchronous/non-blocking here,
+    // same as the old byEnc-only fallback: returns undefined (falls through to quickLabel below)
+    // while better data is pending, and a later render picks up the resolved value once it lands.
+    const childGenome = lookupGenome(t.enc, t.genome, depth < MAX_LOOKUP_FETCH_DEPTH);
     const child = childGenome
       ? genomeParts(childGenome, depth + 1)
       : { plain: quickLabel(t), html: `<span class="${depthClass(depth + 1)}">${escapeHtml(quickLabel(t))}</span>` };
@@ -404,16 +415,46 @@ const genomeLookupCache = new Map<string, AlphaGenome | FourGeneGenome | null>()
 const genomeLookupPending = new Set<string>();
 
 /** `enc`'s own genome, for use by the T-gene table's Genome/Bypass columns (see formatGenomeCell/
- * findBypassMatches) -- prefers, in order, an already-loaded nested genome, the offline BY_ENC
+ * findBypassMatches) -- prefers, in order, an already-loaded FULL nested genome, the offline BY_ENC
  * lookup, and a permanent per-session cache of prior fresh computeAlphaGenome() calls; triggers
  * (and caches, then re-renders on completion) exactly one such call for any `enc` not covered by any
- * of those. Returns undefined while a first-time fetch for `enc` is still pending. */
-function lookupGenome(enc: string, known?: AlphaGenome | FourGeneGenome): AlphaGenome | FourGeneGenome | undefined {
-  if (known) return known;
+ * of those. Returns undefined while a first-time fetch for `enc` is still pending.
+ *
+ * `known` is trusted immediately ONLY when it's already a FULL genome (has its own real `.T`) --
+ * a TRUNCATED `known` (the bare 4-tuple computeAlphaGenomeAt hands back once MAX_GENOME_DEPTH/
+ * MAX_NESTED_GENOME_LIVES caps recursion, see collectAlpha.ts) is deliberately treated the SAME as
+ * "not known yet", falling through to byEncGenome/a fresh call instead of being handed back as-is.
+ * Reason (found 2026-09-02 via a live false-positive bug report): several distinct named families
+ * share the EXACT SAME bare (R,D,{L},{T'}) core and differ only in their required T-gene list --
+ * e.g. S_12 and S_25 both key to (0,3,{0,2},{}) (also S_1/S_15, S_6/S_8/S_17/S_20, S_7/S_10,
+ * S_14/S_26, S_21/S_24, at every shift). A bare, T-less truncated genome can't tell which family in
+ * a collision group it really is, so `foldedPlainOf`'s own compact-key fallback just guesses
+ * "whichever family registered first" -- a fine best-effort DISPLAY label when nothing better is
+ * available, but findBypassMatches was trusting that guess as verified fact when deciding whether a
+ * bypass is legitimate, letting a genuine S_25 grandchild get silently credited as an S_12 bypass.
+ * Falling through here means a truncated grandchild resolves for real (usually for free via the
+ * offline BY_ENC table, which "always has a full T list when present"; only rarely needs an actual
+ * fresh engine call) instead of asserting a name that might be wrong -- callers already handle the
+ * transient `undefined` as "pending, don't flag yet" (see TRowInfo.pending), so this only delays an
+ * uncertain answer rather than ever asserting a wrong one.
+ *
+ * `allowFetch` (default true) gates ONLY the last-resort fresh computeAlphaGenome() call, not the
+ * free byEnc/cache lookups above it -- genomeParts passes false past MAX_LOOKUP_FETCH_DEPTH so its
+ * OWN recursive descent (each resolved position potentially handing back more real T-children, each
+ * possibly ALSO truncated) can't cascade into an unbounded chain of fresh engine calls. Every other
+ * call site (formatGenomeCell, findBypassMatches) checks a single, non-recursive level, where that
+ * risk doesn't apply, so they keep the default. */
+function lookupGenome(
+  enc: string,
+  known?: AlphaGenome | FourGeneGenome,
+  allowFetch = true,
+): AlphaGenome | FourGeneGenome | undefined {
+  if (known && isFullGenome(known)) return known;
   const direct = byEncGenome(enc);
   if (direct) return direct;
   const cached = genomeLookupCache.get(enc);
   if (cached !== undefined) return cached ?? undefined;
+  if (!allowFetch) return known;
   if (!genomeLookupPending.has(enc)) {
     genomeLookupPending.add(enc);
     void computeAlphaGenome(enc).then(result => {
