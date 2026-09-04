@@ -35,6 +35,7 @@ import { TrackedGame } from './engine/trackedGame';
 import type { MovePreviewTarget } from './ui/positionBrowser';
 import { openGuide, closeGuide, isGuideOpen } from './ui/guide';
 import { initCollect } from './ui/collect';
+import { initTTree } from './ui/ttree';
 import { canon as canonEncoding, preloadModule, canonicalizeTrackedProvenanceSync, canonSync } from './engine/stalks';
 import { recordEdge, loadMasterSeed } from './model/positionCache';
 
@@ -1083,6 +1084,21 @@ collectBtn.addEventListener('click', e => {
 collectClose.addEventListener('click', () => collectOverlay.classList.remove('visible'));
 collectOverlay.addEventListener('click', e => {
   if (e.target === collectOverlay) collectOverlay.classList.remove('visible');
+});
+
+// T-Tree (top bar).
+const ttreeBtn     = document.getElementById('ttree-btn')     as HTMLButtonElement;
+const ttreeOverlay = document.getElementById('ttree-overlay') as HTMLDivElement;
+const ttreeClose   = document.getElementById('ttree-close')   as HTMLButtonElement;
+
+ttreeBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  initTTree();
+  ttreeOverlay.classList.add('visible');
+});
+ttreeClose.addEventListener('click', () => ttreeOverlay.classList.remove('visible'));
+ttreeOverlay.addEventListener('click', e => {
+  if (e.target === ttreeOverlay) ttreeOverlay.classList.remove('visible');
 });
 
 // Only shown (below the wide-panel breakpoint) as a way to open the same Position Browser

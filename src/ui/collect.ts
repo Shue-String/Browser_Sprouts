@@ -49,18 +49,26 @@ import {
   type NamedFamily,
   type NamedFamilyGroup,
   type PositionRef,
+  type ResolveChild,
   type TChild,
+  type TChildClassification,
   COLLECTION_ROSTER_FOLDER_NAMES,
   GENOME_NAMES,
   KNOWN_COLLECTION_MEMBERS,
   NAMED_FAMILIES,
   NAMED_FAMILY_GENOME_TEXT,
   NAMED_FAMILY_GROUPS,
+  bypassOnlyFoldName,
+  classifyTChildren,
   computeAlphaGenome,
   expandGenomeShorthand,
+  familyForCore,
+  fmtNimber,
   genomeKey,
+  isFullGenome,
   nameForShorthand,
   parseGenomeQuery,
+  resolvedFoldName,
   shiftMembraneLetters,
 } from '../model/collectAlpha';
 import genomeDbJson from '../data/collectAlphaGenomes.json';
@@ -216,7 +224,9 @@ function addToHistory(entry: Entry, persist = true): void {
   if (persist) saveHistory();
 }
 
-function markAlpha(enc: string): string {
+/** Exported (2026-09-03) so ttree.ts can build the same "paper display" node labels Collect uses,
+ * without re-deriving this convention a second time. */
+export function markAlpha(enc: string): string {
   return enc.replace('a', 'α');
 }
 
@@ -227,10 +237,8 @@ function markAlpha(enc: string): string {
  * relative to, so it's a "left side" in the paper's sense even when it's also a complete, playable
  * position. A component with no alpha left in it (e.g. an R/D child where THAT move vanished or
  * scabbed the alpha point away, or the non-alpha side of a split/separating move) has no such open
- * crit and keeps the ordinary ']'. Scoped to this module only -- positionBrowser's shared
- * bracketDisplay is untouched, since outside Collect a bracketed position is never specifically
- * about an alpha-marked left side. */
-function bracketDisplaySlash(enc: string): string {
+ * crit and keeps the ordinary ']'. Exported (2026-09-03) for ttree.ts -- see markAlpha. */
+export function bracketDisplaySlash(enc: string): string {
   return bracketDisplay(enc).replace(/\[([^[\]]*)\]/g, (whole, inner: string) =>
     inner.includes('α') ? `[${inner}/` : whole,
   );
@@ -248,16 +256,8 @@ function fmtSet(vals: number[]): string {
   return vals.length === 0 ? '{}' : '{' + vals.join(', ') + '}';
 }
 
-function fmtNimber(n: number | null): string {
-  return n === null ? 'error' : String(n);
-}
-
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function isFullGenome(g: AlphaGenome | FourGeneGenome): g is AlphaGenome {
-  return Array.isArray((g as AlphaGenome).T);
 }
 
 /** CSS class for a genome-string segment at nesting `depth` -- 0 (the position's own R/D/L/T') is
@@ -329,19 +329,6 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
   return foldToName(g, plain, html, cls);
 }
 
-/** A genome's name via the bypass-only fallback rule: NAMED_FAMILIES has an entry (S_1/S_2 today)
- * whose OWN `tChildPlains` is empty, meaning that family asserts no T-gene requirement at all --
- * core match alone is its complete definition (the Pairing Theorem's base pair; every other
- * T-child relationship is a bypass, never a requirement -- see the user's 2026-08-31
- * clarification). Shared by foldToName (main genome display) and resolvedGenomeName (T-gene
- * table), so both agree on the same notion of "is this actually S_1" rather than drifting --
- * before this was extracted, only resolvedGenomeName had it, so a bypass-only-eligible position's
- * OWN header still showed its raw tuple even though its T-gene table cells correctly named it. */
-function bypassOnlyFoldName(g: { R: number | null; D: number | null; L: number[]; Tprime: number[] }): string | null {
-  const family = familyForGenome(g);
-  return family && family.tChildPlains.length === 0 ? family.name : null;
-}
-
 /** When the Quick-Genome toggle is on, fold a genome node whose exact plain-text tuple matches a
  * known shorthand (see GENOME_NAMES) down to its name, replacing the full tuple rendering -- or,
  * failing that, whose bare core matches a bypass-only family (see bypassOnlyFoldName), since a
@@ -393,13 +380,6 @@ function isNamedGenome(genome: AlphaGenome | FourGeneGenome): boolean {
   const result = !foldedPlainOf(genome, 0).startsWith('(');
   isNamedGenomeCache.set(genome, result);
   return result;
-}
-
-/** A genome's bare (R,D,{L},{T'}) core, matching the format of NamedFamily.coreKey exactly (same
- * text collectAlpha.ts derives its families' coreKey from) -- used to find which named family (if
- * any) a candidate genome could belong to for Advanced-Collection membership. */
-function coreKeyOf(g: { R: number | null; D: number | null; L: number[]; Tprime: number[] }): string {
-  return `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}})`;
 }
 
 /** `enc`'s own genome, straight from the offline BY_ENC index (see GenomeDbJson doc comment) --
@@ -466,6 +446,12 @@ function lookupGenome(
   return undefined;
 }
 
+/** `lookupGenome` wrapped as a collectAlpha.ts `ResolveChild` -- the depth parameter is ignored
+ * (every call site sharing this instance historically used lookupGenome's own default
+ * `allowFetch=true`, never the depth-capped variant genomeParts uses internally for its own,
+ * still-local recursive HTML rendering -- see MAX_LOOKUP_FETCH_DEPTH). */
+const resolveChild: ResolveChild = (enc, known) => lookupGenome(enc, known);
+
 /** `g`'s own display name for the Genome column: its exact fold if it has one (every T-child
  * accounted for, recursively), else null (falls through to the raw tuple/'+' placeholder in
  * formatGenomeCell). `foldedPlainOf` already applies the bypass-only fallback too (see
@@ -480,13 +466,10 @@ function lookupGenome(
  * own family-scoped satisfiesRequired/hasBypass logic, computeRowInfos/findBypassMatches, is built
  * to avoid): the rule here never excuses anything via an unrelated genome, and only ever fires for
  * a family whose OWN tChildPlains is empty, i.e. that family itself asserts no T-child requirement
- * exists. Synchronous, no engine call. */
-function resolvedGenomeName(g: AlphaGenome | FourGeneGenome): string | null {
-  const folded = foldedPlainOf(g, 0);
-  return folded.startsWith('(') ? null : folded;
-}
+ * exists. Synchronous, no engine call. Moved to collectAlpha.ts as `resolvedFoldName` (2026-09-03,
+ * shared with ttree.ts); this file now just supplies `resolveChild` as the fetch strategy. */
 
-/** "Genome" column text for a T-gene table row: `g`'s own exact fold (see resolvedGenomeName) if it
+/** "Genome" column text for a T-gene table row: `g`'s own exact fold (see resolvedFoldName) if it
  * has one, else its bare four genes followed by its own T-gene members, each shown by name if THAT
  * one has an exact fold, else a bare '+' placeholder (covers both "genuinely not named" and "not
  * loaded yet" -- a still-pending grandchild just shows '+' for now and corrects itself on the next
@@ -494,49 +477,15 @@ function resolvedGenomeName(g: AlphaGenome | FourGeneGenome): string | null {
  * unbounded recursive rendering is for, and it gets messy fast for anything more than one level, per
  * the user's own request). */
 function formatGenomeCell(g: AlphaGenome | FourGeneGenome): string {
-  const resolved = resolvedGenomeName(g);
+  const resolved = resolvedFoldName(g, resolveChild);
   if (resolved !== null) return resolved;
   const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}}`;
   if (!isFullGenome(g)) return head + ')';
   const parts = g.T.map(child => {
     const childKnown = lookupGenome(child.enc, child.genome);
-    return (childKnown && resolvedGenomeName(childKnown)) || '+';
+    return (childKnown && resolvedFoldName(childKnown, resolveChild)) || '+';
   });
   return `${head},[${parts.join(', ')}])`;
-}
-
-/** A single Bypass-column entry: `name` is the matched genome's own folded name (e.g. "S_1⊕2"), and
- * `witness` is ONE real T-gene member that reaches it -- kept only so the name can still be clicked
- * through to inspect a concrete position, not shown itself (see the user's own request that this
- * column show the genome, not a position label). */
-interface BypassMatch {
-  name: string;
-  witness: TChild;
-}
-
-/** "Bypass" column content for a T-gene table row: the DISTINCT genome names among `g`'s own T-gene
- * members that EXACTLY match the searched genome (see searchedGenomeName), offset included -- e.g.
- * searching S_1⊕2 surfaces a row whose own T-gene contains another S_1⊕2, a bypass straight through
- * it (see findBypassMatches), but NOT one containing S_1 or S_1⊕1 -- those are a different genome,
- * not the one searched, even though they share the same base family (an earlier version matched any
- * shift of the base family here; that's wrong, since S_1/S_1⊕1/S_1⊕2/... are genuinely distinct
- * genomes, not interchangeable for this check). Deduped by name: a row's raw, undeduped T-gene can
- * reach the same effective genome via more than one real T-child (see MoveChildRef's own doc
- * comment), and the user only wants to know a bypass to that genome exists, not see it listed once
- * per witness -- though since the match is now a single exact name, there's at most one entry.
- * Null while any member's own genome is still being resolved (see lookupGenome), so the caller can
- * leave the cell blank rather than show a false "no bypass found" before all the data is actually
- * in. */
-function findBypassMatches(g: AlphaGenome | FourGeneGenome): BypassMatch[] | null {
-  if (!isFullGenome(g) || !searchedGenomeName) return [];
-  const byName = new Map<string, TChild>();
-  for (const child of g.T) {
-    const childKnown = lookupGenome(child.enc, child.genome);
-    if (childKnown === undefined) return null;
-    const name = foldedPlainOf(childKnown, 0);
-    if (name === searchedGenomeName && !byName.has(name)) byName.set(name, child);
-  }
-  return [...byName.entries()].map(([name, witness]) => ({ name, witness }));
 }
 
 /** A T-child's own folded-plain identity, used the same way GENOME_NAMES/NAMED_FAMILIES text
@@ -548,12 +497,6 @@ async function foldedPlainOfTChild(t: TChild): Promise<string> {
   if (known) return foldedPlainOf(known, 1);
   const fresh = await computeAlphaGenome(t.enc);
   return fresh ? foldedPlainOf(fresh.genome, 1) : quickLabel(t);
-}
-
-/** The named family (if any) whose (R,D,{L},{T'}) core exactly matches `g` -- the "primary genome"
- * the LaTeX export's Relevancy column is checked against (see buildExportLatex/computeRelevancy). */
-function familyForGenome(g: { R: number | null; D: number | null; L: number[]; Tprime: number[] }): NamedFamily | undefined {
-  return NAMED_FAMILIES.find(f => f.coreKey === coreKeyOf(g));
 }
 
 /** A T row's "Relevancy" verdict, matching the paper's genome sequencing table format (see the
@@ -575,7 +518,7 @@ async function computeRelevancy(rootGenome: AlphaGenome | FourGeneGenome, t: TCh
   const plain = await foldedPlainOfTChild(t);
   if (!plain.startsWith('(')) return { kind: 'name', name: plain };
 
-  const family = familyForGenome(rootGenome);
+  const family = familyForCore(rootGenome);
   if (family && family.tChildPlains.includes(plain)) return { kind: 'name', name: family.name };
 
   const tGenome = t.genome ?? byEncGenome(t.enc) ?? (await computeAlphaGenome(t.enc))?.genome;
@@ -719,36 +662,16 @@ async function selectTEntry(t: PositionRef): Promise<void> {
   render();
 }
 
-/** Precomputed per-row data for the T-gene table -- shared between renderRequiredLine (the header
+/** Per-row classification for the T-gene table -- shared between renderRequiredLine (the header
  * line) and renderTList's own row rendering/ordering, so both agree on exactly the same notion of
- * "satisfied" and neither re-derives it independently. `pending` is true while any piece (the row's
- * own genome, or its bypass matches) hasn't settled yet -- see lookupGenome/findBypassMatches's own
- * fire-once-and-settle pattern; `isExtra` is only ever asserted once everything has actually
- * settled, so a row never gets flagged (and reordered/highlighted) on stale pending data, only
- * corrected via the next scheduleRender once resolution lands. */
-interface TRowInfo {
-  t: TChild;
-  tGenome: AlphaGenome | FourGeneGenome | undefined;
-  resolvedName: string | null;
-  matches: BypassMatch[] | null;
-  /** True once settled and confirmed to satisfy neither the required-name check nor the Bypass
-   * check -- i.e. an unexplained "extra" T-child relative to `family`. Always false without a
-   * `family` (see computeRowInfos). */
-  isExtra: boolean;
-}
-
-function computeRowInfos(list: TChild[], family: NamedFamily | undefined, showBypass: boolean): TRowInfo[] {
-  return list.map(t => {
-    const tGenome = lookupGenome(t.enc, t.genome);
-    const resolvedName = tGenome ? resolvedGenomeName(tGenome) : null;
-    const matches = showBypass && tGenome ? findBypassMatches(tGenome) : null;
-    const pending = tGenome === undefined || (showBypass && matches === null);
-    const satisfiesRequired = typeof resolvedName === 'string' && !!family && family.tChildPlains.includes(resolvedName);
-    const hasBypass = !!matches && matches.length > 0;
-    const isExtra = !!family && !pending && !satisfiesRequired && !hasBypass;
-    return { t, tGenome, resolvedName, matches, isExtra };
-  });
-}
+ * "satisfied" and neither re-derives it independently. Moved to collectAlpha.ts as
+ * `classifyTChildren`/`TChildClassification` (2026-09-03, shared with ttree.ts's own per-node
+ * classification); this file just supplies `resolveChild` and `searchedGenomeName` as the target.
+ * `pending` is true while any piece (the row's own genome, or its bypass matches) hasn't settled
+ * yet -- see lookupGenome/findBypassMatches's own fire-once-and-settle pattern; `isExtra` is only
+ * ever asserted once everything has actually settled, so a row never gets flagged (and
+ * reordered/highlighted) on stale pending data, only corrected via the next scheduleRender once
+ * resolution lands. */
 
 /** Renders the required-T-gene summary line above the T-gene table: one bold entry per name in
  * `family.tChildPlains` (the search collection's own definition -- its lowest-order T-children),
@@ -760,7 +683,7 @@ function computeRowInfos(list: TChild[], family: NamedFamily | undefined, showBy
  * family with nothing left unaccounted for -- the whole line gets a yellow background, flagging it
  * as complete at a glance. Only called when a named genome is actually being searched (see
  * renderTList's own caller). */
-function renderRequiredLine(container: HTMLElement, family: NamedFamily, rows: TRowInfo[]): void {
+function renderRequiredLine(container: HTMLElement, family: NamedFamily, rows: TChildClassification[]): void {
   const presentNames = new Set(rows.map(r => r.resolvedName).filter((n): n is string => typeof n === 'string'));
   const noExtras = rows.every(r => !r.isExtra);
   const allPresent = family.tChildPlains.every(name => presentNames.has(name)) && noExtras;
@@ -793,14 +716,14 @@ function renderRequiredLine(container: HTMLElement, family: NamedFamily, rows: T
  * own query resolved to a genome that's itself a recognized named family -- skipped for a plain
  * position search, or a search whose name has no NAMED_FAMILIES entry of its own to draw the
  * required list from (e.g. a bare LEGACY_FOLD_KEYS-only alias). Rows confirmed as unexplained
- * "extras" (see TRowInfo.isExtra) are pushed to the top (stable otherwise -- see the sort below) and
- * highlighted with a pale red background, so the rows still needing a bypass explanation are the
- * first thing seen rather than buried among satisfied ones. */
+ * "extras" (see TChildClassification.isExtra) are pushed to the top (stable otherwise -- see the
+ * sort below) and highlighted with a pale red background, so the rows still needing a bypass
+ * explanation are the first thing seen rather than buried among satisfied ones. */
 function renderTList(container: HTMLElement, list: TChild[]): void {
   container.innerHTML = '';
   const requiredFamily = searchedGenomeName ? NAMED_FAMILIES.find(f => f.name === searchedGenomeName) : undefined;
   const showBypass = searchedGenomeName !== null;
-  const rows = computeRowInfos(list, requiredFamily, showBypass);
+  const rows = classifyTChildren(list, requiredFamily, searchedGenomeName, resolveChild);
   if (requiredFamily) renderRequiredLine(container, requiredFamily, rows);
   if (list.length === 0) {
     container.appendChild(document.createTextNode('(none)'));

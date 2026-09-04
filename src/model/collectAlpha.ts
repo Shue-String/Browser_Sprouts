@@ -719,6 +719,182 @@ export interface ParsedGenomeQuery {
   Tprime: number[];
 }
 
+/** True iff `g` carries its own real T-children list (an AlphaGenome), as opposed to a truncated
+ * bare FourGeneGenome (see collectAlpha.ts's MAX_GENOME_DEPTH/MAX_NESTED_GENOME_LIVES). Shared
+ * between collect.ts's UI rendering and the functions below -- moved here (2026-09-03) so both
+ * have exactly one definition, rather than collect.ts's own private copy plus a second one here. */
+export function isFullGenome(g: AlphaGenome | FourGeneGenome): g is AlphaGenome {
+  return Array.isArray((g as AlphaGenome).T);
+}
+
+/** "error" for a null nimber (an R/D move that doesn't exist), else the number itself -- shared
+ * formatting so coreKeyOf/the LaTeX-style tables collect.ts builds never drift apart on this. */
+export function fmtNimber(n: number | null): string {
+  return n === null ? 'error' : String(n);
+}
+
+/** A genome's bare (R,D,{L},{T'}) core, matching the format of NamedFamily.coreKey exactly --
+ * used to find which named family (if any) a candidate genome could belong to. Moved here
+ * (2026-09-03) from collect.ts's own private copy so the T-Tree feature can share the exact same
+ * family-matching rule instead of re-deriving it. */
+export function coreKeyOf(g: { R: number | null; D: number | null; L: number[]; Tprime: number[] }): string {
+  return `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}})`;
+}
+
+/** The named family (if any) whose (R,D,{L},{T'}) core exactly matches `g`. Moved here
+ * (2026-09-03) from collect.ts's private `familyForGenome` -- renamed to match the core-based
+ * lookup it actually does, and shared with T-Tree's own per-node family resolution. */
+export function familyForCore(g: { R: number | null; D: number | null; L: number[]; Tprime: number[] }): NamedFamily | undefined {
+  return NAMED_FAMILIES.find(f => f.coreKey === coreKeyOf(g));
+}
+
+/** A genome's name via the bypass-only fallback rule: NAMED_FAMILIES has an entry (S_1/S_2 today)
+ * whose OWN `tChildPlains` is empty, meaning that family asserts no T-gene requirement at all --
+ * core match alone is its complete definition (the Pairing Theorem's base pair; every other
+ * T-child relationship is a bypass, never a requirement). Moved here (2026-09-03) from collect.ts,
+ * shared by resolvedFoldName below and by collect.ts's own foldToName (main genome display). */
+export function bypassOnlyFoldName(g: { R: number | null; D: number | null; L: number[]; Tprime: number[] }): string | null {
+  const family = familyForCore(g);
+  return family && family.tChildPlains.length === 0 ? family.name : null;
+}
+
+/** Resolves a T-child's own genome given its encoding and (if already loaded) an embedded genome
+ * object -- injected rather than hardcoded so each caller can supply its own fetch/cache strategy
+ * (e.g. collect.ts's `lookupGenome`, which triggers its own pane's re-render on a fresh engine
+ * call landing; ttree.ts's own independent cache, which must never touch Collect's pane).
+ * `depth` is the caller's own recursion depth (0 at the root), passed through so a caller wanting
+ * to cap how deep it'll trigger a FRESH engine call (not just a free byEnc/cache lookup) can do so
+ * -- see collect.ts's MAX_LOOKUP_FETCH_DEPTH for why that cap exists. Returns undefined while a
+ * genuinely pending fetch hasn't settled yet. */
+export type ResolveChild = (
+  enc: string,
+  embedded: AlphaGenome | FourGeneGenome | undefined,
+  depth: number,
+) => AlphaGenome | FourGeneGenome | undefined;
+
+/** The recursive fold-to-name algorithm (plain text only, no HTML/depth-coloring/toggle-awareness
+ * -- collect.ts's own `genomeParts` still owns that display concern locally). Moved here
+ * (2026-09-03) from collect.ts's `resolvedGenomeName`/`foldedPlainOf`/the plain-text half of
+ * `genomeParts`, so both collect.ts and ttree.ts fold a genome to its name via exactly one
+ * algorithm. A T-child whose own genome isn't resolved yet (resolveChild returns undefined) folds
+ * on its bare encoding instead of a tuple -- guaranteed not to collide with any real
+ * "(R,D,{L},{T'}...)" text, so it just fails to match any name (self-corrects on a later call once
+ * that fetch lands), matching the original's "pending -> not named yet, not an error" behavior. */
+function foldedPlainText(
+  g: AlphaGenome | FourGeneGenome,
+  resolveChild: ResolveChild,
+  depth: number,
+): string {
+  const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}}`;
+  if (!isFullGenome(g)) {
+    const plain = head + ')';
+    return GENOME_NAMES[plain] ?? bypassOnlyFoldName(g) ?? plain;
+  }
+  const seen = new Set<string>();
+  const children: string[] = [];
+  for (const t of g.T) {
+    const childGenome = resolveChild(t.enc, t.genome, depth + 1);
+    const plain = childGenome ? foldedPlainText(childGenome, resolveChild, depth + 1) : t.enc;
+    if (seen.has(plain)) continue;
+    seen.add(plain);
+    children.push(plain);
+  }
+  children.sort();
+  const plain = `${head},[${children.join(',')}])`;
+  return GENOME_NAMES[plain] ?? bypassOnlyFoldName(g) ?? plain;
+}
+
+/** `g`'s own exact fold (see foldedPlainText) if it has one, else null. Moved here (2026-09-03)
+ * from collect.ts's private `resolvedGenomeName`, now shared with ttree.ts. */
+export function resolvedFoldName(
+  g: AlphaGenome | FourGeneGenome,
+  resolveChild: ResolveChild,
+  depth = 0,
+): string | null {
+  const folded = foldedPlainText(g, resolveChild, depth);
+  return folded.startsWith('(') ? null : folded;
+}
+
+/** A single Bypass-match: `name` is the matched genome's own folded name, and `witness` is ONE
+ * real T-gene member that reaches it (the first found; see `witnesses` for every candidate).
+ * Moved here (2026-09-03) from collect.ts's private `BypassMatch`. */
+export interface BypassMatch {
+  name: string;
+  witness: TChild;
+  /** Every real T-gene member reaching `name`, not just `witness` -- collect.ts only ever needed
+   * one (any real position witnessing the bypass is equally good for its click-to-inspect use), but
+   * ttree.ts's node-count minimization wants to choose among all of them (preferring one that's
+   * already elsewhere in the tree) rather than being stuck with whichever came first. */
+  witnesses: TChild[];
+}
+
+/** The DISTINCT genome names among `g`'s own T-gene members that EXACTLY match `targetName` --
+ * e.g. searching S_1⊕2 surfaces a row whose own T-gene contains another S_1⊕2, a bypass straight
+ * through it, but NOT one containing S_1 or S_1⊕1 (a different genome, not the one searched, even
+ * though it shares the same base family). Moved here (2026-09-03) from collect.ts's private
+ * `findBypassMatches`, generalized to take `targetName` as a parameter instead of hardcoding a
+ * single pane-wide `searchedGenomeName` -- collect.ts passes its own search-bar target;
+ * ttree.ts passes each node's own resolved family name, once per node. Null while any member's
+ * own genome is still being resolved, so the caller can leave the cell/edge blank rather than show
+ * a false "no bypass found" before all the data is actually in. */
+export function findBypassMatches(
+  g: AlphaGenome | FourGeneGenome,
+  targetName: string | null,
+  resolveChild: ResolveChild,
+  depth: number,
+): BypassMatch[] | null {
+  if (!isFullGenome(g) || !targetName) return [];
+  const byName = new Map<string, TChild[]>();
+  for (const child of g.T) {
+    const childKnown = resolveChild(child.enc, child.genome, depth + 1);
+    if (childKnown === undefined) return null;
+    const name = resolvedFoldName(childKnown, resolveChild, depth + 1);
+    if (name === targetName) {
+      const list = byName.get(name);
+      if (list) list.push(child);
+      else byName.set(name, [child]);
+    }
+  }
+  return [...byName.entries()].map(([name, witnesses]) => ({ name, witness: witnesses[0], witnesses }));
+}
+
+/** Precomputed per-T-child classification against a target family/name -- shared "Yellow-Line"
+ * logic: `required` when the child's own resolved name is one of `family.tChildPlains`; `bypass`
+ * when (failing that) one of the child's OWN T-children resolves back to `targetName` exactly
+ * (see findBypassMatches); otherwise `isExtra` (an unexplained T-child, once everything has
+ * actually settled -- see `pending`). Moved here (2026-09-03) from collect.ts's private
+ * `TRowInfo`/`computeRowInfos`, generalized the same way findBypassMatches was: `family` supplies
+ * the required-name list, `targetName` is what a bypass must reach (normally `family?.name`, but
+ * kept separate since a caller could reasonably want to check bypass into a DIFFERENT name than
+ * the required list came from). */
+export interface TChildClassification {
+  t: TChild;
+  tGenome: AlphaGenome | FourGeneGenome | undefined;
+  resolvedName: string | null;
+  matches: BypassMatch[] | null;
+  pending: boolean;
+  isExtra: boolean;
+}
+
+export function classifyTChildren(
+  list: TChild[],
+  family: NamedFamily | undefined,
+  targetName: string | null,
+  resolveChild: ResolveChild,
+  depth = 0,
+): TChildClassification[] {
+  return list.map(t => {
+    const tGenome = resolveChild(t.enc, t.genome, depth + 1);
+    const resolvedName = tGenome ? resolvedFoldName(tGenome, resolveChild, depth + 1) : null;
+    const matches = targetName && tGenome ? findBypassMatches(tGenome, targetName, resolveChild, depth + 1) : null;
+    const pending = tGenome === undefined || (targetName !== null && matches === null);
+    const satisfiesRequired = typeof resolvedName === 'string' && !!family && family.tChildPlains.includes(resolvedName);
+    const hasBypass = !!matches && matches.length > 0;
+    const isExtra = !!family && !pending && !satisfiesRequired && !hasBypass;
+    return { t, tGenome, resolvedName, matches, pending, isExtra };
+  });
+}
+
 /** Parse a typed genome query "(R,D,{L},{T'})" into its normalized key + parts, or null if it
  * doesn't match the expected shape. */
 export function parseGenomeQuery(input: string): ParsedGenomeQuery | null {
