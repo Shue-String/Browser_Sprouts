@@ -31,24 +31,6 @@ std::string setStrBare(const std::set<int>& s) {
     return out;
 }
 
-// The movetype-5 ("T", untouched-alpha) children of `p`, canonicalized -- the same children
-// classifyAlphaGenome's own loop would see, re-enumerated here since case 5 isn't part of that
-// function's own (R,D,{L},{T'}) result.
-std::vector<Position> tChildrenOf(const Position& p) {
-    const Position d = p.decompressed();
-    std::vector<Position> out;
-    for (const auto& [child, tag] : childrenAllWithMoveTag(p)) {
-        const EdgeTag et = edgeTagFromMoveTag(d, tag);
-        const auto sparse = specialPointMovetypes(p, et, child);
-        int movetype = -1;
-        for (const auto& [tok, mt] : sparse) {
-            if (tok == ALPHA) { movetype = mt; break; }
-        }
-        if (movetype == 5) out.push_back(canonicalize(child));
-    }
-    return out;
-}
-
 // Named-genome shorthand table. The DATA (per-family R/D/{L}/{T'}/[T] shape) is single-sourced in
 // src/data/genomeDefs.json and reaches this file as genome_defs.generated.hpp -- a mechanical
 // transcription, not a hand-typed copy (see that header's own comment). This function ports
@@ -319,8 +301,8 @@ std::string foldToName(const std::string& plainText) {
 // MAX_GENOME_DEPTH; none of the named genomes above need deeper nesting to be recognized.
 constexpr int kMaxFoldDepth = 2;
 
-std::string genomeTextAt(const Position& p, const SpecDB& db, int depth) {
-    const auto g = classifyAlphaGenome(p, db);
+std::string genomeTextAt(const Position& p, const SpecDB& db, int depth, Token target) {
+    const auto g = classifyAlphaGenome(p, db, target);
     if (!g) return "(unclassified)";
     const std::string head =
         "(" + std::to_string(g->R) + "," + std::to_string(g->D) + ",{" + setStrBare(g->L) + "},{" +
@@ -329,8 +311,8 @@ std::string genomeTextAt(const Position& p, const SpecDB& db, int depth) {
     if (depth >= kMaxFoldDepth) return foldToName(head + ")");
 
     std::set<std::string> tTexts;  // dedup + lexicographic sort, same convention as collect.ts
-    for (const Position& child : tChildrenOf(p))
-        tTexts.insert(genomeTextAt(child, db, depth + 1));
+    for (const Position& child : tChildrenOf(p, target))
+        tTexts.insert(genomeTextAt(child, db, depth + 1, target));
 
     std::string joined;
     bool first = true;
@@ -344,7 +326,22 @@ std::string genomeTextAt(const Position& p, const SpecDB& db, int depth) {
 
 }  // namespace
 
-std::optional<AlphaGenome> classifyAlphaGenome(const Position& p, const SpecDB& db) {
+std::vector<Position> tChildrenOf(const Position& p, Token target) {
+    const Position d = p.decompressed();
+    std::vector<Position> out;
+    for (const auto& [child, tag] : childrenAllWithMoveTag(p)) {
+        const EdgeTag et = edgeTagFromMoveTag(d, tag);
+        const auto sparse = specialPointMovetypes(p, et, child);
+        int movetype = -1;
+        for (const auto& [tok, mt] : sparse) {
+            if (tok == target) { movetype = mt; break; }
+        }
+        if (movetype == 5) out.push_back(canonicalize(child));
+    }
+    return out;
+}
+
+std::optional<AlphaGenome> classifyAlphaGenome(const Position& p, const SpecDB& db, Token target) {
     const Position d = p.decompressed();
     AlphaGenome g;
     std::optional<int> R, D;
@@ -355,7 +352,7 @@ std::optional<AlphaGenome> classifyAlphaGenome(const Position& p, const SpecDB& 
         const auto sparse = specialPointMovetypes(p, et, child);
         int movetype = -1;
         for (const auto& [tok, mt] : sparse) {
-            if (tok == ALPHA) { movetype = mt; break; }
+            if (tok == target) { movetype = mt; break; }
         }
         if (movetype <= 0) continue;  // alpha not classified on this edge -- shouldn't happen
 
@@ -402,8 +399,8 @@ std::string genomeKey(const AlphaGenome& g) {
            setStrBare(g.Tprime) + "})";
 }
 
-std::string fullGenomeText(const Position& p, const SpecDB& db) {
-    return genomeTextAt(p, db, 0);
+std::string fullGenomeText(const Position& p, const SpecDB& db, Token target) {
+    return genomeTextAt(p, db, 0, target);
 }
 
 bool isNamedGenome(const Position& p, const SpecDB& db) {
@@ -452,6 +449,29 @@ bool isYellowCandidate(const Position& candidate, const SpecDB& db, const std::s
         if (presentNames.find(want) == presentNames.end()) return false;
     }
     return noExtras;
+}
+
+std::string alphaGreekToAscii(const std::string& s) {
+    std::string out;
+    for (std::size_t i = 0; i < s.size(); ) {
+        if (i + 1 < s.size() && static_cast<unsigned char>(s[i]) == 0xCE && static_cast<unsigned char>(s[i + 1]) == 0xB1) {
+            out.push_back('a');
+            i += 2;
+        } else {
+            out.push_back(s[i]);
+            ++i;
+        }
+    }
+    return out;
+}
+
+std::string toEmbeddable(const std::string& raw) {
+    std::string out;
+    for (char ch : alphaGreekToAscii(raw)) {
+        if (ch == '[' || ch == ']' || ch == '/' || ch == ' ' || ch == '\t') continue;
+        out.push_back(ch);
+    }
+    return out;
 }
 
 bool isSingleAlpha(const std::string& enc) {

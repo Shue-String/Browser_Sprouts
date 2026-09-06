@@ -72,12 +72,21 @@ target_link_libraries(find_yellow_candidates PRIVATE stalks_core)
 add_executable(find_yellow_candidates_structural tools/find_yellow_candidates_structural.cpp tools/alpha_genome.cpp)
 target_link_libraries(find_yellow_candidates_structural PRIVATE stalks_core)
 
+add_executable(double_crit_probe tools/double_crit_probe.cpp tools/alpha_genome.cpp tools/double_crit_genome.cpp)
+target_link_libraries(double_crit_probe PRIVATE stalks_core)
+
+add_executable(unregistered_double_crit_regions tools/unregistered_double_crit_regions.cpp)
+target_link_libraries(unregistered_double_crit_regions PRIVATE stalks_core)
+
+add_executable(double_crit_candidates_report tools/double_crit_candidates_report.cpp tools/alpha_genome.cpp tools/double_crit_genome.cpp)
+target_link_libraries(double_crit_candidates_report PRIVATE stalks_core)
+
 if(MSVC)
-    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers query_position explain_move query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics dump_collections_roster quick_reduction_counts verify_left_side region_frequency unregistered_left_sides yellow_check find_yellow_candidates find_yellow_candidates_structural)
+    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers query_position explain_move query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics dump_collections_roster quick_reduction_counts verify_left_side region_frequency unregistered_left_sides yellow_check find_yellow_candidates find_yellow_candidates_structural double_crit_probe unregistered_double_crit_regions double_crit_candidates_report)
         target_compile_options(${tgt} PRIVATE /W4 /permissive- /utf-8)
     endforeach()
 else()
-    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers query_position explain_move query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics dump_collections_roster quick_reduction_counts verify_left_side region_frequency unregistered_left_sides yellow_check find_yellow_candidates find_yellow_candidates_structural)
+    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers query_position explain_move query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics dump_collections_roster quick_reduction_counts verify_left_side region_frequency unregistered_left_sides yellow_check find_yellow_candidates find_yellow_candidates_structural double_crit_probe unregistered_double_crit_regions double_crit_candidates_report)
         target_compile_options(${tgt} PRIVATE -Wall -Wextra)
     endforeach()
 endif()

@@ -920,6 +920,14 @@ std::vector<std::string> detachableLeftSideKeys(const Position& p) {
     return out;
 }
 
+std::vector<std::string> detachableDoubleCritLeftSideKeys(const Position& p) {
+    std::vector<std::string> out;
+    for (const auto& c : p.components)
+        for (const auto& cand : enumerateDoubleCrits(c))
+            out.push_back(cand.leftKey);
+    return out;
+}
+
 std::vector<std::string> detachableMultiCritLeftSideKeys(const Position& p) {
     std::vector<std::string> out;
     for (const auto& c : p.components)
@@ -1750,6 +1758,15 @@ bool stepMultiRegion(Position& cur, int& offset) {
 }
 
 }  // namespace
+
+std::set<std::string> registeredDoubleCritKeys() {
+    std::set<std::string> out;
+    for (const auto& [key, match] : doubleCritRegistry()) {
+        (void)match;
+        out.insert(key);
+    }
+    return out;
+}
 
 void resetQuickReductionCounts() {
     quickReductionCountsMutable().clear();

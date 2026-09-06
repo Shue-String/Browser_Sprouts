@@ -4,6 +4,7 @@
 // without re-deriving the movetype-classification loop.
 #include "position.hpp"
 #include "specfile.hpp"
+#include "tokens.hpp"
 
 #include <optional>
 #include <set>
@@ -23,13 +24,25 @@ struct AlphaGenome {
     std::set<int> Tprime;
 };
 
-// Classifies `p` (a canonicalized single-alpha position) using `db` to resolve each move's child
-// value. `db` must be a SpecDB that solved a supergraph containing `p` -- every move's child is
-// then necessarily already in it (see collect_alpha_genetics.cpp's own doc comment on this).
-// Returns nullopt if R or D was never classified (movetype 1/2 not found on any edge) -- shouldn't
-// happen for a genuine single-alpha position reachable in `db`. Prints a warning to stderr (at
-// most once per call) if some child is missing from `db`.
-std::optional<AlphaGenome> classifyAlphaGenome(const stalks::Position& p, const stalks::SpecDB& db);
+// Classifies `p` (a canonicalized position with `target` as its one LIVE special point -- other
+// special points, if any, must already be resolved/gone, as is always true of a genuine
+// single-alpha position) using `db` to resolve each move's child value. `target` defaults to ALPHA
+// for every existing single-alpha call site; double_crit_genome.cpp passes whichever crit token
+// remains live after the OTHER crit of a two-crit position has been resolved away, reusing this
+// same classification rather than a parallel copy of it. `db` must be a SpecDB that solved a
+// supergraph containing `p` -- every move's child is then necessarily already in it (see
+// collect_alpha_genetics.cpp's own doc comment on this). Returns nullopt if R or D was never
+// classified (movetype 1/2 not found on any edge) -- shouldn't happen for a genuine single-crit
+// position reachable in `db`. Prints a warning to stderr (at most once per call) if some child is
+// missing from `db`.
+std::optional<AlphaGenome> classifyAlphaGenome(const stalks::Position& p, const stalks::SpecDB& db,
+                                                stalks::Token target = stalks::ALPHA);
+
+// The movetype-5 ("T", untouched) children of `p` with respect to `target` -- the same children
+// classifyAlphaGenome's own loop would see, re-enumerated here since case 5 isn't part of that
+// function's own (R,D,{L},{T'}) result. Exported (not file-local) so double_crit_genome.cpp can
+// reuse it for the single-crit recursion at its Ra/Rb/Da/Db/La/Lb/T'a/T'b slots.
+std::vector<stalks::Position> tChildrenOf(const stalks::Position& p, stalks::Token target = stalks::ALPHA);
 
 // "(R,D,{L},{T'})" -- the human-facing genome-bucket key text.
 std::string genomeKey(const AlphaGenome& g);
@@ -48,7 +61,10 @@ std::string genomeKey(const AlphaGenome& g);
 // "oplus" split tag. For the tiny left sides this is meant to audit, that distinction is not
 // expected to matter in practice; a mismatch against the live Collect pane's own genome text would
 // only be possible for a T-child that itself happens to be a disconnected sum.
-std::string fullGenomeText(const stalks::Position& p, const stalks::SpecDB& db);
+// `target` defaults to ALPHA for every existing single-alpha call site; see classifyAlphaGenome's
+// own doc comment for why double_crit_genome.cpp passes something else.
+std::string fullGenomeText(const stalks::Position& p, const stalks::SpecDB& db,
+                            stalks::Token target = stalks::ALPHA);
 
 // True iff `p`'s own full recursive fold (fullGenomeText at depth 0) is itself a name, not a bare
 // "(...)" tuple -- i.e. `p` IS a named genome outright, not just containing one as a T-child.
@@ -109,6 +125,16 @@ bool isSingleAlpha(const std::string& enc);
 
 // Distinct lowercase crit-port letters ('a'-'z') appearing in a roster's authored left-side text.
 int distinctPortLetters(const std::string& s);
+
+// Undoes the Collect pane's Greek-alpha display substitution (U+03B1 -> ascii 'a') so text copied
+// straight from the browser's history list can be fed back to the engine's own parser, which
+// expects ascii. Shared by yellow_check and double_crit_probe -- both accept pasted candidate text.
+std::string alphaGreekToAscii(const std::string& s);
+
+// Strips the roster/paper decoration ('[', ']', '/', whitespace) a candidate is typically wrapped
+// in (e.g. "[17a8/") down to the bare component text `parsePosition` expects once re-wrapped in
+// "[...]" (see yellow_check.cpp's own convention). Applies alphaGreekToAscii first.
+std::string toEmbeddable(const std::string& raw);
 
 // The canonical serialized form of every single-crit family's own rep, built by substituting the
 // rep's one crit port with the real ALPHA token and running it through quickCanon -- i.e. exactly
