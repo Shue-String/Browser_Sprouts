@@ -170,6 +170,20 @@ export function canonSync(enc: string): string | null {
   }
 }
 
+/**
+ * As canonSync, but also compresses DisaPoints ('3') -- a display-only convenience for callers
+ * that want the more compact notation and can tolerate two graph-distinct positions rendering
+ * identically (see canonFullOnly in analyze.cpp). Returns null if not yet loaded/unavailable.
+ */
+export function canonFullSync(enc: string): string | null {
+  if (!resolvedMod) return null;
+  try {
+    return resolvedMod.canonFull(enc);
+  } catch {
+    return null;
+  }
+}
+
 /** Canonicalization result carrying per-character provenance — see canonicalizeTrackedProvenanceSync. */
 export interface TrackedProvenanceResult {
   enc: string;
@@ -295,6 +309,17 @@ export async function canon(enc: string): Promise<string> {
   try {
     const mod = await getModule();
     return mod.canon(enc);
+  } catch {
+    return '';
+  }
+}
+
+/** As canon, but also compresses DisaPoints -- see canonFullSync's doc comment. Returns '' if
+ * unavailable/invalid. */
+export async function canonFull(enc: string): Promise<string> {
+  try {
+    const mod = await getModule();
+    return mod.canonFull(enc);
   } catch {
     return '';
   }

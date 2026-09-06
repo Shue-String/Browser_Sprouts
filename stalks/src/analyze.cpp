@@ -427,6 +427,10 @@ std::string canonOnly(const std::string& enc) {
     return serialize(canonicalize(parsePosition(enc)));
 }
 
+std::string canonFullOnly(const std::string& enc) {
+    return serialize(canonicalizeFull(parsePosition(enc)));
+}
+
 std::string childrenTrackedJson(const std::string& enc) {
     try {
         const Position p = parsePosition(enc);

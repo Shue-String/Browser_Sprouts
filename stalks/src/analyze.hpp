@@ -7,6 +7,14 @@ namespace stalks {
 // EncodingError on a malformed encoding. Used by the app's lightweight gameplay-parent recorder.
 std::string canonOnly(const std::string& enc);
 
+// As canonOnly, but via canonicalizeFull (structural=false): also compresses DisaPoints ('3'),
+// which canonOnly's structural canon deliberately leaves decompressed since that compression is
+// lossy for true graph identity (see canon.cpp's allCompressions doc comment). Purely a display
+// convenience for callers that want the more compact/human notation and can tolerate two
+// graph-distinct positions rendering identically (e.g. the T-Tree pane). Throws EncodingError on
+// a malformed encoding, same as canonOnly.
+std::string canonFullOnly(const std::string& enc);
+
 // Analyze a position for the Position Browser. Parses + canonicalizes `enc`, and if every
 // minimal subposition has lives2() <= 24 (i.e. <= 12 lives), builds the exact game graph rooted
 // there and returns a JSON blob with: canon, nimber, min/maxMoves, subposCount, the per-subposition

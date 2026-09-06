@@ -125,10 +125,13 @@ interface Dart {
 interface Cycle {
   darts: number[];
   comp: number;          // connected-component id of the cycle's vertices
-  poly: CanvasPoint[];   // projected boundary polygon
+  poly: CanvasPoint[];   // projected boundary polygon (2D tie-break area only — never used for containment)
   area: number;          // |signed area| of poly
   rep: CanvasPoint;      // a representative interior-ish point (poly centroid)
   leftInside: boolean;   // is a probe just LEFT of the walk inside the polygon?
+  entries: BoundaryEntry[]; // this cycle's boundary entries (same as entriesFromDarts(darts, ...))
+  loop3: SpherePoint[];     // the cycle's raw 3D boundary loop (boundarySphereLoop(entries, state))
+  rep3: SpherePoint | null; // a point just off the boundary, on the side loop3 itself winds +1 around
 }
 
 /** Bearing (CCW angle, tangent-plane) from a point ON the sphere toward another point. */
@@ -297,6 +300,35 @@ function computeSpliceSlots(
     ? v1Candidates
     : v1Candidates.filter(r => touchesVertex(r, moveInfo.v2));
 
+  // windingAround (the sphere-native containment test) sums signed bearing
+  // angles measured from `point`'s own local tangent frame — a formula that
+  // is only reliable close to the loop itself. bearingFrom(point, ·) has a
+  // genuine singularity not just AT point but also at point's ANTIPODE, and a
+  // region whose boundary sprawls across much of the sphere (as any region
+  // bordering a majority/outer face necessarily does) is far more likely to
+  // pass near an arbitrary query's antipode somewhere along its curve than a
+  // small, local region is — so regionContainsPoint silently returns a false
+  // negative for a sprawling region far more often than for a compact one
+  // (confirmed empirically: a moderate-bow stroke's own midpoint tested FALSE
+  // against both the correct outer candidate and the small sibling it should
+  // have lost to, collapsing this whole tie-break to the arbitrary `??
+  // candidates[0]` fallback and splicing the new dart into the wrong ring
+  // position — see the "region acts like it's the same as an untouched
+  // neighbour" bug this was root-caused from). Fix: never test a same-sign
+  // candidate that IS the outer/majority region directly — try every other
+  // candidate first (small regions test reliably), and only reach for an
+  // outer candidate by ELIMINATION (if it's the sole remaining candidate) or,
+  // failing that, still test it directly as a last resort.
+  const pickContaining = (
+    pool: { boundaries: { entries: BoundaryEntry[] }[]; isOuter?: boolean }[],
+  ): { boundaries: { entries: BoundaryEntry[] }[] } | null => {
+    const nonOuter = pool.filter(r => !r.isOuter);
+    const outer = pool.filter(r => r.isOuter);
+    return nonOuter.find(r => regionContainsPoint(state, r, midPos))
+      ?? (outer.length === 1 ? outer[0] : outer.find(r => regionContainsPoint(state, r, midPos)))
+      ?? null;
+  };
+
   let containing: { boundaries: { entries: BoundaryEntry[] }[] } | null = null;
   if (candidates.length === 1) {
     containing = candidates[0];
@@ -304,14 +336,12 @@ function computeSpliceSlots(
     // Both endpoints are shared by more than one region (a joint) — only now
     // does the ambiguity need resolving, and it's done sphere-natively (3D
     // winding number around midPos), never via a projected 2D polygon.
-    containing = candidates.find(r => regionContainsPoint(state, r, midPos)) ?? candidates[0];
+    containing = pickContaining(candidates) ?? candidates[0];
   } else {
     // Neither endpoint's bookkeeping matched anything (shouldn't happen for a
     // validated stroke) — fall back to a sphere-native search over every
     // region, then the outer region, rather than silently giving up.
-    for (const region of state.regions.values()) {
-      if (regionContainsPoint(state, region, midPos)) { containing = region; break; }
-    }
+    containing = pickContaining([...state.regions.values()]);
     if (!containing) {
       for (const region of state.regions.values()) if (region.isOuter) { containing = region; break; }
     }
@@ -584,7 +614,10 @@ export function recomputeRegions(
     // Placeholder — replaced below with a probe-based point once leftInside is
     // final (see the degenerate-self-loop correction, which can still flip it).
     const rep = poly.length ? poly[0] : { px: 0, py: 0 };
-    cycles.push({ darts: seq, comp: find(darts[s].origin), poly, area: Math.abs(signedArea(poly)), rep, leftInside });
+    const entries = entriesFromDarts(seq, darts, pseudoIds);
+    const loop3 = boundarySphereLoop(entries, state);
+    const rep3 = probeInsidePointSphere(seq, darts, pseudoIds, loop3);
+    cycles.push({ darts: seq, comp: find(darts[s].origin), poly, area: Math.abs(signedArea(poly)), rep, leftInside, entries, loop3, rep3 });
   }
 
   // --- Degenerate self-loop correction. A lone self-loop bisects whatever face
@@ -615,22 +648,6 @@ export function recomputeRegions(
     cycles[weaker].leftInside = !cycles[weaker].leftInside;
     trace(`recompute: forced complementary leftInside for degenerate 2-cycle component ` +
       `(comp=${cycles[i].comp}), flipped cycle ${weaker}`);
-  }
-
-  // --- Representative points, now that leftInside is final. A cycle's own
-  //     boundary polygon is IDENTICAL to its complementary twin's (a loop's two
-  //     halves trace the same physical curve), so a naive vertex-average
-  //     centroid sits right on that shared curve — an ambiguous, floating-point-
-  //     sensitive point that can land on the wrong side, or read as "inside"
-  //     some unrelated nearby polygon in containingFace's point-in-polygon test
-  //     (the actual cause of the "sometimes right, sometimes wrong" subposition
-  //     splitting: a small loop's outer-face rep point spuriously testing
-  //     positive against a different, unrelated small loop's polygon). Instead,
-  //     probe a point a few pixels off one edge of the cycle's own curve, on the
-  //     side leftInside says is genuinely interior to THIS cycle — reliable
-  //     regardless of the cycle's shape or where else on the sphere it sits.
-  for (const c of cycles) {
-    c.rep = probeInsidePoint(c.darts, darts, proj, pseudoIds, c.leftInside) ?? c.rep;
   }
 
   // --- Classify each cycle as a bounded face vs its component's exterior cycle.
@@ -675,12 +692,20 @@ export function recomputeRegions(
   }
   const globalOuter: Face = { boundaries: [], isOuter: true };
 
-  // Smallest bounded face (from another component) whose polygon contains pt.
-  const containingFace = (pt: CanvasPoint, ownComp: number | null): number => {
+  // Smallest bounded face (from another component) that sphere-natively contains
+  // pt — a spherical winding-number test against each candidate's own 3D
+  // boundary loop (loop3), never a 2D pointInPolygon on a projected polygon.
+  // A projected test silently breaks once a candidate face is large enough to
+  // fold over on itself in ANY fixed projection (exactly the failure mode a
+  // majority-spanning/outer face hits) — see [[feedback_sphere_native_containment]].
+  // `area` (2D, projected) is kept only as a last-resort tie-break between
+  // multiple genuinely-containing candidates, never as the containment test itself.
+  const containingFace = (pt: SpherePoint | null, ownComp: number | null): number => {
+    if (!pt) return -1;
     let best = -1, bestArea = Infinity;
     for (const ci of boundedIdx) {
       if (ownComp !== null && cycles[ci].comp === ownComp) continue;
-      if (cycles[ci].poly.length >= 3 && pointInPolygon(cycles[ci].poly, pt) && cycles[ci].area < bestArea) {
+      if (cycles[ci].loop3.length >= 2 && windingAround(cycles[ci].loop3, pt) > 0.5 && cycles[ci].area < bestArea) {
         bestArea = cycles[ci].area; best = cycleToFace.get(ci)!;
       }
     }
@@ -690,7 +715,7 @@ export function recomputeRegions(
   // Outer cycles → attach as a boundary of their containing face (a hole).
   cycles.forEach((c, i) => {
     if (!isOuterCycle[i]) return;
-    const fi = containingFace(c.rep, c.comp);
+    const fi = containingFace(c.rep3, c.comp);
     const entries = entriesFromDarts(c.darts, darts, pseudoIds);
     (fi >= 0 ? faces[fi] : globalOuter).boundaries.push(entries);
   });
@@ -699,7 +724,7 @@ export function recomputeRegions(
   for (const v of state.vertices.values()) {
     if (v.isPseudo) continue;
     if ((degree.get(v.id) ?? 0) !== 0) continue;
-    const fi = containingFace(proj(v.pos), null);
+    const fi = containingFace(v.pos, null);
     const entry: BoundaryEntry[] = [{ vertexId: v.id, side: 'only' }];
     (fi >= 0 ? faces[fi] : globalOuter).boundaries.push(entry);
   }
@@ -781,7 +806,10 @@ export function recomputeRegions(
   trace(`recompute: ${state.regions.size} regions, ${state.subpositions.length} subpositions, ${cycles.length} face cycles`);
 }
 
-/** Region id that an outer cycle's darts border (the face it nests into). */
+/** Region id that an outer cycle's darts border (the face it nests into). Sphere-
+ *  native winding number against each candidate's own 3D loop — see containingFace
+ *  above and [[feedback_sphere_native_containment]] for why a projected
+ *  pointInPolygon test is unsound here. */
 function outerCycleFace(
   i: number,
   cycles: Cycle[],
@@ -789,10 +817,12 @@ function outerCycleFace(
   cycleToFace: Map<number, number>,
   globalOuterFace: number,
 ): RegionId {
+  const pt = cycles[i].rep3;
+  if (!pt) return globalOuterFace;
   let best = -1, bestArea = Infinity;
   for (const ci of boundedIdx) {
     if (cycles[ci].comp === cycles[i].comp) continue;
-    if (cycles[ci].poly.length >= 3 && pointInPolygon(cycles[ci].poly, cycles[i].rep) && cycles[ci].area < bestArea) {
+    if (cycles[ci].loop3.length >= 2 && windingAround(cycles[ci].loop3, pt) > 0.5 && cycles[ci].area < bestArea) {
       bestArea = cycles[ci].area; best = cycleToFace.get(ci)!;
     }
   }
@@ -948,46 +978,50 @@ function probeLeftInside(
 }
 
 /**
- * A single point a few pixels off the cycle's own boundary curve, on whichever
- * side `leftInside` (the cycle's final, possibly-corrected interior side) says
- * is genuinely interior — used as containingFace's containment-test point
- * instead of a naive vertex-average centroid. A loop's bounded face and its
+ * A single 3D point a small angular distance off the cycle's own boundary
+ * curve, on whichever tangent-plane side the cycle's OWN loop3 winds +1
+ * around — used as containingFace's/outerCycleFace's containment-test point
+ * instead of a naive vertex-average centroid (a bounded face and its
  * complementary outer face share the exact same physical curve, so a centroid
- * of that curve sits right on the shared boundary: an ambiguous point whose
- * classification is at the mercy of floating-point noise, and which can read
- * as "inside" some unrelated nearby polygon. A point just off the curve, on
- * the side this specific cycle actually occupies, has no such ambiguity.
+ * of that curve sits right on the shared boundary: an ambiguous point that can
+ * read as "inside" some unrelated nearby region). Sphere-native and
+ * projection-independent throughout — see [[feedback_sphere_native_containment]].
+ * Trying both tangent-plane offset directions and keeping whichever this
+ * cycle's own winding number agrees is interior avoids needing any hand-picked
+ * "which side is left" sign convention — loop3's own orientation is already
+ * ground truth.
  */
-function probeInsidePoint(
+function probeInsidePointSphere(
   seq: number[],
   darts: Dart[],
-  project: (p: SpherePoint) => CanvasPoint,
   pseudoIds: Set<VertexId>,
-  leftInside: boolean,
-): CanvasPoint | null {
-  const PROBE = 3;
+  loop3: SpherePoint[],
+): SpherePoint | null {
+  const PROBE = 0.01; // radians
   for (const di of seq) {
     const d = darts[di];
     if (pseudoIds.has(d.origin)) continue; // pseudo-vertex dart: no geometry to probe
     const pts = d.origin === d.edge.v1 ? d.edge.points : [...d.edge.points].reverse();
     if (pts.length < 2) continue;
     const mi = Math.floor(pts.length / 2);
-    const A = project(pts[Math.max(0, mi - 1)]);
-    const B = project(pts[Math.min(pts.length - 1, mi + 1)]);
-    let tx = B.px - A.px, ty = B.py - A.py;
-    const L = Math.hypot(tx, ty);
-    if (L < 1e-6) continue;
-    tx /= L; ty /= L;
-    const M = project(pts[mi]);
-    // Same "conventional side" as probeLeftInside's vote (left, flipped for a
-    // self-loop's reverse dart); leftInside tells us whether that side is
-    // actually this cycle's interior, or — after the degenerate-loop
-    // correction may have flipped it — the opposite side is.
-    const isSelfLoopReverse = d.edge.v1 === d.edge.v2 && d.idx > d.twin;
-    const useLeftOffset = isSelfLoopReverse ? !leftInside : leftInside;
-    const sx = useLeftOffset ? ty : -ty;
-    const sy = useLeftOffset ? -tx : tx;
-    return { px: M.px + sx * PROBE, py: M.py + sy * PROBE };
+    const A = pts[Math.max(0, mi - 1)] as V3;
+    const B = pts[Math.min(pts.length - 1, mi + 1)] as V3;
+    const M = pts[mi] as V3;
+    let t: V3 = { x: B.x - A.x, y: B.y - A.y, z: B.z - A.z };
+    const tDotM = dot(t, M);
+    t = { x: t.x - tDotM * M.x, y: t.y - tDotM * M.y, z: t.z - tDotM * M.z };
+    const L = Math.hypot(t.x, t.y, t.z);
+    if (L < 1e-9) continue;
+    t = { x: t.x / L, y: t.y / L, z: t.z / L };
+    const side = normalize(cross(M, t)) as V3;
+    for (const sign of [1, -1]) {
+      const cand = normalize({
+        x: M.x + side.x * sign * PROBE,
+        y: M.y + side.y * sign * PROBE,
+        z: M.z + side.z * sign * PROBE,
+      });
+      if (windingAround(loop3, cand) > 0.5) return cand;
+    }
   }
   return null;
 }

@@ -23,7 +23,7 @@
  * top-down recursive pass: required-ness isn't always known the first time a node is reached.
  */
 
-import { analyze } from '../engine/stalks';
+import { analyze, canonFull } from '../engine/stalks';
 import {
   type AlphaGenome,
   type FourGeneGenome,
@@ -57,19 +57,42 @@ function byEncGenome(enc: string): AlphaGenome | undefined {
   return hit ? { R: hit.R, D: hit.D, L: hit.L, Tprime: hit.Tprime, T: hit.T } : undefined;
 }
 
-/** DisaPoint (tokens.hpp's DISA, encoding digit '3') and Split point (SPLIT, digit '5') are the
- * two "compressed pseudo-point" token kinds the encoding grammar represents as a single decimal
- * digit (encoding.hpp: "digits 0-9, both base and compression tokens" -- no multi-digit numbers
- * anywhere in this format), so a literal count of '3'/'5' characters across the whole encoding is
- * exactly a count of DisaPoints/Split points, with no risk of matching part of a larger number.
- * Used only for the T-Tree pane's Y-axis grouping -- verified against the default example and a
- * couple of known small positions in the browser during implementation, not hand-derived. */
-export function adjustedLivesOf(enc: string, lives: number): number {
-  let count = 0;
-  for (const ch of enc) {
-    if (ch === '3' || ch === '5') count++;
+/** Per-token life value (tokens.hpp's leftSideLives2(), halved -- see that function's own doc
+ * comment: "used exclusively for left-side life counts", exactly this feature's scope, and it
+ * differs from the engine's general-purpose lives2() only for DisaPoint (1 life instead of 2) and
+ * Split point (2 lives instead of 3)). A joint's two visit characters ('7' then '8') split 1 life
+ * as 0.5 apiece rather than the engine's own 1-then-0 split; since they always appear in a
+ * matched pair, the AGGREGATE contribution per joint is identical either way -- this is just a
+ * friendlier per-character accounting for the same total. A membrane letter is likewise 0.5 (it
+ * always appears in a matched pair too, one occurrence per side). Special-point letters ('a'-'j',
+ * the open-crit marker this whole feature is scoped to) and delimiters (',', '|') contribute 0. */
+const TOKEN_LIFE: Record<string, number> = { '0': 3, '1': 2, '2': 1, '3': 1, '4': 2, '5': 2, '6': 3 };
+
+/** Y-axis grouping for the T-Tree pane: the sum of `fullEnc`'s own token life-values (see
+ * TOKEN_LIFE), minus 1 for each subposition beyond the first -- '+' (encoding.cpp's serialize())
+ * is exactly the separator between components/subpositions, so a literal '+' count is
+ * (subposition count - 1). `fullEnc` must be the FULLY compressed form (DisaPoints included, i.e.
+ * canonFull's output) -- the structural id itself deliberately leaves DisaPoints decompressed
+ * (see canonFullSync's doc comment), so summing token values over the structural id would silently
+ * never see a '3' at all. Verified against the default example and a couple of known small
+ * positions in the browser during implementation, not hand-derived. */
+export function adjustedLivesOf(fullEnc: string): number {
+  let total = 0;
+  let subpositions = 1;
+  for (const ch of fullEnc) {
+    if (ch === '7' || ch === '8' || (ch >= 'A' && ch <= 'Z')) total += 0.5;
+    else if (ch === '+') subpositions++;
+    else total += TOKEN_LIFE[ch] ?? 0;
   }
-  return lives - count;
+  return total - (subpositions - 1);
+}
+
+/** Resolves `enc` to its fully-compressed form (see adjustedLivesOf) and sums its token lives.
+ * Falls back to treating `enc` itself as already-compressed if the engine call fails for any
+ * reason (better an approximate row than a thrown error). */
+async function adjustedLivesOfEnc(enc: string): Promise<number> {
+  const full = await canonFull(enc);
+  return adjustedLivesOf(full || enc);
 }
 
 /** Own, independent genome cache -- deliberately NOT collect.ts's `lookupGenome` (see this
@@ -198,6 +221,7 @@ export async function buildTTree(rootEncRaw: string): Promise<TTreeResult> {
     const genome = await warmCache(enc, embedded, 0);
     if (!genome || !isFullGenome(genome)) return null;
     const lives = await livesOf(enc);
+    const adjustedLives = await adjustedLivesOfEnc(enc);
     const name = resolvedFoldName(genome, cacheResolveChild);
     const node: TTreeNode = {
       id: enc,
@@ -205,7 +229,7 @@ export async function buildTTree(rootEncRaw: string): Promise<TTreeResult> {
       name,
       requiredByAny: false,
       lives,
-      adjustedLives: adjustedLivesOf(enc, lives),
+      adjustedLives,
     };
     nodes.set(enc, node);
     return node;
@@ -238,7 +262,7 @@ export async function buildTTree(rootEncRaw: string): Promise<TTreeResult> {
   // (from, to, kind, via) identity before being added.
   const edgeKeys = new Set<string>();
   function addEdge(edge: TTreeEdge): void {
-    const key = `${edge.from} ${edge.to} ${edge.kind} ${edge.via ?? ''}`;
+    const key = `${edge.from} ${edge.to} ${edge.kind} ${edge.via ?? ''}`;
     if (edgeKeys.has(key)) return;
     edgeKeys.add(key);
     edges.push(edge);
@@ -296,40 +320,80 @@ function markRequired(node: TTreeNode, queue: string[]): void {
   queue.push(node.id);
 }
 
-/** A node's row (0 = top, i.e. highest adjustedLives) and column (0-based, left to right within
- * that row) -- integer grid positions only; the SVG renderer and the TikZ exporter each convert
- * these to their own pixel/LaTeX-unit coordinates from the SAME grid, which is what keeps the two
- * relationally consistent without needing to be pixel-identical (per the user's own "doesn't have
- * to be an exact match, just relative to each other" request). */
+/** A node's row (0 = top) and column (0-based, left to right within that row) -- integer grid
+ * positions only; the SVG renderer and the TikZ exporter each convert these to their own
+ * pixel/LaTeX-unit coordinates from the SAME grid, which is what keeps the two relationally
+ * consistent without needing to be pixel-identical (per the user's own "doesn't have to be an
+ * exact match, just relative to each other" request). */
 export interface TTreeLayoutPos {
   row: number;
   col: number;
 }
 
 export interface TTreeLayout {
-  /** Row 0 first (highest adjustedLives); only adjustedLives values actually present in the graph
-   * get a row -- an unoccupied level in between is simply skipped, per the user's own "arrows may
+  /** Row 0 first; only levels actually present (post row-monotonicity fixup, see layoutTTree) get
+   * a row -- an unoccupied level in between is simply skipped, per the user's own "arrows may
    * traverse more than one level" allowance. */
   rowLevels: number[];
   positions: Map<string, TTreeLayoutPos>;
 }
 
-/** Buckets nodes into rows by descending adjustedLives, then runs a small fixed number of
- * barycenter-ordering passes (the standard Sugiyama-framework crossing-reduction heuristic) to
- * choose each row's left-to-right column order -- alternating downward and upward sweeps so a
- * node's position accounts for both its parents' and its children's current columns. This is a
- * heuristic, not a globally-optimal crossing minimizer (the user was explicit that's fine: "if
- * there's no easy route, I'm fine if we skip this -- I can hand-adjust the graph myself"). */
+/** adjustedLives is a "how many lives-equivalent remain" reading, not a move-depth counter -- it's
+ * NOT guaranteed to strictly decrease along a real edge, since DisaPoint/Split compression can
+ * introduce a pseudo-point the parent didn't have even though raw `lives` always strictly drops
+ * (every real move strictly reduces raw lives). Left as pure adjustedLives buckets, an edge could
+ * end up pointing sideways or even upward in the rendered tree -- which is exactly what the user
+ * reported seeing as a curve that heads up before turning back down. This walks nodes in
+ * descending raw `lives` order (a valid topological order, since lives(parent) > lives(child) is
+ * always true) and bumps a node's level to strictly below every node that must sit above it --
+ * its `from` for a required/extra edge, and BOTH `from` and `via` for a bypass (there's no
+ * separate edge object for the implied from->via link) -- so every real edge in the final layout
+ * points strictly downward, while nodes that don't need bumping keep their natural adjustedLives
+ * grouping. */
+function computeLevels(graph: TTreeGraph): Map<string, number> {
+  const mustBeBelow = new Map<string, string[]>();
+  const addBelow = (below: string, above: string) => {
+    (mustBeBelow.get(below) ?? mustBeBelow.set(below, []).get(below)!).push(above);
+  };
+  for (const e of graph.edges) {
+    if (e.kind === 'bypass' && e.via) {
+      addBelow(e.via, e.from);
+      addBelow(e.to, e.via);
+    } else {
+      addBelow(e.to, e.from);
+    }
+  }
+
+  const order = [...graph.nodes.values()].sort((a, b) => b.lives - a.lives);
+  const level = new Map<string, number>();
+  for (const node of order) {
+    let lvl = -node.adjustedLives;
+    for (const above of mustBeBelow.get(node.id) ?? []) {
+      const aboveLevel = level.get(above);
+      if (aboveLevel !== undefined) lvl = Math.max(lvl, aboveLevel + 1);
+    }
+    level.set(node.id, lvl);
+  }
+  return level;
+}
+
+/** Buckets nodes into rows by ascending (row-monotonicity-corrected, see computeLevels) level,
+ * then runs a small fixed number of barycenter-ordering passes (the standard Sugiyama-framework
+ * crossing-reduction heuristic) to choose each row's left-to-right column order -- alternating
+ * downward and upward sweeps so a node's position accounts for both its parents' and its
+ * children's current columns. This is a heuristic, not a globally-optimal crossing minimizer (the
+ * user was explicit that's fine: "if there's no easy route, I'm fine if we skip this -- I can
+ * hand-adjust the graph myself"). */
 export function layoutTTree(graph: TTreeGraph): TTreeLayout {
-  const levelSet = new Set<number>();
-  for (const node of graph.nodes.values()) levelSet.add(node.adjustedLives);
-  const rowLevels = [...levelSet].sort((a, b) => b - a);
+  const level = computeLevels(graph);
+  const levelSet = new Set<number>(level.values());
+  const rowLevels = [...levelSet].sort((a, b) => a - b);
   const rowOf = new Map<number, number>();
-  rowLevels.forEach((level, i) => rowOf.set(level, i));
+  rowLevels.forEach((lvl, i) => rowOf.set(lvl, i));
 
   const rows: string[][] = rowLevels.map(() => []);
   for (const node of graph.nodes.values()) {
-    rows[rowOf.get(node.adjustedLives) as number].push(node.id);
+    rows[rowOf.get(level.get(node.id) as number) as number].push(node.id);
   }
 
   const col = new Map<string, number>();
@@ -370,9 +434,11 @@ export function layoutTTree(graph: TTreeGraph): TTreeLayout {
 }
 
 /** Emits TikZ matching the user's own example conventions -- `edge`/`layersep` tikzset, `\node`
- * per position, `\draw[edge]` for required arrows, a curved `to[bend]` for bypass arrows (visually
- * passing near the bypassed node it skips), and a distinct dashed style for unexplained "extra"
- * edges. Coordinates come straight from `layout`'s row/col grid (same one the SVG view uses), so
+ * per position, `\draw[edge]` for required arrows, a distinct dashed style for unexplained "extra"
+ * edges, and a bypass as TWO real arrows (matching the SVG pane's own color scheme): red
+ * `\draw[bypassed]` from the parent to the T-child that gets bypassed, then blue
+ * `\draw[resolve]` from that bypassed child on to the grandchild that actually resolves the
+ * family. Coordinates come straight from `layout`'s row/col grid (same one the SVG view uses), so
  * the two stay relationally consistent -- not necessarily pixel-identical, per the user's own
  * request. */
 /** One label line (a position encoding or a genome name) into LaTeX math-mode text: α/⊕ as their
@@ -404,7 +470,8 @@ export function buildTikz(graph: TTreeGraph, layout: TTreeLayout, labelOf: (node
   lines.push('\\begin{tikzpicture}');
   lines.push('  \\tikzset{');
   lines.push('    edge/.style = {->,> = latex},');
-  lines.push('    bypass/.style = {->,> = latex,color=purple!70!black},');
+  lines.push('    bypassed/.style = {->,> = latex,color=red},');
+  lines.push('    resolve/.style = {->,> = latex,color=blue},');
   lines.push('    extra/.style = {->,> = latex,dashed,color=gray},');
   lines.push('  }');
   lines.push('');
@@ -422,20 +489,16 @@ export function buildTikz(graph: TTreeGraph, layout: TTreeLayout, labelOf: (node
   lines.push('');
 
   for (const e of graph.edges) {
-    const style = e.kind === 'required' ? 'edge' : e.kind === 'bypass' ? 'bypass' : 'extra';
-    if (e.kind === 'bypass' && e.via) {
-      // Route the curve's own control point through the bypassed child's actual position (not a
-      // fixed generic bend angle) -- otherwise two bypasses from the same node into the same
-      // target, through two DIFFERENT bypassed children, would draw as identical-looking curves.
-      const viaPos = layout.positions.get(e.via);
-      if (viaPos) {
-        const cx = xOf(viaPos.col) + 0.35;
-        const cy = yOf(viaPos.row);
-        lines.push(`  \\draw[${style}] (${nodeIdOf(e.from)}) .. controls (${cx.toFixed(2)}, ${cy.toFixed(2)}) .. (${nodeIdOf(e.to)});`);
-        continue;
-      }
+    if (e.kind === 'required') {
+      lines.push(`  \\draw[edge] (${nodeIdOf(e.from)}) to (${nodeIdOf(e.to)});`);
+    } else if (e.kind === 'extra') {
+      lines.push(`  \\draw[extra] (${nodeIdOf(e.from)}) to (${nodeIdOf(e.to)});`);
+    } else if (e.via) {
+      lines.push(`  \\draw[bypassed] (${nodeIdOf(e.from)}) to (${nodeIdOf(e.via)});`);
+      lines.push(`  \\draw[resolve] (${nodeIdOf(e.via)}) to (${nodeIdOf(e.to)});`);
+    } else {
+      lines.push(`  \\draw[bypassed] (${nodeIdOf(e.from)}) to (${nodeIdOf(e.to)});`);
     }
-    lines.push(`  \\draw[${style}] (${nodeIdOf(e.from)}) to (${nodeIdOf(e.to)});`);
   }
 
   lines.push('\\end{tikzpicture}');

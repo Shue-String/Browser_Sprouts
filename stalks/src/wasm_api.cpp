@@ -27,6 +27,16 @@ std::string canonSafe(const std::string& enc) {
     }
 }
 
+// As canonSafe, but via canonFullOnly (also compresses DisaPoints) -- see that function's doc
+// comment.
+std::string canonFullSafe(const std::string& enc) {
+    try {
+        return stalks::canonFullOnly(enc);
+    } catch (...) {
+        return std::string();
+    }
+}
+
 // --- Minimal nested-integer-array JSON reader ----------------------------------------------
 //
 // The only structured input applyMoveTracked takes is the parent provenance: a 4-level nested
@@ -305,6 +315,7 @@ EMSCRIPTEN_BINDINGS(stalks_module) {
     emscripten::function("analyzeFull", &stalks::analyzeFullJson);
     emscripten::function("analyzeNimber", &stalks::analyzeNimberJson);
     emscripten::function("canon", &canonSafe);
+    emscripten::function("canonFull", &canonFullSafe);
     emscripten::function("applyMoveTracked", &applyMoveTracked);
     emscripten::function("canonicalizeTrackedProvenance", &canonicalizeTrackedProvenance);
     emscripten::function("quickCanonOf", &quickCanonOf);

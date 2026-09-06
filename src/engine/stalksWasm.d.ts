@@ -15,6 +15,12 @@ export interface StalksModule {
   /** Canonicalize an encoding; returns the bracketless canonical serialization ("" on parse error). */
   canon(enc: string): string;
   /**
+   * As canon, but also compresses DisaPoints ('3') -- canon's structural canon leaves those
+   * decompressed since the compression is lossy for true graph identity. Display-only convenience
+   * (see canonFullOnly in analyze.cpp); "" on parse error.
+   */
+  canonFull(enc: string): string;
+  /**
    * Apply one tracked move to a decompressed parent and return the decompressed-canonical child
    * encoding plus provenance, as JSON (see applyMoveTracked in wasm_api.cpp / stalks.ts). `psrcJson`
    * is a 4-level nested int array [component][region][boundary][token] parallel to the parent.
