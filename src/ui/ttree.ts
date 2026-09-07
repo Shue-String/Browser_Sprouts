@@ -15,9 +15,9 @@ import {
   type TTreeLayout,
   type TTreeLayoutPos,
   type TTreeNode,
-  buildTikz,
   buildTTree,
   layoutTTree,
+  toLatexMath,
 } from '../model/ttree';
 import { bracketDisplaySlash, markAlpha } from './collect';
 
@@ -374,53 +374,43 @@ function escapeXml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function renderSvg(graph: TTreeGraph, layout: TTreeLayout): string {
-  const rects = computeNodeRects(graph, layout);
-  // +20 for the rare detour bow that clears the rightmost box in a row (see edgePathD) -- still
-  // within GAP_X's own gap before a neighboring box would start, so this never has to grow with
-  // graph size.
-  let maxRight = MARGIN;
-  for (const r of rects.values()) maxRight = Math.max(maxRight, r.x + r.w);
-  const width = maxRight + MARGIN + 20;
-  const height = MARGIN * 2 + layout.rowLevels.length * ROW_PX;
+/** The four T-Tree edge kinds' shared styling, keyed once so the SVG pane and the TikZ exporter
+ * (buildTikzExport, below) can never drift apart on what a "required"/"bypassed"/"resolve"/"extra"
+ * edge looks like -- each renderer only picks its own `svgMarker` or `tikzStyle` field out of the
+ * same table. */
+type EdgeStyleKind = 'required' | 'bypassed' | 'resolve' | 'extra';
+const EDGE_STYLE: Record<EdgeStyleKind, { stroke: string; svgMarker: string; tikzStyle: string }> = {
+  required: { stroke: '#1a1a1a', svgMarker: 'ttree-arrow-req', tikzStyle: 'edge' },
+  bypassed: { stroke: '#DD1111', svgMarker: 'ttree-arrow-bypassed', tikzStyle: 'bypassed' },
+  resolve: { stroke: '#1565C0', svgMarker: 'ttree-arrow-resolve', tikzStyle: 'resolve' },
+  extra: { stroke: '#888', svgMarker: 'ttree-arrow-extra', tikzStyle: 'extra' },
+};
 
-  const parts: string[] = [];
-  parts.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">`,
-  );
-  parts.push(`
-    <defs>
-      <marker id="ttree-arrow-req" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a" />
-      </marker>
-      <marker id="ttree-arrow-bypassed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0,0 L10,5 L0,10 z" fill="#DD1111" />
-      </marker>
-      <marker id="ttree-arrow-resolve" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0,0 L10,5 L0,10 z" fill="#1565C0" />
-      </marker>
-      <marker id="ttree-arrow-extra" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0,0 L10,5 L0,10 z" fill="#888" />
-      </marker>
-    </defs>
-  `);
+interface SegmentSpec { from: string; to: string; styleKind: EdgeStyleKind; dashed: boolean }
+interface PlacedSegment extends SegmentSpec { a: Pt; b: Pt; blockers: Rect[]; path: PathSpec }
 
-  interface SegmentSpec { from: string; to: string; stroke: string; marker: string; dashed: boolean }
+/** Turns a graph's raw edges into final, routed, pixel-space segments -- dedup, same-pair
+ * parallel fan-out, detour bows around blocking boxes, crossing-minimization, and the
+ * shared-origin straight/curve nudge, all exactly as the SVG pane needs them. Shared verbatim with
+ * the TikZ exporter (buildTikzExport, below) so the two renderers can never draw a different graph
+ * shape from the same underlying tree -- only their final coordinate space and stroke syntax
+ * differ. */
+function buildPlacedSegments(graph: TTreeGraph, layout: TTreeLayout, rects: Map<string, Rect>): PlacedSegment[] {
   const segments: SegmentSpec[] = [];
   for (const e of graph.edges) {
     if (e.kind === 'required') {
-      segments.push({ from: e.from, to: e.to, stroke: '#1a1a1a', marker: 'ttree-arrow-req', dashed: false });
+      segments.push({ from: e.from, to: e.to, styleKind: 'required', dashed: false });
     } else if (e.kind === 'extra') {
-      segments.push({ from: e.from, to: e.to, stroke: '#888', marker: 'ttree-arrow-extra', dashed: true });
+      segments.push({ from: e.from, to: e.to, styleKind: 'extra', dashed: true });
     } else if (e.via) {
       // Two real hops, each drawn (and detour-routed) independently, per the user's own color
       // scheme: red from the parent to the child that gets bypassed, blue from that bypassed
       // child on to the grandchild that actually satisfies the family (i.e. that allows the
       // bypass).
-      segments.push({ from: e.from, to: e.via, stroke: '#DD1111', marker: 'ttree-arrow-bypassed', dashed: false });
-      segments.push({ from: e.via, to: e.to, stroke: '#1565C0', marker: 'ttree-arrow-resolve', dashed: false });
+      segments.push({ from: e.from, to: e.via, styleKind: 'bypassed', dashed: false });
+      segments.push({ from: e.via, to: e.to, styleKind: 'resolve', dashed: false });
     } else {
-      segments.push({ from: e.from, to: e.to, stroke: '#DD1111', marker: 'ttree-arrow-bypassed', dashed: false });
+      segments.push({ from: e.from, to: e.to, styleKind: 'bypassed', dashed: false });
     }
   }
 
@@ -431,7 +421,7 @@ function renderSvg(graph: TTreeGraph, layout: TTreeLayout): string {
   // the first blue line is relevant" call).
   const seenSegments = new Set<string>();
   const dedupedSegments = segments.filter(s => {
-    const key = `${s.from} ${s.to} ${s.stroke}`;
+    const key = `${s.from} ${s.to} ${s.styleKind}`;
     if (seenSegments.has(key)) return false;
     seenSegments.add(key);
     return true;
@@ -448,7 +438,6 @@ function renderSvg(graph: TTreeGraph, layout: TTreeLayout): string {
   }
   const PARALLEL_SPACING = 5;
 
-  interface PlacedSegment extends SegmentSpec { a: Pt; b: Pt; blockers: Rect[]; path: PathSpec }
   const placed: PlacedSegment[] = [];
   for (const group of bySamePair.values()) {
     group.forEach((s, i) => {
@@ -519,11 +508,48 @@ function renderSvg(graph: TTreeGraph, layout: TTreeLayout): string {
     }
   }
 
+  return placed;
+}
+
+function renderSvg(graph: TTreeGraph, layout: TTreeLayout): string {
+  const rects = computeNodeRects(graph, layout);
+  // +20 for the rare detour bow that clears the rightmost box in a row (see edgePathD) -- still
+  // within GAP_X's own gap before a neighboring box would start, so this never has to grow with
+  // graph size.
+  let maxRight = MARGIN;
+  for (const r of rects.values()) maxRight = Math.max(maxRight, r.x + r.w);
+  const width = maxRight + MARGIN + 20;
+  const height = MARGIN * 2 + layout.rowLevels.length * ROW_PX;
+
+  const parts: string[] = [];
+  parts.push(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">`,
+  );
+  parts.push(`
+    <defs>
+      <marker id="ttree-arrow-req" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a" />
+      </marker>
+      <marker id="ttree-arrow-bypassed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#DD1111" />
+      </marker>
+      <marker id="ttree-arrow-resolve" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#1565C0" />
+      </marker>
+      <marker id="ttree-arrow-extra" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#888" />
+      </marker>
+    </defs>
+  `);
+
+  const placed = buildPlacedSegments(graph, layout, rects);
+
   // Edges first, so node boxes paint over any edge that passes near their own center.
   for (const seg of placed) {
+    const style = EDGE_STYLE[seg.styleKind];
     const dash = seg.dashed ? ' stroke-dasharray="5,4"' : '';
     parts.push(
-      `<path d="${pathD(seg.path)}" fill="none" stroke="${seg.stroke}" stroke-width="1.6"${dash} marker-end="url(#${seg.marker})" />`,
+      `<path d="${pathD(seg.path)}" fill="none" stroke="${style.stroke}" stroke-width="1.6"${dash} marker-end="url(#${style.svgMarker})" />`,
     );
   }
 
@@ -547,6 +573,94 @@ function renderSvg(graph: TTreeGraph, layout: TTreeLayout): string {
 
   parts.push('</svg>');
   return parts.join('\n');
+}
+
+// Pixel-to-cm scale for the TikZ exporter, below -- chosen so ROW_PX's own 130px maps to ~2.4cm,
+// matching what used to be the export's own hand-picked ROW_UNIT, so an existing pasted figure's
+// rough scale doesn't jump on re-export. Applies uniformly to x and y so relative proportions
+// (row spacing vs. box width vs. gaps) come through unchanged from the pane's own layout.
+const PX_TO_CM = 0.0185;
+
+function toLatexPt(p: Pt): { x: number; y: number } {
+  // TikZ's y-axis points up; this pane's (and the SVG's) own row/pixel space points down.
+  return { x: p.x * PX_TO_CM, y: -p.y * PX_TO_CM };
+}
+const fmt = (n: number): string => n.toFixed(3);
+
+/** TikZ export matching the SVG pane pixel-for-pixel in everything but literal unit size: same
+ * `computeNodeRects` box positions/sizes, same `buildPlacedSegments` edge routing (dedup, bows,
+ * crossing-minimization, shared-origin nudges), same required/bypassed/resolve/extra coloring
+ * (EDGE_STYLE), and the same flagged-node red styling for an unnamed-but-required position. Edges
+ * are emitted as raw coordinates (straight `--` or a cubic `.. controls .. and ..`) rather than
+ * named-node connections, since a fanned-out parallel duplicate or a nudged shared-origin start
+ * point is deliberately offset from the node's own center -- exactly mirroring how the SVG path
+ * itself is built from `centerOfRect`-derived points, not anchors. */
+function buildTikzExport(graph: TTreeGraph, layout: TTreeLayout): string {
+  const rects = computeNodeRects(graph, layout);
+  const placed = buildPlacedSegments(graph, layout, rects);
+
+  const lines: string[] = [];
+  lines.push('% Requires \\usepackage{tikz} and \\usepackage{xcolor} in the preamble.');
+  lines.push('\\begin{tikzpicture}');
+  lines.push('  \\definecolor{ttreeReq}{HTML}{1A1A1A}');
+  lines.push('  \\definecolor{ttreeBypass}{HTML}{DD1111}');
+  lines.push('  \\definecolor{ttreeResolve}{HTML}{1565C0}');
+  lines.push('  \\definecolor{ttreeExtra}{HTML}{888888}');
+  lines.push('  \\definecolor{ttreeBoxBorder}{HTML}{444444}');
+  lines.push('  \\definecolor{ttreeFlagBorder}{HTML}{C0392B}');
+  lines.push('  \\definecolor{ttreeFlagFill}{HTML}{FFF3F3}');
+  lines.push('  \\definecolor{ttreeNameText}{HTML}{555555}');
+  lines.push('  \\tikzset{');
+  lines.push('    edge/.style = {->,>=latex,color=ttreeReq,line width=1.2pt},');
+  lines.push('    bypassed/.style = {->,>=latex,color=ttreeBypass,line width=1.2pt},');
+  lines.push('    resolve/.style = {->,>=latex,color=ttreeResolve,line width=1.2pt},');
+  lines.push('    extra/.style = {->,>=latex,color=ttreeExtra,line width=1.2pt,dashed},');
+  lines.push('    ttreebox/.style = {rectangle,rounded corners=2pt,draw=ttreeBoxBorder,line width=0.9pt,fill=white,align=center},');
+  lines.push('    ttreeboxflag/.style = {rectangle,rounded corners=2pt,draw=ttreeFlagBorder,line width=0.9pt,fill=ttreeFlagFill,align=center},');
+  lines.push('  }');
+  lines.push('');
+
+  // Edges first, so the (opaque-filled) node boxes drawn after paint over any edge that passes
+  // near their own center -- same z-order reasoning as the SVG pane's own comment above.
+  for (const seg of placed) {
+    const style = EDGE_STYLE[seg.styleKind].tikzStyle;
+    if (seg.path.kind === 'line') {
+      const a = toLatexPt(seg.path.a);
+      const b = toLatexPt(seg.path.b);
+      lines.push(`  \\draw[${style}] (${fmt(a.x)},${fmt(a.y)}) -- (${fmt(b.x)},${fmt(b.y)});`);
+    } else {
+      const a = toLatexPt(seg.path.a);
+      const c1 = toLatexPt(seg.path.c1);
+      const c2 = toLatexPt(seg.path.c2);
+      const b = toLatexPt(seg.path.b);
+      lines.push(
+        `  \\draw[${style}] (${fmt(a.x)},${fmt(a.y)}) .. controls (${fmt(c1.x)},${fmt(c1.y)}) and (${fmt(c2.x)},${fmt(c2.y)}) .. (${fmt(b.x)},${fmt(b.y)});`,
+      );
+    }
+  }
+  lines.push('');
+
+  for (const node of graph.nodes.values()) {
+    const rect = rects.get(node.id);
+    if (!rect) continue;
+    const center = toLatexPt(centerOfRect(rect));
+    const w = fmt(rect.w * PX_TO_CM);
+    const h = fmt(rect.h * PX_TO_CM);
+    const flagged = node.name === null && node.requiredByAny;
+    const boxStyle = flagged ? 'ttreeboxflag' : 'ttreebox';
+    const label = nodeLabel(node)
+      .map((line, i) => {
+        const mathText = toLatexMath(line);
+        return i === 0 ? `$${mathText}$` : `{\\footnotesize\\color{ttreeNameText}$${mathText}$}`;
+      })
+      .join(' \\\\ ');
+    lines.push(
+      `  \\node[${boxStyle}, minimum width=${w}cm, minimum height=${h}cm] at (${fmt(center.x)},${fmt(center.y)}) {${label}};`,
+    );
+  }
+
+  lines.push('\\end{tikzpicture}');
+  return lines.join('\n');
 }
 
 function render(): void {
@@ -588,7 +702,7 @@ async function runSearch(raw: string): Promise<void> {
 
 async function runExport(): Promise<void> {
   if (!lastGraph || !lastLayout) return;
-  const tikz = buildTikz(lastGraph, lastLayout, nodeLabel);
+  const tikz = buildTikzExport(lastGraph, lastLayout);
   try {
     await navigator.clipboard.writeText(tikz);
     status = 'TikZ copied to clipboard.';

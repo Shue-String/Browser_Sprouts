@@ -433,74 +433,16 @@ export function layoutTTree(graph: TTreeGraph): TTreeLayout {
   return { rowLevels, positions };
 }
 
-/** Emits TikZ matching the user's own example conventions -- `edge`/`layersep` tikzset, `\node`
- * per position, `\draw[edge]` for required arrows, a distinct dashed style for unexplained "extra"
- * edges, and a bypass as TWO real arrows (matching the SVG pane's own color scheme): red
- * `\draw[bypassed]` from the parent to the T-child that gets bypassed, then blue
- * `\draw[resolve]` from that bypassed child on to the grandchild that actually resolves the
- * family. Coordinates come straight from `layout`'s row/col grid (same one the SVG view uses), so
- * the two stay relationally consistent -- not necessarily pixel-identical, per the user's own
- * request. */
 /** One label line (a position encoding or a genome name) into LaTeX math-mode text: α/⊕ as their
  * proper control sequences (never the raw Unicode glyphs -- fine on screen, not guaranteed to be
  * in every LaTeX font encoding), and a genome name's "_12"-style subscript braced ("_{12}") so a
  * two-digit family number subscripts as a whole instead of LaTeX's default "subscript just the
- * next single character" behavior silently only sinking the "1" in "S_12". */
-function toLatexMath(text: string): string {
+ * next single character" behavior silently only sinking the "1" in "S_12". Exported so the TikZ
+ * exporter in ui/ttree.ts (which needs the same pixel-accurate layout the SVG pane itself computes,
+ * so it lives alongside that layout code rather than here) can reuse it verbatim. */
+export function toLatexMath(text: string): string {
   return text
     .replace(/_(\d+)/g, '_{$1}')
     .replace(/⊕/g, '\\oplus ')
     .replace(/α/g, '\\alpha ');
-}
-
-export function buildTikz(graph: TTreeGraph, layout: TTreeLayout, labelOf: (node: TTreeNode) => string[]): string {
-  // Wider than the SVG pane's own column spacing -- LaTeX text sets noticeably wider than the
-  // pane's compact boxes (especially the root's own long encoding), so the same unit reads as
-  // cramped once it's actually typeset; the pane and the export only need to agree on RELATIVE
-  // node position, not on the literal unit size (per the user's own "doesn't have to be an exact
-  // match" request).
-  const COL_UNIT = 3.0;
-  const ROW_UNIT = 2.4;
-
-  const nodeIdOf = (enc: string): string => `n${[...enc].map(c => c.charCodeAt(0).toString(36)).join('')}`;
-  const xOf = (col: number): number => col * COL_UNIT;
-  const yOf = (row: number): number => -row * ROW_UNIT;
-
-  const lines: string[] = [];
-  lines.push('\\begin{tikzpicture}');
-  lines.push('  \\tikzset{');
-  lines.push('    edge/.style = {->,> = latex},');
-  lines.push('    bypassed/.style = {->,> = latex,color=red},');
-  lines.push('    resolve/.style = {->,> = latex,color=blue},');
-  lines.push('    extra/.style = {->,> = latex,dashed,color=gray},');
-  lines.push('  }');
-  lines.push('');
-
-  for (const [id, pos] of layout.positions) {
-    const node = graph.nodes.get(id);
-    if (!node) continue;
-    // Each line gets its OWN $...$ pair -- one big $...$ around a "line1 \\ line2" pair breaks,
-    // since \\ isn't valid directly inside a single inline-math group.
-    const label = labelOf(node)
-      .map(line => `$${toLatexMath(line)}$`)
-      .join(' \\\\ ');
-    lines.push(`  \\node (${nodeIdOf(id)}) at (${xOf(pos.col).toFixed(2)}, ${yOf(pos.row).toFixed(2)}) {${label}};`);
-  }
-  lines.push('');
-
-  for (const e of graph.edges) {
-    if (e.kind === 'required') {
-      lines.push(`  \\draw[edge] (${nodeIdOf(e.from)}) to (${nodeIdOf(e.to)});`);
-    } else if (e.kind === 'extra') {
-      lines.push(`  \\draw[extra] (${nodeIdOf(e.from)}) to (${nodeIdOf(e.to)});`);
-    } else if (e.via) {
-      lines.push(`  \\draw[bypassed] (${nodeIdOf(e.from)}) to (${nodeIdOf(e.via)});`);
-      lines.push(`  \\draw[resolve] (${nodeIdOf(e.via)}) to (${nodeIdOf(e.to)});`);
-    } else {
-      lines.push(`  \\draw[bypassed] (${nodeIdOf(e.from)}) to (${nodeIdOf(e.to)});`);
-    }
-  }
-
-  lines.push('\\end{tikzpicture}');
-  return lines.join('\n');
 }
