@@ -8,8 +8,10 @@
 // This script does NO derivation -- it only reshapes JSON into C++ struct-literal syntax (same
 // role as scripts/genGenomeDefsHeader.cjs plays for src/data/genomeDefs.json). The JSON's "notes"
 // fields (hand-written provenance commentary: date added, verification method, why a candidate
-// was rejected/removed) are intentionally NOT transcribed here -- they document the dataset for
-// humans reading the JSON, not runtime data, and this generated file is machine output.
+// was rejected/removed) and each element's "minSpots" (the minimum starting-spot count at which
+// that left side is known to appear, or null if unknown) are intentionally NOT transcribed here --
+// they document the dataset for humans reading the JSON, not runtime data, and this generated
+// file is machine output.
 //
 // Run after editing collectionElements.json: `node scripts/genCollectionElementsHeader.cjs`
 
@@ -27,7 +29,10 @@ function cppStr(s) {
 }
 
 function elementsLiteral(elements) {
-  return '{' + elements.map(cppStr).join(', ') + '}';
+  // Each element is {encoding, minSpots} -- minSpots is JSON-only provenance metadata (the
+  // minimum starting-spot count at which the left side is known to appear, or null if unknown);
+  // the compiled registry only ever needs the encoding string itself.
+  return '{' + elements.map(el => cppStr(el.encoding)).join(', ') + '}';
 }
 
 function groupLiteral(g) {
