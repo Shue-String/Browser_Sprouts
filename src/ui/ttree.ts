@@ -379,12 +379,19 @@ function escapeXml(s: string): string {
  * edge looks like -- each renderer only picks its own `svgMarker` or `tikzStyle` field out of the
  * same table. */
 type EdgeStyleKind = 'required' | 'bypassed' | 'resolve' | 'extra';
-const EDGE_STYLE: Record<EdgeStyleKind, { stroke: string; svgMarker: string; tikzStyle: string }> = {
-  required: { stroke: '#1a1a1a', svgMarker: 'ttree-arrow-req', tikzStyle: 'edge' },
-  bypassed: { stroke: '#DD1111', svgMarker: 'ttree-arrow-bypassed', tikzStyle: 'bypassed' },
-  resolve: { stroke: '#1565C0', svgMarker: 'ttree-arrow-resolve', tikzStyle: 'resolve' },
-  extra: { stroke: '#888', svgMarker: 'ttree-arrow-extra', tikzStyle: 'extra' },
+const EDGE_STYLE: Record<EdgeStyleKind, { stroke: string; svgMarker: string; tikzStyle: string; tikzColor: string }> = {
+  required: { stroke: '#1a1a1a', svgMarker: 'ttree-arrow-req', tikzStyle: 'edge', tikzColor: 'ttreeReq' },
+  bypassed: { stroke: '#DD1111', svgMarker: 'ttree-arrow-bypassed', tikzStyle: 'bypassed', tikzColor: 'ttreeBypass' },
+  resolve: { stroke: '#1565C0', svgMarker: 'ttree-arrow-resolve', tikzStyle: 'resolve', tikzColor: 'ttreeResolve' },
+  extra: { stroke: '#888', svgMarker: 'ttree-arrow-extra', tikzStyle: 'extra', tikzColor: 'ttreeExtra' },
 };
+
+/** '#rgb' or '#rrggbb' -> 'RRGGBB' (TikZ \definecolor's HTML form), so EDGE_STYLE.stroke can feed
+ * the TikZ exporter directly instead of a second hand-typed copy of the same hex value. */
+function hexToTikzHtml(hex: string): string {
+  const h = hex.slice(1);
+  return (h.length === 3 ? h.split('').map(c => c + c).join('') : h).toUpperCase();
+}
 
 interface SegmentSpec { from: string; to: string; styleKind: EdgeStyleKind; dashed: boolean }
 interface PlacedSegment extends SegmentSpec { a: Pt; b: Pt; blockers: Rect[]; path: PathSpec }
@@ -525,22 +532,16 @@ function renderSvg(graph: TTreeGraph, layout: TTreeLayout): string {
   parts.push(
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">`,
   );
-  parts.push(`
-    <defs>
-      <marker id="ttree-arrow-req" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a" />
-      </marker>
-      <marker id="ttree-arrow-bypassed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0,0 L10,5 L0,10 z" fill="#DD1111" />
-      </marker>
-      <marker id="ttree-arrow-resolve" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0,0 L10,5 L0,10 z" fill="#1565C0" />
-      </marker>
-      <marker id="ttree-arrow-extra" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M0,0 L10,5 L0,10 z" fill="#888" />
-      </marker>
-    </defs>
-  `);
+  // Arrowhead fill colors are read straight off EDGE_STYLE.stroke (not re-typed) so they can't
+  // drift from the edge lines themselves -- see EDGE_STYLE's own comment.
+  const markers = Object.values(EDGE_STYLE)
+    .map(
+      style => `      <marker id="${style.svgMarker}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="${style.stroke}" />
+      </marker>`,
+    )
+    .join('\n');
+  parts.push(`\n    <defs>\n${markers}\n    </defs>\n  `);
 
   const placed = buildPlacedSegments(graph, layout, rects);
 
@@ -602,10 +603,10 @@ function buildTikzExport(graph: TTreeGraph, layout: TTreeLayout): string {
   const lines: string[] = [];
   lines.push('% Requires \\usepackage{tikz} and \\usepackage{xcolor} in the preamble.');
   lines.push('\\begin{tikzpicture}');
-  lines.push('  \\definecolor{ttreeReq}{HTML}{1A1A1A}');
-  lines.push('  \\definecolor{ttreeBypass}{HTML}{DD1111}');
-  lines.push('  \\definecolor{ttreeResolve}{HTML}{1565C0}');
-  lines.push('  \\definecolor{ttreeExtra}{HTML}{888888}');
+  // Same source as the SVG markers above (EDGE_STYLE.stroke) -- not a second hardcoded copy.
+  for (const style of Object.values(EDGE_STYLE)) {
+    lines.push(`  \\definecolor{${style.tikzColor}}{HTML}{${hexToTikzHtml(style.stroke)}}`);
+  }
   lines.push('  \\definecolor{ttreeBoxBorder}{HTML}{444444}');
   lines.push('  \\definecolor{ttreeFlagBorder}{HTML}{C0392B}');
   lines.push('  \\definecolor{ttreeFlagFill}{HTML}{FFF3F3}');
