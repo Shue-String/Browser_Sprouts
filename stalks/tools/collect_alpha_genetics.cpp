@@ -40,6 +40,7 @@
 #include "canon.hpp"
 #include "collections.hpp"
 #include "encoding.hpp"
+#include "json_keys.hpp"
 #include "moves.hpp"
 #include "position.hpp"
 #include "specfile.hpp"
@@ -236,7 +237,7 @@ int main(int argc, char** argv) {
                 if (j) f << ",";
                 const TChild& t = e.T[j];
                 f << "{\"enc\":\"" << t.enc << "\",\"quickEnc\":\"" << t.quick.enc
-                  << "\",\"quickOffset\":" << t.quick.offset << ",\"nimber\":" << t.nimber << "}";
+                  << "\",\"quickOffset\":" << t.quick.offset << "," << kNimberKey << t.nimber << "}";
             }
             f << "]}";
         }
@@ -253,7 +254,7 @@ int main(int argc, char** argv) {
             if (j) f << ",";
             const TChild& t = e.T[j];
             f << "{\"enc\":\"" << t.enc << "\",\"quickEnc\":\"" << t.quick.enc
-              << "\",\"quickOffset\":" << t.quick.offset << ",\"nimber\":" << t.nimber << "}";
+              << "\",\"quickOffset\":" << t.quick.offset << "," << kNimberKey << t.nimber << "}";
         }
         f << "]}";
     }

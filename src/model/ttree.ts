@@ -37,6 +37,7 @@ import {
   resolvedFoldName,
 } from './collectAlpha';
 import genomeDbJson from '../data/collectAlphaGenomes.json';
+import tokenLifeJson from '../data/token_life.generated.json';
 
 interface ByEncHit {
   R: number;
@@ -57,16 +58,18 @@ function byEncGenome(enc: string): AlphaGenome | undefined {
   return hit ? { R: hit.R, D: hit.D, L: hit.L, Tprime: hit.Tprime, T: hit.T } : undefined;
 }
 
-/** Per-token life value (tokens.hpp's leftSideLives2(), halved -- see that function's own doc
- * comment: "used exclusively for left-side life counts", exactly this feature's scope, and it
- * differs from the engine's general-purpose lives2() only for DisaPoint (1 life instead of 2) and
- * Split point (2 lives instead of 3)). A joint's two visit characters ('7' then '8') split 1 life
- * as 0.5 apiece rather than the engine's own 1-then-0 split; since they always appear in a
- * matched pair, the AGGREGATE contribution per joint is identical either way -- this is just a
- * friendlier per-character accounting for the same total. A membrane letter is likewise 0.5 (it
- * always appears in a matched pair too, one occurrence per side). Special-point letters ('a'-'j',
- * the open-crit marker this whole feature is scoped to) and delimiters (',', '|') contribute 0. */
-const TOKEN_LIFE: Record<string, number> = { '0': 3, '1': 2, '2': 1, '3': 1, '4': 2, '5': 2, '6': 3 };
+/** Per-token life value: generated from tokens.hpp's leftSideLives2() (halved -- see that
+ * function's own doc comment: "used exclusively for left-side life counts", exactly this feature's
+ * scope, and it differs from the engine's general-purpose lives2() only for DisaPoint (1 life
+ * instead of 2) and Split point (2 lives instead of 3)) by stalks/tools/dump_token_life.cpp --
+ * single source of truth, re-run that tool and commit the output if leftSideLives2() ever changes.
+ * A joint's two visit characters ('7' then '8') split 1 life as 0.5 apiece rather than the engine's
+ * own 1-then-0 split; since they always appear in a matched pair, the AGGREGATE contribution per
+ * joint is identical either way -- this is just a friendlier per-character accounting for the same
+ * total. A membrane letter is likewise 0.5 (it always appears in a matched pair too, one occurrence
+ * per side). Special-point letters ('a'-'j', the open-crit marker this whole feature is scoped to)
+ * and delimiters (',', '|') contribute 0 (absent from the generated table). */
+const TOKEN_LIFE: Record<string, number> = tokenLifeJson;
 
 /** Y-axis grouping for the T-Tree pane: the sum of `fullEnc`'s own token life-values (see
  * TOKEN_LIFE), minus 1 for each subposition beyond the first -- '+' (encoding.cpp's serialize())

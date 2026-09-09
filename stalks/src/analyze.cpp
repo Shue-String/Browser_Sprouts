@@ -4,6 +4,7 @@
 #include "collections.hpp"
 #include "encoding.hpp"
 #include "graph.hpp"
+#include "json_keys.hpp"
 #include "json_util.hpp"
 #include "moves.hpp"
 #include "position.hpp"
@@ -47,6 +48,25 @@ void writeQuickCanon(std::string& out, const QuickCanonResult& qc) {
     jsonStr(out, serialize(qc.rep));
     out += ",\"offset\":";
     jsonInt(out, qc.offset);
+    out += "}";
+}
+
+// As writeQuickCanon, but also carries the quick-canon GameGraph node's own minMoves/maxMoves --
+// used only at "whole position" call sites (fullAnalysis/quickAnalysis), never for the cheap
+// per-child quickCanon tags (unvaluedChildren/sizeError), which stay unvalued by design. These are
+// NOT real game-length bounds (the quick-canon tree isn't a game tree -- see the doc comment on
+// QuickAnalysisOk in stalks.ts): they count moves that still require active calculation/choice
+// under optimal play, once Advanced-Collections-equivalent positions are treated as interchangeable.
+void writeQuickCanonRoot(std::string& out, const std::string& enc, int offset, int minMoves,
+                          int maxMoves) {
+    out += "{\"enc\":";
+    jsonStr(out, enc);
+    out += ",\"offset\":";
+    jsonInt(out, offset);
+    appendKey(out, kMinMovesKey);
+    jsonInt(out, minMoves);
+    appendKey(out, kMaxMovesKey);
+    jsonInt(out, maxMoves);
     out += "}";
 }
 
@@ -95,13 +115,13 @@ void writeChild(std::string& out, const std::string& enc, const Val& v, int nsub
                 int movetype = 0) {
     out += "{\"enc\":";
     jsonStr(out, enc);
-    out += ",\"nimber\":";
+    appendKey(out, kNimberKey);
     jsonInt(out, v.nimber);
-    out += ",\"subposCount\":";
+    appendKey(out, kSubposCountKey);
     jsonInt(out, nsub);
-    out += ",\"minMoves\":";
+    appendKey(out, kMinMovesKey);
     jsonInt(out, v.minMoves);
-    out += ",\"maxMoves\":";
+    appendKey(out, kMaxMovesKey);
     jsonInt(out, v.maxMoves);
     out += ",\"lives\":";
     jsonInt(out, lives);
@@ -274,13 +294,13 @@ std::string fullAnalysis(const Position& p, const std::string& canon) {
     std::string out;
     out += "{\"ok\":true,\"canon\":";
     jsonStr(out, canon);
-    out += ",\"nimber\":";
+    appendKey(out, kNimberKey);
     jsonInt(out, root->nimber);
-    out += ",\"minMoves\":";
+    appendKey(out, kMinMovesKey);
     jsonInt(out, root->minMoves);
-    out += ",\"maxMoves\":";
+    appendKey(out, kMaxMovesKey);
     jsonInt(out, root->maxMoves);
-    out += ",\"subposCount\":";
+    appendKey(out, kSubposCountKey);
     jsonInt(out, subposCount(root));
     out += ",\"lives\":";
     jsonInt(out, p.lives2() / 2);
@@ -313,9 +333,15 @@ std::string fullAnalysis(const Position& p, const std::string& canon) {
     }
     out += "]";
 
-    // Quick-canon (Advanced Collections) view of the whole position.
+    // Quick-canon (Advanced Collections) view of the whole position, including the quick-canon
+    // GameGraph node's own minMoves/maxMoves (see writeQuickCanonRoot's doc comment for what these
+    // mean -- not real game-length bounds).
     out += ",\"quickCanon\":";
-    writeQuickCanon(out, quickCanon(p));
+    {
+        int qOff = 0;
+        const Node* qRoot = quickGraph().ensure(p, &qOff);
+        writeQuickCanonRoot(out, qRoot->enc, qOff, qRoot->minMoves, qRoot->maxMoves);
+    }
 
     // Quick-canon children: each play-child reduced by quickCanon, deduped by (rep, offset).
     out += ",\"quickChildren\":[";
@@ -335,9 +361,9 @@ std::string fullAnalysis(const Position& p, const std::string& canon) {
             jsonStr(out, enc);
             out += ",\"offset\":";
             jsonInt(out, qk.offset);
-            out += ",\"nimber\":";
+            appendKey(out, kNimberKey);
             jsonInt(out, v.nimber);
-            out += ",\"subposCount\":";
+            appendKey(out, kSubposCountKey);
             jsonInt(out, static_cast<int>(qk.rep.components.size()));
             out += "}";
         }
@@ -354,13 +380,13 @@ std::string fullAnalysis(const Position& p, const std::string& canon) {
             first = false;
             out += "{\"enc\":";
             jsonStr(out, n->enc);
-            out += ",\"nimber\":";
+            appendKey(out, kNimberKey);
             jsonInt(out, n->nimber);
-            out += ",\"minMoves\":";
+            appendKey(out, kMinMovesKey);
             jsonInt(out, n->minMoves);
-            out += ",\"maxMoves\":";
+            appendKey(out, kMaxMovesKey);
             jsonInt(out, n->maxMoves);
-            out += ",\"subposCount\":";
+            appendKey(out, kSubposCountKey);
             jsonInt(out, subposCount(n));
             out += ",\"children\":[";
             for (std::size_t i = 0; i < n->children.size(); ++i) {
@@ -382,15 +408,14 @@ std::string quickAnalysis(const Position& p, const std::string& canon) {
     int rootOff = 0;
     const Node* root = g.ensure(p, &rootOff);
     const int nimber = root->nimber ^ rootOff;
-    const QuickCanonResult qc = quickCanon(p);
 
     std::string out;
     out += "{\"ok\":true,\"reason\":\"quick\",\"canon\":";
     jsonStr(out, canon);
-    out += ",\"nimber\":";
+    appendKey(out, kNimberKey);
     jsonInt(out, nimber);
     out += ",\"quickCanon\":";
-    writeQuickCanon(out, qc);
+    writeQuickCanonRoot(out, root->enc, rootOff, root->minMoves, root->maxMoves);
 
     out += ",\"quickChildren\":[";
     {
@@ -410,9 +435,9 @@ std::string quickAnalysis(const Position& p, const std::string& canon) {
             jsonStr(out, enc);
             out += ",\"offset\":";
             jsonInt(out, qk.offset);
-            out += ",\"nimber\":";
+            appendKey(out, kNimberKey);
             jsonInt(out, kn->nimber ^ off);  // true game value of the child
-            out += ",\"subposCount\":";
+            appendKey(out, kSubposCountKey);
             jsonInt(out, static_cast<int>(qk.rep.components.size()));
             out += "}";
         }

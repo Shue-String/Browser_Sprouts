@@ -26,6 +26,17 @@ const RETRACT_RADIUS = 18;   // px — how close to safe tip to clear a poison p
 const SAMPLE_SPACING = 4;    // px — minimum gap between recorded stroke samples
 const MIN_LOOP_AREA  = 500;  // px² — minimum signed area for a valid loop move
 
+// One in-progress stroke sample, in both coordinate spaces at once. Pushed/sliced/cleared as a
+// single unit so the two spaces can't drift out of index-alignment (see
+// project_parallel_structure_refactor_backlog.md item 4) — callers that need a plain
+// CanvasPoint[]/SpherePoint[] (signedArea, stablePt, segCrossesPolylineSphere, applyMove; all of
+// which are also called elsewhere with unrelated plain arrays, e.g. edge.points, so their
+// signatures stay general-purpose) project out the space they need with `.map()`.
+interface StrokeSample {
+  canvas: CanvasPoint;
+  sphere: SpherePoint;
+}
+
 
 type InputState = 'idle' | 'rotating' | 'drawing' | 'dragging';
 
@@ -40,8 +51,7 @@ export class InputHandler {
 
   // Drawing
   private startVertex: VertexId = -1;
-  private canvasStroke: CanvasPoint[] = [];
-  private sphereStroke: SpherePoint[] = [];
+  private stroke: StrokeSample[] = [];
   private safeLength = 0;
   private poisonPoint: CanvasPoint | null = null;
   private grayedVertices: Set<VertexId> = new Set();
@@ -108,8 +118,7 @@ if (hit === null) return;
       // always starts from the vertex center, not wherever the pointer landed.
       const startVert   = this.gameState.vertices.get(hit)!;
       const startCanvas = this.renderer.toCanvas(startVert.pos, this.getCameraRef());
-      this.canvasStroke   = [startCanvas];
-      this.sphereStroke   = [startVert.pos];
+      this.stroke         = [{ canvas: startCanvas, sphere: startVert.pos }];
       this.safeLength     = 1;
       this.poisonPoint    = null;
       this.grayedVertices = this.computeGrayed(hit);
@@ -135,29 +144,27 @@ if (hit === null) return;
     if (this.state !== 'drawing') return;
 
     const cur: CanvasPoint = { px, py };
-    const last = this.canvasStroke[this.canvasStroke.length - 1];
+    const last = this.stroke[this.stroke.length - 1].canvas;
     if (dist(cur, last) < SAMPLE_SPACING) return;
 
     // Retract detection: if poisoned and pointer returns near the safe tip, trim
     if (this.poisonPoint !== null && this.safeLength > 0) {
-      const safeTip = this.canvasStroke[this.safeLength - 1];
+      const safeTip = this.stroke[this.safeLength - 1].canvas;
       if (dist(cur, safeTip) < RETRACT_RADIUS) {
-        this.canvasStroke = this.canvasStroke.slice(0, this.safeLength);
-        this.sphereStroke = this.sphereStroke.slice(0, this.safeLength);
+        this.stroke       = this.stroke.slice(0, this.safeLength);
         this.poisonPoint  = null;
         return;
       }
     }
 
-    this.canvasStroke.push(cur);
-    this.sphereStroke.push(this.toSpherePoint(px, py));
+    this.stroke.push({ canvas: cur, sphere: this.toSpherePoint(px, py) });
 
     if (this.poisonPoint === null) {
       const crossing = this.checkCrossing();
       if (crossing) {
         this.poisonPoint = crossing;
       } else {
-        this.safeLength = this.canvasStroke.length;
+        this.safeLength = this.stroke.length;
       }
     }
   }
@@ -168,7 +175,7 @@ if (hit === null) return;
     if (this.state !== 'drawing')  return;
     this.state = 'idle';
 
-    if (this.poisonPoint !== null || this.canvasStroke.length < 2) {
+    if (this.poisonPoint !== null || this.stroke.length < 2) {
       this.startReject(); return;
     }
 
@@ -181,13 +188,12 @@ if (hit === null) return;
     const targetVert = this.gameState.vertices.get(target)!;
     const camera = this.getCameraRef();
     const targetCanvas = this.renderer.toCanvas(targetVert.pos, camera);
-    this.canvasStroke.push(targetCanvas);
-    this.sphereStroke.push(targetVert.pos);
+    this.stroke.push({ canvas: targetCanvas, sphere: targetVert.pos });
 
     const isLoop = this.startVertex === target;
 
     // Reject degenerate loop moves that don't enclose meaningful area.
-    if (isLoop && Math.abs(signedArea(this.canvasStroke)) < MIN_LOOP_AREA) {
+    if (isLoop && Math.abs(signedArea(this.stroke.map(s => s.canvas))) < MIN_LOOP_AREA) {
       this.startReject(); return;
     }
 
@@ -199,7 +205,7 @@ if (hit === null) return;
     applyMove(this.gameState, {
       v1:     moveV1,
       v2:     moveV2,
-      stroke: this.sphereStroke,
+      stroke: this.stroke.map(s => s.sphere),
     });
 
     this.clearDrawState();
@@ -229,7 +235,7 @@ if (hit === null) return;
     if (this.state === 'drawing') {
       return {
         grayedVertexIds: this.grayedVertices,
-        activeStroke:    this.canvasStroke.length > 1 ? this.canvasStroke : undefined,
+        activeStroke:    this.stroke.length > 1 ? this.stroke.map(s => s.canvas) : undefined,
         poisonPoint:     this.poisonPoint,
         spliceAngleDebug: this.showSpliceAngles ? this.computeSpliceAngleDebug() : [],
       };
@@ -251,7 +257,7 @@ if (hit === null) return;
    * model/moves.ts, so this is a literal picture of that data, not a guess.
    */
   private computeSpliceAngleDebug(): { vertexId: VertexId; newAngle: number; clockwiseNextEdge: { edgeId: number; angle: number } | null; counterclockwiseNextEdge: { edgeId: number; angle: number } | null }[] {
-    if (this.sphereStroke.length < 2) return [];
+    if (this.stroke.length < 2) return [];
     const out: { vertexId: VertexId; newAngle: number; clockwiseNextEdge: { edgeId: number; angle: number } | null; counterclockwiseNextEdge: { edgeId: number; angle: number } | null }[] = [];
 
     const addFor = (vid: VertexId, liveAngle: number): void => {
@@ -280,16 +286,17 @@ if (hit === null) return;
       out.push({ vertexId: vid, newAngle: liveAngle, clockwiseNextEdge: cw, counterclockwiseNextEdge: ccw });
     };
 
+    const sphereStroke = this.stroke.map(s => s.sphere);
     const startV = this.gameState.vertices.get(this.startVertex);
-    if (startV) addFor(this.startVertex, bearingFrom(startV.pos, stablePt(this.sphereStroke, 0, 1)));
+    if (startV) addFor(this.startVertex, bearingFrom(startV.pos, stablePt(sphereStroke, 0, 1)));
 
     const camera = this.getCameraRef();
-    const tipCanvas = this.canvasStroke[this.canvasStroke.length - 1];
+    const tipCanvas = this.stroke[this.stroke.length - 1].canvas;
     for (const v of this.gameState.vertices.values()) {
       if (v.isPseudo || v.id === this.startVertex) continue;
       const vc = this.renderer.toCanvas(v.pos, camera);
       if (dist(tipCanvas, vc) < HIT_RADIUS) {
-        addFor(v.id, bearingFrom(v.pos, stablePt(this.sphereStroke, this.sphereStroke.length - 1, -1)));
+        addFor(v.id, bearingFrom(v.pos, stablePt(sphereStroke, sphereStroke.length - 1, -1)));
         break;
       }
     }
@@ -354,17 +361,17 @@ if (hit === null) return;
   }
 
   private checkCrossing(): CanvasPoint | null {
-    if (this.canvasStroke.length < 2) return null;
+    if (this.stroke.length < 2) return null;
     const camera = this.getCameraRef();
     // Test the tip segment spherically (great-circle arc vs great-circle arc) so
     // crossing detection is camera-independent — a far-side edge that only
     // overlaps the stroke in screen projection is no longer a false positive.
-    // sphereStroke runs parallel to canvasStroke; the poison marker is cosmetic,
-    // so on a hit we return the current tip canvas point (within one sample of
-    // the true crossing) rather than solving for the exact intersection.
-    const n = this.sphereStroke.length;
-    const sa = this.sphereStroke[n - 2], sb = this.sphereStroke[n - 1];
-    const tipCanvas = this.canvasStroke[this.canvasStroke.length - 1];
+    // The poison marker is cosmetic, so on a hit we return the current tip canvas
+    // point (within one sample of the true crossing) rather than solving for the
+    // exact intersection.
+    const n = this.stroke.length;
+    const sa = this.stroke[n - 2].sphere, sb = this.stroke[n - 1].sphere;
+    const tipCanvas = this.stroke[this.stroke.length - 1].canvas;
 
     for (const edge of this.gameState.edges.values()) {
       // Edges already incident to the stroke's start vertex share a point with
@@ -384,11 +391,11 @@ if (hit === null) return;
     // segment right at the vertex — not a real crossing.  Skip the early stroke
     // segments (those still in the departure zone around the vertex) so that
     // loop moves can close cleanly.
-    const startPos  = this.canvasStroke[0];
+    const startPos  = this.stroke[0].canvas;
     const nearStart = dist(tipCanvas, startPos) < HIT_RADIUS * 2;
     const skipFirst = nearStart ? Math.ceil(HIT_RADIUS / SAMPLE_SPACING) + 1 : 0;
 
-    if (segCrossesPolylineSphere(sa, sb, this.sphereStroke, 3, skipFirst)) {
+    if (segCrossesPolylineSphere(sa, sb, this.stroke.map(s => s.sphere), 3, skipFirst)) {
       return tipCanvas;
     }
 
@@ -421,18 +428,17 @@ if (hit === null) return;
   }
 
   private startReject(): void {
-    this.rejectStroke = [...this.canvasStroke];
+    this.rejectStroke = this.stroke.map(s => s.canvas);
     this.rejectTimer  = 600;
     this.clearDrawState();
   }
 
   private clearDrawState(): void {
-    this.canvasStroke       = [];
-    this.sphereStroke       = [];
-    this.safeLength         = 0;
-    this.poisonPoint        = null;
-    this.grayedVertices     = new Set();
-    this.startVertex        = -1;
-    this.vertexZonesEntered = new Map();
+    this.stroke              = [];
+    this.safeLength          = 0;
+    this.poisonPoint         = null;
+    this.grayedVertices      = new Set();
+    this.startVertex         = -1;
+    this.vertexZonesEntered  = new Map();
   }
 }

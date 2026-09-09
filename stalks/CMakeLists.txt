@@ -81,12 +81,29 @@ target_link_libraries(unregistered_double_crit_regions PRIVATE stalks_core)
 add_executable(double_crit_candidates_report tools/double_crit_candidates_report.cpp tools/alpha_genome.cpp tools/double_crit_genome.cpp)
 target_link_libraries(double_crit_candidates_report PRIVATE stalks_core)
 
+add_executable(winning_tree tools/winning_tree.cpp)
+target_link_libraries(winning_tree PRIVATE stalks_core)
+
+add_executable(dump_token_life tools/dump_token_life.cpp)
+target_link_libraries(dump_token_life PRIVATE stalks_core)
+
+# Every target defined above, in one place -- add a new add_executable()'s name here too, or it
+# silently builds with none of the warning flags below.
+set(STALKS_ALL_TARGETS
+    stalks_core stalks_tests dump_master_meta dump_child_nimbers query_position explain_move
+    query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics
+    dump_collections_roster quick_reduction_counts verify_left_side region_frequency
+    unregistered_left_sides yellow_check find_yellow_candidates find_yellow_candidates_structural
+    double_crit_probe unregistered_double_crit_regions double_crit_candidates_report winning_tree
+    dump_token_life
+)
+
 if(MSVC)
-    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers query_position explain_move query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics dump_collections_roster quick_reduction_counts verify_left_side region_frequency unregistered_left_sides yellow_check find_yellow_candidates find_yellow_candidates_structural double_crit_probe unregistered_double_crit_regions double_crit_candidates_report)
+    foreach(tgt ${STALKS_ALL_TARGETS})
         target_compile_options(${tgt} PRIVATE /W4 /permissive- /utf-8)
     endforeach()
 else()
-    foreach(tgt stalks_core stalks_tests dump_master_meta dump_child_nimbers query_position explain_move query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics dump_collections_roster quick_reduction_counts verify_left_side region_frequency unregistered_left_sides yellow_check find_yellow_candidates find_yellow_candidates_structural double_crit_probe unregistered_double_crit_regions double_crit_candidates_report)
+    foreach(tgt ${STALKS_ALL_TARGETS})
         target_compile_options(${tgt} PRIVATE -Wall -Wextra)
     endforeach()
 endif()

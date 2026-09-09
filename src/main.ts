@@ -30,14 +30,14 @@ import { computeJunctionVoronoiPath } from './model/voronoiJunctionPath';
 import { buildSubregionHighlight } from './model/subregionHighlight';
 import { serializeGameState, deserializeGameState } from './model/saveState';
 import type { SaveFileV1 } from './model/saveState';
-import { openPositionBrowser, ensureWired as ensureBrowserWired, notifyLivePosition, isShowingLive, currentBrowsedCanon, onNavigated, setMoveCallbacks, setSyncCallbacks, onSyncModeChange, isSyncMode, setSyncMode, setSyncToggleEnabled, updateNavButtons } from './ui/positionBrowser';
+import { openPositionBrowser, ensureWired as ensureBrowserWired, notifyLivePosition, isShowingLive, currentBrowsedCanon, onNavigated, setMoveCallbacks, setSyncCallbacks, onSyncModeChange, isSyncMode, setSyncMode, setSyncToggleEnabled, updateNavButtons, PB_PANEL_ID, PB_BODY_ID } from './ui/positionBrowser';
 import { TrackedGame } from './engine/trackedGame';
 import type { MovePreviewTarget } from './ui/positionBrowser';
 import { openGuide, closeGuide, isGuideOpen } from './ui/guide';
 import { initCollect } from './ui/collect';
 import { initTTree } from './ui/ttree';
 import { canon as canonEncoding, preloadModule, canonicalizeTrackedProvenanceSync, canonSync } from './engine/stalks';
-import { recordEdge, loadMasterSeed } from './model/positionCache';
+import { recordEdge, loadMasterSeed, loadQuickMasterSeed } from './model/positionCache';
 
 // Kick off the WASM module load immediately (independent of the Tracked Encoding toggle) so
 // canonSync()-backed gates (e.g. deadRegions' commitIfEncodingPreserved) have a real chance of
@@ -46,8 +46,10 @@ import { recordEdge, loadMasterSeed } from './model/positionCache';
 preloadModule();
 
 // Fire-and-forget: seeds positionCache.meta from the precomputed master-save dump so the Position
-// Browser doesn't have to recompute large, already-solved positions from scratch.
+// Browser doesn't have to recompute large, already-solved positions from scratch. The quick-canon
+// counterpart seeds the Position Browser's quick-canon move-bound display for the same size range.
 loadMasterSeed();
+loadQuickMasterSeed();
 
 const INITIAL_SPOTS    = 6;
 const DRAG_SENSITIVITY = 0.005;
@@ -333,13 +335,15 @@ let   camera: RotationMatrix = identityRotation();
     afterMoveCommitted(v1, v2);
   },
   undoLast: () => undoLast(),
-  get committedMoves() { return committedMoves; },
+  get committedMoves() {
+    return history.flatMap(h => h.committed ? [h.committed] : []);
+  },
   resetGame: (spots: number) => resetGame(spots),
   /** Dev aid: load a save file (parsed SaveFileV1 object) without going through the file input. */
   loadFromJson: (save: SaveFileV1) => loadGameState(save),
   get trackedCheckEnabled() { return trackedCheckEnabled; },
   /** "ID-based Sequencing" debug toggle — which form (label vs raw vertex id) Save/Recreate-style
-   *  tooling should read out of moveSequence/moveSequenceRaw. */
+   *  tooling should read out of moveSeqLog's moveSeq/moveSeqRaw fields. */
   get useRawVertexIds() { return useRawVertexIds; },
   setTrackedCheckEnabled(v: boolean) { trackedCheckEnabled = v; },
   get pendingTrackedCheck() { return pendingTrackedCheck; },
@@ -447,36 +451,46 @@ function startRecenter(): void {
 // the latest snapshot, rolling back the move AND any shrink/pop it triggered.
 
 const undoBtn = document.getElementById('undo-btn') as HTMLButtonElement;
-const history: GameState[] = [];
-// Move sequence, stored in both label form (default display) and raw-vertex-ID
-// form, computed once per move at commit time — the "Use vertex ID" toggle is
-// then a pure display swap, never a retroactive recompute.
-const moveSequence: string[] = [];
-const moveSequenceRaw: string[] = [];
-// Sequence-verifier-on variants of the two arrays above: same tokens, each with the
-// {encoding} suffix always appended, regardless of the current Move Check toggle — kept so
-// the Copy button can hand out a verifiable sequence even when the toggle is off (see
-// updateMoveSeq / moveSeqCopy).
-const moveSequenceTagged: string[] = [];
-const moveSequenceRawTagged: string[] = [];
-// Raw (v1,v2) per committed move, aligned 1:1 with `history` (history[k] is the state
-// BEFORE committedMoves[k]). Lets undo resync the tracked map by replaying from scratch
-// instead of just giving up (Catch D, project_encoding_canon_rework M6) — separate from
-// the debug-only `moveLog` import, which is never truncated on undo and so isn't safe to
-// use for this.
-const committedMoves: { v1: VertexId; v2: VertexId }[] = [];
+// One pre-move state snapshot + the (v1,v2) move committed from it, kept as a single unit so undo
+// (or the candidate-preview cancel path below) can never pop `state` without also popping the
+// matching move, or vice versa. `committed` starts null the instant pushHistorySnapshot() fires
+// (the move hasn't resolved yet) and is filled in by afterMoveCommitted() once it has -- a cancelled
+// stroke (onMoveCommitted's candidatePreviewList branch) pops a still-null entry via undoLast()
+// instead. Was six independently push/pop'd parallel arrays (`history`, `moveSequence`,
+// `moveSequenceRaw`, `moveSequenceTagged`, `moveSequenceRawTagged`, `committedMoves`) before the
+// project_parallel_structure_refactor_backlog.md item 1 cleanup, which also fixed a real latent bug
+// that split shape enabled: undoLast() used to pop moveSequence*/committedMoves unconditionally,
+// so cancelling a candidate-preview stroke (which never pushes to those four/one, only to `history`)
+// silently deleted the PRIOR real move's log entry instead. Structurally impossible now.
+interface HistoryEntry {
+  state: GameState;
+  committed: { v1: VertexId; v2: VertexId } | null;
+}
+const history: HistoryEntry[] = [];
+// Move sequence, stored in both label form (default display) and raw-vertex-ID form, computed once
+// per move at commit time -- the "Use vertex ID" toggle is then a pure display swap, never a
+// retroactive recompute. `*Tagged` are the sequence-verifier-on variants (same tokens, always with
+// the {encoding} suffix, regardless of the current Move Check toggle) kept so the Copy button can
+// hand out a verifiable sequence even when the toggle is off (see updateMoveSeq / moveSeqCopyText).
+// Kept as its OWN array (not folded into HistoryEntry) because it does NOT stay 1:1 with `history`:
+// loadGameState only has a save's final geometry, not its intermediate per-move states, so it
+// rebuilds moveSeqLog straight from the save's recorded tokens while leaving `history` empty
+// (Undo is correctly unavailable for a loaded game; the move-sequence display/Recreate log is not).
+interface MoveSeqEntry {
+  moveSeq: string;
+  moveSeqRaw: string;
+  moveSeqTagged: string;
+  moveSeqRawTagged: string;
+}
+const moveSeqLog: MoveSeqEntry[] = [];
 // Redo stack for the Position Browser's Sync-mode forward arrow (undo/redo of the live game). Each
 // entry captures everything undoLast() throws away, so redoLast() can re-apply it. Cleared whenever
 // a genuinely new move is committed (afterMoveCommitted) or the game is reset/loaded — a new branch
 // off an undone position invalidates the redo tail.
 interface RedoEntry {
-  postState: GameState;   // the state we were at before this undo — restored on redo
-  preState: GameState;    // the pre-move snapshot undo popped off `history` — pushed back on redo
-  moveSeq: string;        // the matching moveSequence / moveSequenceRaw / committedMoves entries
-  moveSeqRaw: string;
-  moveSeqTagged: string;
-  moveSeqRawTagged: string;
-  committed: { v1: VertexId; v2: VertexId };
+  postState: GameState;          // the state we were at before this undo — restored on redo
+  historyEntry: HistoryEntry;    // the pre-move snapshot + committed move undo popped off `history`
+  moveLogEntry: MoveSeqEntry;    // the matching moveSeqLog entry
 }
 const redoStack: RedoEntry[] = [];
 // Starting spot count of the current game; prefixed onto the Move Sequence
@@ -530,21 +544,19 @@ function updateSaveButton(): void {
   saveGameBtn.disabled = !gameStarted;
 }
 
-// The move-sequence bar (bottom of screen, Debug mode only) mirrors the underlying
-// moveSequence/moveSequenceRaw arrays, which are recorded unconditionally for Save/Recreate
-// regardless of whether Debug mode is unlocked yet. All four vertex-ID x sequence-verifier
-// variants are kept in sync in the background (see moveSequence/moveSequenceRaw/
-// moveSequenceTagged/moveSequenceRawTagged); this just picks which one to show based on the
-// current toggles.
+// The move-sequence bar (bottom of screen, Debug mode only) mirrors `moveSeqLog`, which is
+// recorded unconditionally for Save/Recreate regardless of whether Debug mode is unlocked yet.
+// All four vertex-ID x sequence-verifier variants live on every entry (see moveSeqLog's own doc
+// comment); this just picks which one to show based on the current toggles.
 function moveSeqTokens(): string[] {
-  if (moveCheckMode) return useRawVertexIds ? moveSequenceRawTagged : moveSequenceTagged;
-  return useRawVertexIds ? moveSequenceRaw : moveSequence;
+  if (moveCheckMode) return moveSeqLog.map(m => useRawVertexIds ? m.moveSeqRawTagged : m.moveSeqTagged);
+  return moveSeqLog.map(m => useRawVertexIds ? m.moveSeqRaw : m.moveSeq);
 }
 /** Copy always hands out the sequence-verifier-on ({encoding}-tagged) variant, matching the
  * current vertex-ID/label toggle, regardless of whether Move Check is currently switched on —
  * so the copied sequence is verifiable even if the user just wants to look at plain move text. */
 function moveSeqCopyText(): string {
-  const tokens = useRawVertexIds ? moveSequenceRawTagged : moveSequenceTagged;
+  const tokens = moveSeqLog.map(m => useRawVertexIds ? m.moveSeqRawTagged : m.moveSeqTagged);
   return `${currentSpotCount}:${tokens.join('/')}`;
 }
 function updateMoveSeq(): void {
@@ -618,23 +630,23 @@ document.addEventListener('keydown', e => {
  * Recreate rollback) pass false so they don't create bogus redo entries. */
 function undoLast(recordRedo = false): void {
   if (history.length === 0) return;
+  const top = history[history.length - 1];
   if (recordRedo) {
+    // Real user-initiated undo only ever runs between a fully-completed pushHistorySnapshot() +
+    // afterMoveCommitted() pair (both synchronous, no await between them at any call site), so by
+    // the time a user can click Undo the top entry's move has always resolved -- `top.committed`
+    // and the matching moveSeqLog entry are guaranteed non-null/present here.
     redoStack.push({
       postState: cloneState(state),
-      preState: history[history.length - 1],
-      moveSeq: moveSequence[moveSequence.length - 1],
-      moveSeqRaw: moveSequenceRaw[moveSequenceRaw.length - 1],
-      moveSeqTagged: moveSequenceTagged[moveSequenceTagged.length - 1],
-      moveSeqRawTagged: moveSequenceRawTagged[moveSequenceRawTagged.length - 1],
-      committed: committedMoves[committedMoves.length - 1],
+      historyEntry: top,
+      moveLogEntry: moveSeqLog[moveSeqLog.length - 1],
     });
   }
-  Object.assign(state, history.pop()!);
-  moveSequence.pop();
-  moveSequenceRaw.pop();
-  moveSequenceTagged.pop();
-  moveSequenceRawTagged.pop();
-  committedMoves.pop();
+  Object.assign(state, history.pop()!.state);
+  // Cancelled candidate-preview strokes push a `history` entry (still-null `committed`) but never
+  // reach afterMoveCommitted, so they never push a moveSeqLog entry either -- only pop the log for
+  // an entry that actually completed (see HistoryEntry's own doc comment for the bug this avoids).
+  if (top.committed) moveSeqLog.pop();
   pendingCollapse = null;
   // The forward-only tracked map can't rewind in place, but it CAN be rebuilt from scratch
   // by replaying every still-committed move (Catch D, project_encoding_canon_rework M6):
@@ -653,17 +665,13 @@ function undoLast(recordRedo = false): void {
 }
 
 /** Replay the most recently undone move (the Sync-mode forward arrow). Mirrors undoLast in reverse:
- * pushes the pre-move snapshot back onto `history`, restores the move-sequence/committed entries,
- * and jumps `state` to the captured post-move geometry. Blocked during Recreate playback. */
+ * pushes the pre-move snapshot back onto `history`, restores the matching moveSeqLog entry, and
+ * jumps `state` to the captured post-move geometry. Blocked during Recreate playback. */
 function redoLast(): void {
   if (redoStack.length === 0 || recreateActive) return;
   const entry = redoStack.pop()!;
-  history.push(entry.preState);
-  moveSequence.push(entry.moveSeq);
-  moveSequenceRaw.push(entry.moveSeqRaw);
-  moveSequenceTagged.push(entry.moveSeqTagged);
-  moveSequenceRawTagged.push(entry.moveSeqRawTagged);
-  committedMoves.push(entry.committed);
+  history.push(entry.historyEntry);
+  moveSeqLog.push(entry.moveLogEntry);
   Object.assign(state, entry.postState);
   pendingCollapse = null;
   // Same forward-only-tracked-map rebuild as undo: mark desynced, then replay from scratch.
@@ -679,35 +687,33 @@ function redoLast(): void {
 }
 
 /**
- * Rebuild the tracked map from a fresh seed by replaying every currently-committed move
- * (in `committedMoves`, aligned with `history`) through the same onMoveSettled path a live
- * move uses. Fully reuses the already-verified match/carryForward/face-check machinery —
- * no new matching algorithm. Snapshots the arrays/state it reads at the start so a new move
- * made while this is still in flight (a handful of awaited WASM calls) can't pull the rug
- * out from under it; if that race does happen, the newer move's own onMoveSettled call
- * simply supersedes whatever this leaves behind (tracked.map is always "last write wins").
- * NOT built for load (Catch D remains open there): a loaded save has only its final
- * geometry, not the intermediate per-move states this replay needs to derive each move's
- * generated-midpoint vertex — reconstructing those would mean re-deriving the whole game
+ * Rebuild the tracked map from a fresh seed by replaying every currently-committed move (each
+ * `history` entry's own `committed`) through the same onMoveSettled path a live move uses. Fully
+ * reuses the already-verified match/carryForward/face-check machinery — no new matching algorithm.
+ * Snapshots `history` at the start so a new move made while this is still in flight (a handful of
+ * awaited WASM calls) can't pull the rug out from under it; if that race does happen, the newer
+ * move's own onMoveSettled call simply supersedes whatever this leaves behind (tracked.map is
+ * always "last write wins"). NOT built for load (Catch D remains open there): a loaded save has
+ * only its final geometry, not the intermediate per-move states this replay needs to derive each
+ * move's generated-midpoint vertex — reconstructing those would mean re-deriving the whole game
  * via move synthesis (Recreate-style), a separate, heavier undertaking.
  */
 async function resyncTrackedFromHistory(): Promise<void> {
   if (!trackedCheckEnabled) return;
-  const moves = committedMoves.slice();
-  const hist = history.slice();
+  const entries = history.slice();
   const finalState = cloneState(state);
-  const seedSpotIds = hist.length > 0 ? [...hist[0].vertices.keys()] : [...finalState.vertices.keys()];
+  const seedSpotIds = entries.length > 0 ? [...entries[0].state.vertices.keys()] : [...finalState.vertices.keys()];
 
   tracked.reset(seedSpotIds);
-  for (let k = 0; k < moves.length; k++) {
-    const parentState = hist[k];
-    if (!parentState) { tracked.markDesynced(); return; }
-    const settledState = k + 1 < hist.length ? hist[k + 1] : finalState;
+  for (let k = 0; k < entries.length; k++) {
+    const entry = entries[k];
+    if (!entry.committed) { tracked.markDesynced(); return; }
+    const settledState = k + 1 < entries.length ? entries[k + 1].state : finalState;
     const newVertexIds = new Set<VertexId>();
     for (const [vid, v] of settledState.vertices) {
-      if (!parentState.vertices.has(vid) && !v.isPseudo) newVertexIds.add(vid);
+      if (!entry.state.vertices.has(vid) && !v.isPseudo) newVertexIds.add(vid);
     }
-    const res = await tracked.onMoveSettled(settledState, moves[k].v1, moves[k].v2, newVertexIds);
+    const res = await tracked.onMoveSettled(settledState, entry.committed.v1, entry.committed.v2, newVertexIds);
     if (res.status !== 'match') { tracked.markDesynced(); return; }
   }
   updateTrackedPanel(null);
@@ -748,7 +754,7 @@ function collapseVertices(c: SpecialCollapse): Set<number> {
 
 /** Snapshot the pre-move state for undo. (InputHandler.onBeforeMove) */
 function pushHistorySnapshot(): void {
-  history.push(cloneState(state));
+  history.push({ state: cloneState(state), committed: null });
   updateUndoButton();
 }
 
@@ -763,8 +769,9 @@ function afterMoveCommitted(v1: number, v2: number): void {
   // Resample all edges so point counts reflect current geometry
   for (const e of state.edges.values()) resampleEdge(e);
   // Record move code (pre-move state is the last history snapshot)
-  const prevState = history[history.length - 1];
-  if (prevState) {
+  const top = history[history.length - 1];
+  const prevState = top?.state;
+  if (top && prevState) {
     state.spotLabels = recomputeSpotLabels(prevState.spotLabels, prevState, state, v1, v2);
     // A departing spot endpoint is fixed by the recompute above, so lo/hi
     // resolve correctly off the POST-move map; a non-spot endpoint (or one
@@ -805,11 +812,13 @@ function afterMoveCommitted(v1: number, v2: number): void {
     // sequence even if this session's toggle happens to be off during replay.
     lastCommittedEncoding = encodePosition(state).text;
     const tag = `{${lastCommittedEncoding}}`;
-    moveSequence.push(labeled);
-    moveSequenceRaw.push(raw);
-    moveSequenceTagged.push(labeled + tag);
-    moveSequenceRawTagged.push(raw + tag);
-    committedMoves.push({ v1, v2 });
+    top.committed = { v1, v2 };
+    moveSeqLog.push({
+      moveSeq: labeled,
+      moveSeqRaw: raw,
+      moveSeqTagged: labeled + tag,
+      moveSeqRawTagged: raw + tag,
+    });
     updateMoveSeq();
   }
   updateTurnIndicator();
@@ -1033,8 +1042,8 @@ const DEBUG_UNLOCK_SEQUENCE = ['-4X-4[]', '-2X-2[]', '-3X-1', '-3X-1[]'];
 
 let debugUnlocked = false;
 // Raw (untagged) vertex-ID tokens for the CURRENT live game, used only to detect the unlock
-// sequence — kept separate from moveSequenceRaw because that array may carry the Sequence
-// Verifier's {encoding} suffix, which would break an exact string match here.
+// sequence — kept separate from moveSeqLog's moveSeqRaw field because that field may carry the
+// Sequence Verifier's {encoding} suffix, which would break an exact string match here.
 let liveUnlockTokens: string[] = [];
 
 function unlockDebugMode(): void {
@@ -1118,7 +1127,7 @@ const loadGameInput = document.getElementById('load-game-input') as HTMLInputEle
 
 saveGameBtn.addEventListener('click', e => {
   e.stopPropagation();
-  const save = serializeGameState(state, camera, currentSpotCount, moveCheckMode ? moveSequenceTagged : moveSequence, manualAwait?.parsed.token ?? null);
+  const save = serializeGameState(state, camera, currentSpotCount, moveSeqLog.map(m => moveCheckMode ? m.moveSeqTagged : m.moveSeq), manualAwait?.parsed.token ?? null);
   const json = JSON.stringify(save, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -1173,22 +1182,25 @@ function loadGameState(save: SaveFileV1): void {
   // fresh -1..-k numbering (cosmetic only — game state itself is unaffected).
   state.spotLabels = initialSpotLabels(state);
 
+  // `history` stays empty on load (see moveSeqLog's own doc comment: only moveSeqLog is
+  // reconstructible from a save's final geometry) -- committedMoves used to be a separate array
+  // here and was never cleared by Load, a latent desync now structurally impossible since it lives
+  // inside `history` entries.
   history.length = 0;
   redoStack.length = 0;
-  moveSequence.length = 0;
-  moveSequenceRaw.length = 0;
-  moveSequenceTagged.length = 0;
-  moveSequenceRawTagged.length = 0;
+  moveSeqLog.length = 0;
   for (const token of deserialized.moveSequence) {
     const base = stripMoveCheckTag(token);
     const tag = moveCheckTagOf(token);
-    moveSequence.push(base);
-    moveSequenceRaw.push(base);
     // A loaded save's tokens carry whatever tag they were saved with (possibly none, if
     // Move Check was off during that play session) — there's no encoding to recover for an
     // untagged token, so the "tagged" variant just falls back to the untagged form.
-    moveSequenceTagged.push(tag ? base + tag : base);
-    moveSequenceRawTagged.push(tag ? base + tag : base);
+    moveSeqLog.push({
+      moveSeq: base,
+      moveSeqRaw: base,
+      moveSeqTagged: tag ? base + tag : base,
+      moveSeqRawTagged: tag ? base + tag : base,
+    });
   }
   liveUnlockTokens.length = 0;
   currentSpotCount = deserialized.currentSpotCount;
@@ -1427,7 +1439,7 @@ encCheckbox.addEventListener('change', () => {
 });
 
 // Move sequence display mode: labels (default) vs raw vertex IDs — a pure
-// display swap over the already-recorded moveSequence/moveSequenceRaw arrays.
+// display swap over the already-recorded moveSeqLog entries.
 const rawIdCheckbox = document.getElementById('raw-id-checkbox') as HTMLInputElement;
 rawIdCheckbox.addEventListener('change', () => {
   useRawVertexIds = rawIdCheckbox.checked;
@@ -1436,7 +1448,7 @@ rawIdCheckbox.addEventListener('change', () => {
 });
 
 // Move Check ("Sequence verifier"): every move's {encoding}-tagged token is always recorded
-// in the background (see afterMoveCommitted / moveSequenceTagged); this toggle only controls
+// in the background (see afterMoveCommitted / moveSeqLog's moveSeqTagged field); this toggle only controls
 // which variant updateMoveSeq() displays. Checked by default, so sync the mode on (re)load too.
 const moveCheckCheckbox = document.getElementById('move-check-checkbox') as HTMLInputElement;
 moveCheckMode = moveCheckCheckbox.checked;
@@ -1491,14 +1503,14 @@ pointEncCheckbox.addEventListener('change', () => {
 // Math-menu toggle rows + the move-seq bar) are physically reparented between their modal/
 // dropdown homes and the panel — same elements, same listeners, so content can't diverge.
 
-const pbPanel          = document.getElementById('position-browser-panel')  as HTMLDivElement;
+const pbPanel          = document.getElementById(PB_PANEL_ID)               as HTMLDivElement;
 const pbPanelExtra     = document.getElementById('pb-panel-extra')          as HTMLDivElement;
 const pbPanelToggleRow = document.getElementById('pb-panel-toggle-row')     as HTMLDivElement;
 const pbLiveEncoding   = document.getElementById('pb-live-encoding')        as HTMLDivElement;
 const pbInvisibleBoundaryListing = document.getElementById('pb-invisible-boundary-listing') as HTMLDivElement;
 const pbTrackedPanel   = document.getElementById('pb-tracked-panel')        as HTMLDivElement;
 const pbChrome         = document.getElementById('pb-chrome')               as HTMLDivElement;
-const pbBody           = document.getElementById('pb-body')                 as HTMLDivElement;
+const pbBody           = document.getElementById(PB_BODY_ID)                as HTMLDivElement;
 const pbNotifyArea     = document.getElementById('pb-notify-area')          as HTMLDivElement;
 const pbOverlay        = document.getElementById('position-browser-overlay') as HTMLDivElement;
 
@@ -1721,12 +1733,8 @@ function resetGame(spots: number): void {
   currentSpotCount = spots;
   Object.assign(state, createInitialState(spots));
   history.length = 0;
-  moveSequence.length = 0;
-  moveSequenceRaw.length = 0;
-  moveSequenceTagged.length = 0;
-  moveSequenceRawTagged.length = 0;
+  moveSeqLog.length = 0;
   liveUnlockTokens.length = 0;
-  committedMoves.length = 0;
   redoStack.length = 0;
   pendingCollapse = null;
   subregionHighlight = null;
@@ -2028,7 +2036,7 @@ function promptManual(parsed: ResolvedMove, moveNum: number): Promise<boolean> {
 /** Re-enter a hand-drawn-move pause after Load restores a saved paused position. */
 function resumePausedMove(parsed: ResolvedMove): void {
   recreateActive = true;
-  setupManualPause(parsed, moveSequence.length + 1, cloneState(state), () => {
+  setupManualPause(parsed, moveSeqLog.length + 1, cloneState(state), () => {
     recreateActive = false;
     setPaused(false);
     updateUndoButton();
