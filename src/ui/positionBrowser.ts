@@ -34,6 +34,7 @@ import {
   analyzeFull,
   analyzeNimber,
   canon,
+  quickCanonOf,
   type AnalysisOk,
   type AnalysisResult,
   type AnalysisErr,
@@ -44,10 +45,11 @@ import {
   type QuickChildInfo,
   UNKNOWN_VALUE,
 } from '../engine/stalks';
-import { getFull, getMeta, getParents, record, type LightMeta } from '../model/positionCache';
+import { getFull, getMeta, getQuickMeta, getParents, record, type LightMeta } from '../model/positionCache';
 
 /** A result built purely from cached metadata (e.g. the preloaded master-save seed) for a position
- * too large for the WASM engine's on-demand size gate — no children/quickCanon available. */
+ * too large for the WASM engine's on-demand size gate — no children available. `quickCanon`, when
+ * resolvable, carries the quick-canon move-bound display (see resolveQuickCanonRoot). */
 interface MetaOnlyOk {
   ok: true;
   reason: 'meta-only';
@@ -55,6 +57,7 @@ interface MetaOnlyOk {
   nimber: number;
   minMoves: number;
   maxMoves: number;
+  quickCanon?: QuickCanon;
 }
 
 /** A rendered view: either a standard analysis result or an on-demand quick-canon nimber result. */
@@ -158,15 +161,17 @@ function isMetaOnly(v: View): v is MetaOnlyOk {
 }
 
 /**
- * Combined metadata for a canonical encoding, direct or as a disjoint sum of parts already in the
- * cache (nimbers XOR, move bounds add) — mirrors the engine's own allComponentsKnown/valueOf combine
- * rule. Lets a large sum bypass the size gate as soon as every one of its parts is individually
- * known (e.g. from the preloaded master-save seed), even if the whole sum was never stored as one row.
+ * Combined metadata for a `+`-joined encoding, direct or as a disjoint sum of parts already known to
+ * `lookup` (nimbers XOR, move bounds add) — mirrors the engine's own allComponentsKnown/valueOf
+ * combine rule. Lets a large sum bypass the size gate as soon as every one of its parts is
+ * individually known (e.g. from a preloaded master-save seed), even if the whole sum was never
+ * stored as one row. Shared by metaOfCanon (structural canon, getMeta) and metaOfQuickCanon
+ * (quick-canon rep, getQuickMeta) below.
  */
-function metaOfCanon(canonEnc: string): LightMeta | undefined {
-  const direct = getMeta(canonEnc);
+function combineMeta(enc: string, lookup: (enc: string) => LightMeta | undefined): LightMeta | undefined {
+  const direct = lookup(enc);
   if (direct) return direct;
-  const parts = canonEnc.split('+');
+  const parts = enc.split('+');
   if (parts.length < 2) return undefined;
   let nimber = 0;
   let minMoves = 0;
@@ -174,7 +179,7 @@ function metaOfCanon(canonEnc: string): LightMeta | undefined {
   let subposCount = 0;
   for (const part of parts) {
     if (part === 'N') continue; // the dead subposition contributes nothing
-    const m = getMeta(part);
+    const m = lookup(part);
     if (!m) return undefined;
     nimber ^= m.nimber;
     minMoves += m.minMoves;
@@ -182,6 +187,36 @@ function metaOfCanon(canonEnc: string): LightMeta | undefined {
     subposCount += m.subposCount;
   }
   return { nimber, minMoves, maxMoves, subposCount };
+}
+
+/** Metadata for a structural-canon encoding — see combineMeta. */
+function metaOfCanon(canonEnc: string): LightMeta | undefined {
+  return combineMeta(canonEnc, getMeta);
+}
+
+/** Metadata for a quick-canon REPRESENTATIVE encoding — see combineMeta. `nimber` on the result is
+ * the representative's own value (offset 0); callers XOR in a specific position's own quick-canon
+ * offset themselves (see QuickCanon's doc comment in stalks.ts). */
+function metaOfQuickCanon(repEnc: string): LightMeta | undefined {
+  return combineMeta(repEnc, getQuickMeta);
+}
+
+/**
+ * Resolve the quick-canon representative + move bounds for a position, given its structural canon
+ * and whatever (possibly bounds-less) QuickCanon the engine already returned (e.g. the
+ * needs-calculation branch's cheap rep, or undefined on the too-large branch). Used by analyzeCached
+ * for the master-backed / meta-only paths, where the toggle later re-renders from cached state with
+ * no re-fetch (see rerenderBody) — so this must run once, up front, not at render time.
+ */
+async function resolveQuickCanonRoot(canonEnc: string, fromEngine: QuickCanon | undefined): Promise<QuickCanon | undefined> {
+  let rep = fromEngine;
+  if (!rep) {
+    const qc = await quickCanonOf(canonEnc);
+    if (qc.ok) rep = { enc: qc.enc, offset: qc.offset };
+  }
+  if (!rep) return undefined;
+  const m = metaOfQuickCanon(rep.enc);
+  return m ? { ...rep, minMoves: m.minMoves, maxMoves: m.maxMoves } : rep;
 }
 
 /** Backfill any UNKNOWN_VALUE child nimbers from cached metadata (e.g. the preloaded master-save
@@ -252,6 +287,12 @@ interface HistEntry {
 }
 
 // --- module state ---------------------------------------------------------------------------
+
+// DOM ids shared with main.ts (which reparents this panel's chrome between its modal and wide-panel
+// homes -- see main.ts's "Wide-window layout" section). Exported so both files reference one literal
+// each instead of two independently-typed copies that a future rename could silently miss.
+export const PB_PANEL_ID = 'position-browser-panel';
+export const PB_BODY_ID = 'pb-body';
 
 let overlay: HTMLDivElement;
 let addressInput: HTMLInputElement;
@@ -337,7 +378,10 @@ async function analyzeCached(inputText: string): Promise<{ result: View; canonEn
   if (result.children && canonEnc) {
     const rootMeta = metaOfCanon(canonEnc);
     if (rootMeta) {
-      const masterResult = buildMasterBackedOk(canonEnc, rootMeta, result.quickCanon, result.children);
+      // Resolved once, up front — the Quick-Canon toggle re-renders from this cached result with no
+      // re-fetch (see rerenderBody), so the move bounds must already be attached here.
+      const quickCanonRoot = await resolveQuickCanonRoot(canonEnc, result.quickCanon);
+      const masterResult = buildMasterBackedOk(canonEnc, rootMeta, quickCanonRoot, result.children);
       record(masterResult);
       return { result: masterResult, canonEnc };
     }
@@ -356,6 +400,7 @@ async function analyzeCached(inputText: string): Promise<{ result: View; canonEn
         nimber: meta.nimber,
         minMoves: meta.minMoves,
         maxMoves: meta.maxMoves,
+        quickCanon: await resolveQuickCanonRoot(canonEnc, result.quickCanon),
       };
       return { result: metaResult, canonEnc };
     }
@@ -373,7 +418,7 @@ async function analyzeCached(inputText: string): Promise<{ result: View; canonEn
  * so it still needs the field.
  */
 function canonFieldRedundant(): boolean {
-  return document.getElementById('position-browser-panel')?.classList.contains('wide') ?? false;
+  return document.getElementById(PB_PANEL_ID)?.classList.contains('wide') ?? false;
 }
 
 /** Clear the notification area (called at the start of every render). */
@@ -401,6 +446,24 @@ function childStats(children: { enc: string; nimber?: number }[] | undefined): {
   const hasUnknown = children.some(c => c.nimber === undefined || c.nimber === UNKNOWN_VALUE);
   const winning = hasUnknown ? '?' : String(children.filter(c => c.nimber === 0).length);
   return { count, winning };
+}
+
+/**
+ * Shortest/Longest Game field pair, toggle-switched between exact-canon and quick-canon move
+ * bounds. `quick` is the resolved (possibly bounds-less) QuickCanon for this position — falls back
+ * to the exact numbers, unlabeled, whenever quick bounds aren't available (see resolveQuickCanonRoot
+ * and the "Plain AnalysisErr passthrough" case in analyzeCached). The "(Quick)" suffix exists only so
+ * the two numbers are never ambiguous across a toggle flip -- these are NOT real game-length bounds,
+ * see QuickCanon's doc comment in stalks.ts for what they actually measure.
+ */
+function moveBoundsFields(exactMin: number, exactMax: number, quick: QuickCanon | undefined, showQuick: boolean): HTMLDivElement[] {
+  const useQuick = showQuick && quick?.minMoves !== undefined && quick?.maxMoves !== undefined;
+  const min = useQuick ? quick.minMoves! : exactMin;
+  const max = useQuick ? quick.maxMoves! : exactMax;
+  return [
+    field(useQuick ? 'Shortest Game (Quick)' : 'Shortest Game', `${min} moves`),
+    field(useQuick ? 'Longest Game (Quick)' : 'Longest Game', `${max} moves`),
+  ];
 }
 
 function field(label: string, valueEl: HTMLElement | string, placeholder = false): HTMLDivElement {
@@ -632,11 +695,16 @@ function renderQuick(result: QuickAnalysisOk): void {
     field('Quick-canon Encoding', displayQuick(result.quickCanon.enc, result.quickCanon.offset)),
   );
   body.appendChild(field('Nimber', String(result.nimber)));
+  if (result.quickCanon.minMoves !== undefined && result.quickCanon.maxMoves !== undefined) {
+    body.appendChild(field('Shortest Game (Quick)', `${result.quickCanon.minMoves} moves`));
+    body.appendChild(field('Longest Game (Quick)', `${result.quickCanon.maxMoves} moves`));
+  }
   const stats = childStats(result.quickChildren);
   body.appendChild(field('#Children', String(stats.count)));
   body.appendChild(field('#Winning', stats.winning));
 
-  // Offer to upgrade to the full (exact) game tree, which also yields move-length bounds.
+  // Offer to upgrade to the full (exact) game tree, which also yields real exact move-length bounds
+  // (the quick-canon ones above measure something different — see QuickCanon's doc comment).
   const row = document.createElement('div');
   row.className = 'pb-calc-buttons';
   const treeBtn = document.createElement('button');
@@ -662,9 +730,11 @@ function renderQuick(result: QuickAnalysisOk): void {
 }
 
 /** A position too large for the engine's on-demand gate, but already known from cached metadata
- * (typically the preloaded master-save seed). No children/quickCanon available — just the value. */
+ * (typically the preloaded master-save seed). No children available — just the value (and, when the
+ * quick-canon master seed also covers it, the quick-canon move bounds via the toggle). */
 function renderMetaOnly(result: MetaOnlyOk): void {
   body.innerHTML = '';
+  const t = toggles();
   if (!canonFieldRedundant()) body.appendChild(field('Canon Encoding', display(result.canon)));
 
   const split = document.createElement('div');
@@ -674,8 +744,8 @@ function renderMetaOnly(result: MetaOnlyOk): void {
   leftCol.appendChild(field('Nimber', String(result.nimber)));
   const rightCol = document.createElement('div');
   rightCol.className = 'pb-col';
-  rightCol.appendChild(field('Shortest Game', `${result.minMoves} moves`));
-  rightCol.appendChild(field('Longest Game', `${result.maxMoves} moves`));
+  for (const el of moveBoundsFields(result.minMoves, result.maxMoves, result.quickCanon, t.quick))
+    rightCol.appendChild(el);
   split.appendChild(leftCol);
   split.appendChild(rightCol);
   body.appendChild(split);
@@ -711,8 +781,11 @@ function renderError(result: Extract<AnalysisResult, { ok: false }>): void {
       leftCol.appendChild(field('Nimber', String(meta.nimber)));
       const rightCol = document.createElement('div');
       rightCol.className = 'pb-col';
-      rightCol.appendChild(field('Shortest Game', `${meta.minMoves} moves`));
-      rightCol.appendChild(field('Longest Game', `${meta.maxMoves} moves`));
+      // result.quickCanon is only ever populated here in the narrow window where the quick-canon
+      // seed load raced ahead of the original analyzeCached call (see resolveQuickCanonRoot) --
+      // moveBoundsFields gracefully falls back to the exact numbers when it's absent.
+      for (const el of moveBoundsFields(meta.minMoves, meta.maxMoves, result.quickCanon, t.quick))
+        rightCol.appendChild(el);
       split.appendChild(leftCol);
       split.appendChild(rightCol);
       body.appendChild(split);
@@ -788,8 +861,8 @@ function renderOk(result: Extract<AnalysisResult, { ok: true }>): void {
   leftCol.appendChild(field('#Children', String(stats.count)));
   const rightCol = document.createElement('div');
   rightCol.className = 'pb-col';
-  rightCol.appendChild(field('Shortest Game', `${result.minMoves} moves`));
-  rightCol.appendChild(field('Longest Game', `${result.maxMoves} moves`));
+  for (const el of moveBoundsFields(result.minMoves, result.maxMoves, result.quickCanon, t.quick))
+    rightCol.appendChild(el);
   rightCol.appendChild(field('#Winning', stats.winning));
   split.appendChild(leftCol);
   split.appendChild(rightCol);
@@ -1004,7 +1077,7 @@ export function ensureWired(): void {
   addressInput = document.getElementById('pb-address') as HTMLInputElement;
   backBtn = document.getElementById('pb-back') as HTMLButtonElement;
   forwardBtn = document.getElementById('pb-forward') as HTMLButtonElement;
-  body = document.getElementById('pb-body') as HTMLDivElement;
+  body = document.getElementById(PB_BODY_ID) as HTMLDivElement;
   notifyMessages = document.getElementById('pb-notify-messages') as HTMLDivElement;
   calculatingEl = document.getElementById('pb-calculating') as HTMLDivElement;
   togglesEl = document.getElementById('pb-toggles') as HTMLDivElement;

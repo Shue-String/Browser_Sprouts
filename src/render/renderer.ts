@@ -135,7 +135,11 @@ export interface RenderOptions {
   enclosureCoverage?: { pos: SpherePoint; side: 'arc' | 'other' | 'none' }[];
 }
 
-const HOVER_COLOR  = '#dd2222';
+// The app's one "alert red" -- hover, the CCW ring-neighbor ray, enclosure/Move-Check mismatch
+// highlighting, and Recreate's lo/hi target rings all intentionally share it. Named once so a
+// future retint can't update some of these call sites and miss the others.
+const ALERT_RED = '#dd2222';
+const HOVER_COLOR  = ALERT_RED;
 const HOVER_GROW   = 3; // px added to the vertex's normal radius when hovered
 
 export class Renderer {
@@ -721,7 +725,7 @@ export class Renderer {
         // Immediate clockwise ring neighbor: green.
         if (entry.clockwiseNextEdge) drawRay(entry.clockwiseNextEdge.angle, '#22aa22', 3, `e${entry.clockwiseNextEdge.edgeId} (CW)`);
         // Immediate counterclockwise ring neighbor: red.
-        if (entry.counterclockwiseNextEdge) drawRay(entry.counterclockwiseNextEdge.angle, '#dd2222', 3, `e${entry.counterclockwiseNextEdge.edgeId} (CCW)`);
+        if (entry.counterclockwiseNextEdge) drawRay(entry.counterclockwiseNextEdge.angle, ALERT_RED, 3, `e${entry.counterclockwiseNextEdge.edgeId} (CCW)`);
       }
     }
 
@@ -747,7 +751,7 @@ export class Renderer {
         if (!v || v.isPseudo) continue;
         const pt = this.toCanvas(v.pos, camera);
         ctx.save();
-        ctx.strokeStyle = color === 'red' ? '#dd2222' : '#1a5fff';
+        ctx.strokeStyle = color === 'red' ? ALERT_RED : '#1a5fff';
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.arc(pt.px, pt.py, VERTEX_RADIUS_ACTIVE + 5, 0, Math.PI * 2);
@@ -854,7 +858,7 @@ export class Renderer {
     // Red rings: lo and hi target vertices. Joints get a partial arc spanning
     // only the face opening at the relevant boundary visit.
     ctx.save();
-    ctx.strokeStyle = '#dd2222';
+    ctx.strokeStyle = ALERT_RED;
     ctx.lineWidth   = 3;
     for (const [vid, jointEdges] of [
       [hints.loId, hints.loJointEdges],

@@ -59,10 +59,26 @@ export interface ChildInfo {
  * placeholder sentinel (see stalks/src/graph.hpp). Real nimber/minMoves/maxMoves are always >= 0. */
 export const UNKNOWN_VALUE = -1;
 
-/** Quick-canon (Advanced Collections) representative of a position: rep encoding + nimber offset. */
+/**
+ * Quick-canon (Advanced Collections) representative of a position: rep encoding + nimber offset.
+ * `minMoves`/`maxMoves`, when present, are the quick-canon GameGraph node's own move-count bounds —
+ * populated only for "whole position" usages (AnalysisOk.quickCanon, QuickAnalysisOk.quickCanon),
+ * never on the cheap per-child tags (ChildInfo.quickCanon). These are NOT real game-length bounds:
+ * the quick-canon tree isn't a game tree, and playing a position out for real still takes exactly as
+ * many moves as the exact-canon minMoves/maxMoves already say. What they measure instead: under
+ * optimal play, Advanced Collections equivalence lets a player who knows the theory pre-commit to a
+ * whole future move sequence without actively choosing each move as it comes up. Quick-canon
+ * minMoves/maxMoves count how many moves in an optimal-play line still require active
+ * calculation/choice (until a fully general strategy, if one exists, is found) — i.e. the exact-canon
+ * tree collapsed down to just its genuine decision points. Comparing this against the exact-canon
+ * bounds for real n-spot games is itself the research question: a much smaller quick-canon number is
+ * a signal of real strategic compression, not just an equivalent relabeling.
+ */
 export interface QuickCanon {
   enc: string;
   offset: number; // 0 or 1; nimber(position) === nimber(rep) ^ offset
+  minMoves?: number;
+  maxMoves?: number;
 }
 
 /** A play-child reduced by quickCanon, deduped by (enc, offset). nimber is the child's true value. */
@@ -113,8 +129,10 @@ export interface AnalysisErr {
 export type AnalysisResult = AnalysisOk | AnalysisErr;
 
 /**
- * Result of an on-demand quick-canon nimber calculation (the "Calculate Nimber" button). Only the
- * nimber is exact; move-length bounds are not meaningful in quick-canon and are omitted.
+ * Result of an on-demand quick-canon nimber calculation (the "Calculate Nimber" button). `nimber` is
+ * the real Grundy value; `quickCanon.minMoves`/`maxMoves` are populated too — see QuickCanon's doc
+ * comment for what they mean (not real game-length bounds, but a measure of how many moves still
+ * require active calculation under optimal play once collections-equivalent positions collapse).
  */
 export interface QuickAnalysisOk {
   ok: true;

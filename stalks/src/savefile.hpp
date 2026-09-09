@@ -60,8 +60,15 @@ public:
         int maxMoves = 0;
     };
 
+    // One stored minimal node: its encoding and recomputed value together, so a consumer walking
+    // every row can never see one array's length or order drift from the other's.
+    struct Entry {
+        std::string enc;
+        Value val;
+    };
+
     GameGraph::Mode mode() const { return mode_; }
-    std::size_t size() const { return encs_.size(); }
+    std::size_t size() const { return entries_.size(); }
 
     // Value of a stored MINIMAL node by its exact (as-written) encoding. Null if absent.
     const Value* findMinimal(const std::string& enc) const;
@@ -73,14 +80,12 @@ public:
     bool value(const Position& p, Value& out, int* offsetOut = nullptr) const;
 
     // Read-only access to the raw stored rows (ascending-lives order), for verification/analysis.
-    const std::vector<std::string>& encs() const { return encs_; }
-    const std::vector<Value>& values() const { return vals_; }
+    const std::vector<Entry>& entries() const { return entries_; }
 
 private:
     friend SolvedDB loadGraph(std::istream& in);
     GameGraph::Mode mode_ = GameGraph::Mode::Exact;
-    std::vector<std::string> encs_;
-    std::vector<Value> vals_;
+    std::vector<Entry> entries_;
     std::unordered_map<std::string, std::size_t> index_;
 };
 

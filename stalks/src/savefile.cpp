@@ -272,8 +272,7 @@ SolvedDB loadGraph(std::istream& in) {
     db.mode_ = quick ? GameGraph::Mode::Quick : GameGraph::Mode::Exact;
 
     const std::uint64_t count = getVarint(in);
-    db.encs_.reserve(static_cast<std::size_t>(count));
-    db.vals_.reserve(static_cast<std::size_t>(count));
+    db.entries_.reserve(static_cast<std::size_t>(count));
     db.index_.reserve(static_cast<std::size_t>(count) * 2);
 
     for (std::uint64_t i = 0; i < count; ++i) {
@@ -287,7 +286,7 @@ SolvedDB loadGraph(std::istream& in) {
         auto applyDelta = [&](std::uint64_t delta, int& nim, int& mn, int& mx) {
             if (delta == 0 || delta > i)
                 throw std::runtime_error("savefile: child index out of range");
-            const SolvedDB::Value& cv = db.vals_[static_cast<std::size_t>(i - delta)];
+            const SolvedDB::Value& cv = db.entries_[static_cast<std::size_t>(i - delta)].val;
             nim ^= cv.nimber;
             mn += cv.minMoves;
             mx += cv.maxMoves;
@@ -328,8 +327,7 @@ SolvedDB loadGraph(std::istream& in) {
         }  // else terminal: 0/0/0
 
         db.index_.emplace(enc, static_cast<std::size_t>(i));
-        db.encs_.push_back(std::move(enc));
-        db.vals_.push_back(v);
+        db.entries_.push_back(SolvedDB::Entry{std::move(enc), v});
     }
     return db;
 }
@@ -343,7 +341,7 @@ SolvedDB loadGraphFromFile(const std::string& path) {
 
 const SolvedDB::Value* SolvedDB::findMinimal(const std::string& enc) const {
     const auto it = index_.find(enc);
-    return it == index_.end() ? nullptr : &vals_[it->second];
+    return it == index_.end() ? nullptr : &entries_[it->second].val;
 }
 
 bool SolvedDB::value(const Position& p, Value& out, int* offsetOut) const {

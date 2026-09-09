@@ -115,12 +115,23 @@ export function rotationY(angle: number): RotationMatrix {
  * Near the north pole (z → 1), x and y → 0 at the same rate, so nx and ny
  * stay bounded (magnitude → 2). We clamp to avoid sqrt of zero.
  */
-export function project(p: SpherePoint, diskRadius: number, cx: number, cy: number): CanvasPoint {
-  const z = Math.max(p.z, -1 + 1e-9);
+// Pole-singularity clamp for the Lambert formula below, shared by every caller so the two
+// projections (disk and rect) can't silently diverge on how close to the north pole they clamp.
+const LAMBERT_POLE_EPS = 1e-9;
+
+/** Lambert azimuthal equal-area: sphere -> normalized unit disk (u,v with u^2+v^2 <= 1). The one
+ * place the forward formula and its pole clamp live, so project() and projectRect() can't drift. */
+function lambertToUnitDisk(p: SpherePoint): { u: number; v: number } {
+  const z = Math.max(p.z, -1 + LAMBERT_POLE_EPS);
   const k = Math.sqrt(2 / (1 - z));
+  return { u: (p.x * k) / 2, v: (p.y * k) / 2 };
+}
+
+export function project(p: SpherePoint, diskRadius: number, cx: number, cy: number): CanvasPoint {
+  const { u, v } = lambertToUnitDisk(p);
   return {
-    px: cx + p.x * k * (diskRadius / 2),
-    py: cy + p.y * k * (diskRadius / 2),
+    px: cx + u * diskRadius,
+    py: cy + v * diskRadius,
   };
 }
 
@@ -213,10 +224,7 @@ function squareToDisk(a: number, b: number): [number, number] {
  */
 export function projectRect(p: SpherePoint, width: number, height: number): CanvasPoint {
   // Lambert: sphere → unit disk
-  const z  = Math.max(p.z, -1 + 1e-9);
-  const k  = Math.sqrt(2 / (1 - z));
-  const u  = p.x * k / 2;   // Lambert normalized / 2 → unit disk
-  const v  = p.y * k / 2;
+  const { u, v } = lambertToUnitDisk(p);
 
   // Shirley-Chiu: unit disk → unit square
   const [sx, sy] = diskToSquare(u, v);

@@ -89,6 +89,18 @@ export const TUNABLE_SPECS: TunableSpec[] = [
   { key: 'recreateSettleThreshold', label: 'Recreate settle threshold',   group: 'Recreate', min: 0, max: 0.05,  step: 0.0005 },
 ];
 
+// DEFAULT_TUNABLES (a Tunables) and TUNABLE_SPECS (a plain array) are two independent listings of
+// the same key set -- the compiler enforces the former, not the latter, so a field added to one
+// without the other compiles fine and just silently vanishes from the Debug panel. Checked once at
+// module load rather than trusted to the doc comment above.
+(function checkTunableSpecsComplete(): void {
+  const specKeys = new Set(TUNABLE_SPECS.map(s => s.key));
+  const missing = (Object.keys(DEFAULT_TUNABLES) as (keyof Tunables)[]).filter(k => !specKeys.has(k));
+  if (missing.length) {
+    console.error(`[tunables] missing TUNABLE_SPECS row(s) for: ${missing.join(', ')}`);
+  }
+})();
+
 const STORAGE_KEY = 'sprouts-tunables-v1';
 
 /** Load any saved overrides from localStorage on top of the defaults. */
