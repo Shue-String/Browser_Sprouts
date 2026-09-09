@@ -163,9 +163,9 @@ std::vector<const Node*> reachableMinimal(const Node* root) {
         stack.pop_back();
         if (!n->isSum())
             out.push_back(n);
-        for (const Node* c : n->children)
-            if (seen.insert(c).second)
-                stack.push_back(c);
+        for (const Node::Edge& e : n->edges)
+            if (seen.insert(e.node).second)
+                stack.push_back(e.node);
         for (const Node* s : n->subpositions)
             if (seen.insert(s).second)
                 stack.push_back(s);
@@ -208,9 +208,9 @@ std::size_t writeMinimal(const GameGraph& g, std::vector<const Node*> mins, std:
     for (std::size_t rank = 0; rank < order.size(); ++rank) {
         const Node* n = mins[order[rank]];
         putPackedString(out, n->enc);
-        putVarint(out, n->children.size());
-        for (std::size_t c = 0; c < n->children.size(); ++c) {
-            const std::vector<const Node*> comps = childComponents(n->children[c]);
+        putVarint(out, n->edges.size());
+        for (std::size_t c = 0; c < n->edges.size(); ++c) {
+            const std::vector<const Node*> comps = childComponents(n->edges[c].node);
             // Edge descriptor, parity-tagged so the common single-component child needs no separate
             // count byte: even value = one component, holding (delta << 1); odd value = a sum child,
             // holding (compCount << 1 | 1) followed by compCount deltas. A sum always has >= 2 parts,

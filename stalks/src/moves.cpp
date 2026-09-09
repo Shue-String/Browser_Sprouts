@@ -355,28 +355,26 @@ Position spliceChild(const Position& p, std::size_t comp,
 }
 
 // spliceChild carrying provenance: the moved component's tracked pieces bring their own CompSrc;
-// every other (live) component carries its parent provenance psrc[q] through unchanged. Fills
-// `child` and the parallel `childSrc` (one CompSrc per surviving component).
-void spliceChildTracked(const Position& p, const std::vector<CompSrc>& psrc, std::size_t comp,
-                        const std::vector<std::pair<Component, CompSrc>>& pieces, Position& child,
-                        std::vector<CompSrc>& childSrc) {
+// every other (live) component carries its parent provenance parent.src[q] through unchanged.
+// Fills `child` (component + provenance pushed together via TrackedCanon::push_back, so they
+// can't drift apart).
+void spliceChildTracked(const TrackedCanon& parent, std::size_t comp,
+                        const std::vector<std::pair<Component, CompSrc>>& pieces,
+                        TrackedCanon& child) {
+    const Position& p = parent.pos;
     for (std::size_t q = 0; q < p.components.size(); ++q) {
         if (q == comp) {
             for (const auto& [pc, ps] : pieces)
-                if (!pc.dead) {
-                    child.components.push_back(pc);
-                    childSrc.push_back(ps);
-                }
+                if (!pc.dead)
+                    child.push_back(pc, ps);
         } else if (!p.components[q].dead) {
-            child.components.push_back(p.components[q]);
-            childSrc.push_back(psrc[q]);
+            child.push_back(p.components[q], parent.src[q]);
         }
     }
-    if (child.components.empty()) {
+    if (child.pos.components.empty()) {
         Component dead;
         dead.dead = true;
-        child.components.push_back(dead);
-        childSrc.push_back(CompSrc{});
+        child.push_back(std::move(dead), CompSrc{});
     }
 }
 
@@ -557,15 +555,15 @@ Position applyEnclosure(const Position& p, std::size_t comp, const Enclosure& m)
     return spliceChild(p, comp, applyEnclosure(p.components[comp], m));
 }
 
-TrackedCanon enclosureChildTracked(const Position& p, const std::vector<CompSrc>& psrc,
-                                   std::size_t comp, const Enclosure& m) {
-    if (comp >= p.components.size())
+TrackedCanon enclosureChildTracked(const TrackedCanon& parent, std::size_t comp,
+                                   const Enclosure& m) {
+    if (comp >= parent.pos.components.size())
         throw EncodingError("component index out of range");
-    Position child;
-    std::vector<CompSrc> childSrc;
-    spliceChildTracked(p, psrc, comp, applyEnclosureTracked(p.components[comp], psrc[comp], m),
-                       child, childSrc);
-    return canonicalizeDecompressedTracked(child, childSrc);
+    TrackedCanon child;
+    spliceChildTracked(parent, comp,
+                       applyEnclosureTracked(parent.pos.components[comp], parent.src[comp], m),
+                       child);
+    return canonicalizeDecompressedTracked(child);
 }
 
 // Whether `w` has no membrane and no joint tokens -- i.e. every token is plain, unpaired content
@@ -846,15 +844,13 @@ Position applyJoin(const Position& p, std::size_t comp, const Join& m) {
     return spliceChild(p, comp, applyJoin(p.components[comp], m));
 }
 
-TrackedCanon joinChildTracked(const Position& p, const std::vector<CompSrc>& psrc,
-                              std::size_t comp, const Join& m) {
-    if (comp >= p.components.size())
+TrackedCanon joinChildTracked(const TrackedCanon& parent, std::size_t comp, const Join& m) {
+    if (comp >= parent.pos.components.size())
         throw EncodingError("component index out of range");
-    Position child;
-    std::vector<CompSrc> childSrc;
-    spliceChildTracked(p, psrc, comp, applyJoinTracked(p.components[comp], psrc[comp], m), child,
-                       childSrc);
-    return canonicalizeDecompressedTracked(child, childSrc);
+    TrackedCanon child;
+    spliceChildTracked(parent, comp,
+                       applyJoinTracked(parent.pos.components[comp], parent.src[comp], m), child);
+    return canonicalizeDecompressedTracked(child);
 }
 
 std::vector<Join> joinMoves(const Component& c) {

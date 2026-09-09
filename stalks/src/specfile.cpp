@@ -190,9 +190,9 @@ std::vector<const Node*> topoOrderMulti(const std::vector<const Node*>& roots) {
             stack.pop_back();
             if (!n->isSum())
                 allMin.push_back(n);
-            for (const Node* c : n->children)
-                if (seen.insert(c).second)
-                    stack.push_back(c);
+            for (const Node::Edge& e : n->edges)
+                if (seen.insert(e.node).second)
+                    stack.push_back(e.node);
             for (const Node* s : n->subpositions)
                 if (seen.insert(s).second)
                     stack.push_back(s);
@@ -207,8 +207,8 @@ std::vector<const Node*> topoOrderMulti(const std::vector<const Node*>& roots) {
     std::unordered_map<const Node*, std::vector<const Node*>> dependents;
     for (const Node* n : allMin) {
         std::unordered_set<const Node*> uniqueDeps;
-        for (const Node* c : n->children)
-            for (const Node* comp : childComponents(c))
+        for (const Node::Edge& e : n->edges)
+            for (const Node* comp : childComponents(e.node))
                 uniqueDeps.insert(comp);
         remaining[n] = static_cast<int>(uniqueDeps.size());
         for (const Node* d : uniqueDeps)
@@ -261,9 +261,9 @@ std::size_t writeMinimalSpec(const GameGraph& g, const std::vector<const Node*>&
     for (std::size_t rank = 0; rank < mins.size(); ++rank) {
         const Node* n = mins[rank];
         putPackedString(out, n->enc);
-        putVarint(out, n->children.size());
-        for (std::size_t c = 0; c < n->children.size(); ++c) {
-            const std::vector<const Node*> comps = childComponents(n->children[c]);
+        putVarint(out, n->edges.size());
+        for (std::size_t c = 0; c < n->edges.size(); ++c) {
+            const std::vector<const Node*> comps = childComponents(n->edges[c].node);
             if (comps.size() == 1) {
                 const std::size_t ci = indexOf.at(comps[0]);  // < rank (post-order guarantee)
                 putVarint(out, (rank - ci) << 1);

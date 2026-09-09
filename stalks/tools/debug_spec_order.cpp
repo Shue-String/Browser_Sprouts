@@ -26,7 +26,7 @@ std::vector<const Node*> reachableMin(const Node* root) {
     while (!stack.empty()) {
         const Node* n = stack.back(); stack.pop_back();
         if (!n->isSum()) out.push_back(n);
-        for (const Node* c : n->children) if (seen.insert(c).second) stack.push_back(c);
+        for (const Node::Edge& e : n->edges) if (seen.insert(e.node).second) stack.push_back(e.node);
         for (const Node* s : n->subpositions) if (seen.insert(s).second) stack.push_back(s);
     }
     return out;
@@ -40,8 +40,8 @@ int main(int argc, char** argv) {
     for (const Node* n : reachableMin(root)) {
         std::cout << "NODE enc=" << n->enc << " lives2=" << parsePosition(n->enc).lives2()
                   << " special=" << specialCountOf(n->enc) << " isSum=" << n->isSum() << "\n";
-        for (std::size_t c = 0; c < n->children.size(); ++c) {
-            const Node* ch = n->children[c];
+        for (std::size_t c = 0; c < n->edges.size(); ++c) {
+            const Node* ch = n->edges[c].node;
             std::cout << "  edge -> " << (ch->isSum() ? "[SUM]" : ch->enc)
                       << " movetype=" << n->childMoveType(c);
             if (ch->isSum()) {

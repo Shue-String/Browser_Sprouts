@@ -224,9 +224,9 @@ std::vector<const Node*> reachable(const Node* root) {
         const Node* n = stack.back();
         stack.pop_back();
         out.push_back(n);
-        for (const Node* c : n->children)
-            if (seen.insert(c).second)
-                stack.push_back(c);
+        for (const Node::Edge& e : n->edges)
+            if (seen.insert(e.node).second)
+                stack.push_back(e.node);
         for (const Node* s : n->subpositions)
             if (seen.insert(s).second)
                 stack.push_back(s);
@@ -389,10 +389,10 @@ std::string fullAnalysis(const Position& p, const std::string& canon) {
             appendKey(out, kSubposCountKey);
             jsonInt(out, subposCount(n));
             out += ",\"children\":[";
-            for (std::size_t i = 0; i < n->children.size(); ++i) {
+            for (std::size_t i = 0; i < n->edges.size(); ++i) {
                 if (i)
                     out += ',';
-                jsonStr(out, n->children[i]->enc);
+                jsonStr(out, n->edges[i].node->enc);
             }
             out += "]}";
         }

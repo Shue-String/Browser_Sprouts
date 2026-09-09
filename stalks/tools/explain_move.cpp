@@ -100,6 +100,7 @@ int main(int argc, char** argv) {
 
         // Single-component moves only (matches wasm_api.cpp's applyMoveTracked, comp=0 assumed
         // here since that's all we need for this investigation).
+        const TrackedCanon parentTC{parent, psrc};
         TrackedCanon tc;
         if (kind == static_cast<int>(MoveKind::Enclosure)) {
             Enclosure m;
@@ -108,7 +109,7 @@ int main(int argc, char** argv) {
             m.i = i;
             m.j = j;
             m.mask = static_cast<std::uint32_t>(mask);
-            tc = enclosureChildTracked(parent, psrc, 0, m);
+            tc = enclosureChildTracked(parentTC, 0, m);
         } else {
             Join m;
             m.region = static_cast<std::uint32_t>(region);
@@ -116,7 +117,7 @@ int main(int argc, char** argv) {
             m.b2 = static_cast<std::uint32_t>(b);
             m.i = i;
             m.j = j;
-            tc = joinChildTracked(parent, psrc, 0, m);
+            tc = joinChildTracked(parentTC, 0, m);
         }
 
         std::cout << "child (decompressed): " << serialize(tc.pos) << "\n";

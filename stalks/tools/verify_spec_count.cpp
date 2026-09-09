@@ -26,7 +26,7 @@ std::unordered_set<const Node*> reachableMinSet(const std::vector<const Node*>& 
     while (!stack.empty()) {
         const Node* n = stack.back(); stack.pop_back();
         if (!n->isSum()) minSet.insert(n);
-        for (const Node* c : n->children) if (seen.insert(c).second) stack.push_back(c);
+        for (const Node::Edge& e : n->edges) if (seen.insert(e.node).second) stack.push_back(e.node);
         for (const Node* s : n->subpositions) if (seen.insert(s).second) stack.push_back(s);
     }
     return minSet;

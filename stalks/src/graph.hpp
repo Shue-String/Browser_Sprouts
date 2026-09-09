@@ -48,36 +48,43 @@ struct Node {
     bool placeholder = false;
 
     std::vector<Node*> subpositions;  // non-empty => this is a sum; do not expand
-    std::vector<Node*> children;      // single-subposition only (sum children are on the fly)
+
+    // One outgoing play-move edge: the destination node plus the first raw move (component,
+    // region, boundary/b1/b2, i, j, mask) that was found to reach it. Used to be two separate
+    // parallel vectors (`children`, `childMoves`) pushed together at the one site in build()'s
+    // candidate loop -- merged so a future edit to that loop can't push one without the other.
+    // Empty in sum nodes (they're never expanded by moves).
+    struct Edge {
+        Node* node = nullptr;
+        MoveTag tag;
+    };
+    std::vector<Edge> edges;
+
     std::vector<Node*> parents;       // back-links along the computed tree
 
-    // Per-child-edge move identity (parallel to `children`): the first raw move (component,
-    // region, boundary/b1/b2, i, j, mask) that was found to reach that edge. Lets callers
-    // (e.g. the analysis JSON) report which move to play to reach a given child, not just the
-    // child itself. Empty in sum nodes (children is empty there too).
-    std::vector<MoveTag> childMoves;
-
-    // Per-child-edge nimber offset (oplus-a tag), parallel to `children`. Only populated in
-    // quick-canon mode: a child position that quick-canonicalizes to `children[i]` contributes
-    // `children[i]->nimber ^ childOffsets[i]` to this node's mex. Empty (all-zero) in exact mode,
-    // where every move maps to its child's true structural value. See GameGraph::Mode.
+    // Per-edge nimber offset (oplus-a tag), parallel to `edges` by index. Kept as its own vector
+    // rather than folded into Edge because it's genuinely absent (not just zero) outside quick-canon
+    // mode -- see childOffset() below. A child position that quick-canonicalizes to `edges[i].node`
+    // contributes `edges[i].node->nimber ^ childOffsets[i]` to this node's mex. See GameGraph::Mode.
     std::vector<int> childOffsets;
 
-    // Per-child-edge packed movetype (moves.hpp::packMovetypes), parallel to `children`. Only
-    // populated when this node's position has a special point (ALPHA, ...) -- the movetype-0
-    // fast path, independent of Mode. Two edges can now share the same (node, offset) here: a
-    // move touching a special point and an unrelated move that happens to land on the same child
-    // are DISTINCT edges when their movetype differs (see moves.hpp::specialPointMovetypes), even
-    // though they contribute the same value to this node's mex (mex/minMoves/maxMoves still dedup
-    // by (node, offset) alone -- movetype does not affect game value, only which edges are kept).
+    // Per-edge packed movetype (moves.hpp::packMovetypes), parallel to `edges` by index. Kept as
+    // its own vector rather than folded into Edge because it's genuinely absent (not just zero)
+    // outside special-point nodes -- see childMoveType() below and the "movetype-0 fast path" test
+    // in test_main.cpp, which checks this vector is empty (not all-zero) in the common case. Two
+    // edges can share the same (node, offset) here: a move touching a special point and an
+    // unrelated move that happens to land on the same child are DISTINCT edges when their movetype
+    // differs (see moves.hpp::specialPointMovetypes), even though they contribute the same value to
+    // this node's mex (mex/minMoves/maxMoves still dedup by (node, offset) alone -- movetype does
+    // not affect game value, only which edges are kept).
     std::vector<int> childMoveTypes;
 
     bool isSum() const { return !subpositions.empty(); }
 
-    // Offset on the edge to children[i] (0 when offsets are not stored, i.e. exact mode).
+    // Offset on edges[i] (0 when offsets are not stored, i.e. exact mode).
     int childOffset(std::size_t i) const { return childOffsets.empty() ? 0 : childOffsets[i]; }
 
-    // Packed movetype on the edge to children[i] (0 when not stored, i.e. no special point here).
+    // Packed movetype on edges[i] (0 when not stored, i.e. no special point here).
     int childMoveType(std::size_t i) const {
         return childMoveTypes.empty() ? 0 : childMoveTypes[i];
     }

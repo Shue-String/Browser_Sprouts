@@ -61,10 +61,10 @@ int main(int argc, char** argv) {
         Row r;
         r.enc = n.enc;
         r.nimber = n.nimber;
-        r.numChildren = static_cast<int>(n.children.size());
-        for (const Node* c : n.children) {
-            r.childNimberCounts[c->nimber]++;
-            maxNimber = std::max(maxNimber, c->nimber);
+        r.numChildren = static_cast<int>(n.edges.size());
+        for (const Node::Edge& e : n.edges) {
+            r.childNimberCounts[e.node->nimber]++;
+            maxNimber = std::max(maxNimber, e.node->nimber);
         }
         rows.push_back(std::move(r));
     }

@@ -43,17 +43,28 @@ Position canonicalizeFull(const Position& p, bool slackOff = false);
 // regression against the historical position counts.
 Position canonicalizeDecompressed(const Position& p, bool slackOff = false);
 
-// Decompressed canonical form (as canonicalizeDecompressed) with provenance carried through.
-// `src[i]` is a CompSrc parallel to p.components[i].regions tagging each token with the caller's
-// vertex id (GEN_SRC for a generated token; -1 untracked). The result pairs the canonical Position
-// with per-component CompSrc parallel to it, so a caller can trace each canonical token back to the
-// parent vertex it descends from. Input must be decompressed (no pseudo-points). The token form of
-// `pos` is byte-identical to canonicalizeDecompressed(p) -- srcId never affects the canonical value.
+// A Position paired with per-component provenance: `src[i]` is a CompSrc parallel to
+// pos.components[i].regions tagging each token with the caller's vertex id (GEN_SRC for a
+// generated token; -1 untracked). Used both as canonicalizeDecompressedTracked's result (a
+// canonical Position, hence the name) and, in moves.hpp, as the bundled parent/child argument to
+// the tracked move functions (there it need not itself be canonical yet -- e.g. a freshly-spliced
+// child on its way into canonicalizeDecompressedTracked). One object rather than two
+// separately-passed parallel containers, so pos.components.size() and src.size() can't drift
+// apart at a call site the way position.hpp's CompSrc-vs-regions comment warns about.
 struct TrackedCanon {
     Position pos;
     std::vector<CompSrc> src;  // parallel to pos.components; src[i] parallel to pos.components[i]
+
+    // The only way to grow this result -- pushes both halves together, so a future edit can't
+    // add one without the other.
+    void push_back(Component comp, CompSrc compSrc) {
+        pos.components.push_back(std::move(comp));
+        src.push_back(std::move(compSrc));
+    }
 };
-TrackedCanon canonicalizeDecompressedTracked(const Position& p, const std::vector<CompSrc>& src);
+// Input must be decompressed (no pseudo-points). The token form of the result's `pos` is
+// byte-identical to canonicalizeDecompressed(in.pos) -- srcId never affects the canonical value.
+TrackedCanon canonicalizeDecompressedTracked(const TrackedCanon& in);
 
 // Reference (slow) decompressed canonicalization with no agnostic pruning: every rotation,
 // every region/boundary ordering, and both chiralities are enumerated and the numerically

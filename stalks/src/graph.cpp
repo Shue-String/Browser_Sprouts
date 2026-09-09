@@ -228,8 +228,7 @@ Node* GameGraph::build(const Position& canonical) {
     const bool storeOffsets = (mode_ == Mode::Quick);
     for (const Candidate& c : kids) {
         const ChildLink& ch = c.link;
-        n->children.push_back(ch.node);
-        n->childMoves.push_back(c.tag);
+        n->edges.push_back({ch.node, c.tag});
         if (storeOffsets)
             n->childOffsets.push_back(ch.offset);
         if (special)

@@ -47,10 +47,11 @@ Position applyEnclosure(const Position& p, std::size_t comp, const Enclosure& m)
 
 // Tracked whole-position enclosure: apply to component `comp`, carry every other component's
 // provenance through unchanged, and return the DECOMPRESSED CANONICAL child paired with
-// per-component provenance. `psrc[i]` is parallel to p.components[i].regions; input must be
-// decompressed (no pseudo-points). This is the C++ core the WASM applyMoveTracked (M2) wraps.
-TrackedCanon enclosureChildTracked(const Position& p, const std::vector<CompSrc>& psrc,
-                                   std::size_t comp, const Enclosure& m);
+// per-component provenance. `parent.src[i]` is parallel to parent.pos.components[i].regions;
+// input must be decompressed (no pseudo-points). This is the C++ core the WASM applyMoveTracked
+// (M2) wraps.
+TrackedCanon enclosureChildTracked(const TrackedCanon& parent, std::size_t comp,
+                                   const Enclosure& m);
 
 // Enumerate the valid enclosures of one component (all masks included). Requires a
 // decompressed component.
@@ -86,8 +87,7 @@ applyJoinTracked(const Component& c, const CompSrc& src, const Join& m);
 Position applyJoin(const Position& p, std::size_t comp, const Join& m);
 
 // Tracked whole-position join: the join counterpart of enclosureChildTracked (see there).
-TrackedCanon joinChildTracked(const Position& p, const std::vector<CompSrc>& psrc,
-                              std::size_t comp, const Join& m);
+TrackedCanon joinChildTracked(const TrackedCanon& parent, std::size_t comp, const Join& m);
 
 // Enumerate the valid joins of one component (every endpoint pair across every ordered
 // pair of distinct boundaries in a region). Requires a decompressed component.

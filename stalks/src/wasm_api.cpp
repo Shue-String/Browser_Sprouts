@@ -172,6 +172,7 @@ std::string applyMoveTracked(std::string parentEnc, std::string psrcJson, int ki
         if (psrc.size() != parent.components.size())
             return jsonError("bad-provenance", "provenance length != component count");
 
+        const stalks::TrackedCanon parentTC{parent, psrc};
         stalks::TrackedCanon tc;
         if (kind == static_cast<int>(stalks::MoveKind::Enclosure)) {
             stalks::Enclosure m;
@@ -180,7 +181,7 @@ std::string applyMoveTracked(std::string parentEnc, std::string psrcJson, int ki
             m.i = i;
             m.j = j;
             m.mask = static_cast<std::uint32_t>(mask);
-            tc = stalks::enclosureChildTracked(parent, psrc, static_cast<std::size_t>(comp), m);
+            tc = stalks::enclosureChildTracked(parentTC, static_cast<std::size_t>(comp), m);
         } else if (kind == static_cast<int>(stalks::MoveKind::Join)) {
             stalks::Join m;
             m.region = static_cast<std::uint32_t>(region);
@@ -188,7 +189,7 @@ std::string applyMoveTracked(std::string parentEnc, std::string psrcJson, int ki
             m.b2 = static_cast<std::uint32_t>(b);
             m.i = i;
             m.j = j;
-            tc = stalks::joinChildTracked(parent, psrc, static_cast<std::size_t>(comp), m);
+            tc = stalks::joinChildTracked(parentTC, static_cast<std::size_t>(comp), m);
         } else {
             return jsonError("bad-move", "unsupported move kind (expected 0=Enclosure, 1=Join)");
         }
@@ -244,7 +245,8 @@ std::string canonicalizeTrackedProvenance(std::string enc) {
             psrc.push_back(std::move(src));
         }
 
-        const stalks::TrackedCanon tc = stalks::canonicalizeDecompressedTracked(p, psrc);
+        const stalks::TrackedCanon tc =
+            stalks::canonicalizeDecompressedTracked(stalks::TrackedCanon{p, psrc});
 
         std::string out = "{\"ok\":true,\"enc\":\"";
         out += stalks::serialize(tc.pos);

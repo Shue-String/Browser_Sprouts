@@ -1415,22 +1415,22 @@ Position canonicalizeDecompressed(const Position& p, bool slackOff) {
     return canonicalizeImpl(p, slackOff, /*compressed=*/false);
 }
 
-TrackedCanon canonicalizeDecompressedTracked(const Position& p, const std::vector<CompSrc>& src) {
+TrackedCanon canonicalizeDecompressedTracked(const TrackedCanon& in) {
     // Mirrors canonicalizeImpl(compressed=false) but threads provenance: reduce (skipping the
     // pseudo-free-identity decompress), split, and canonMinimal all carry a parallel CompSrc, and
     // the final subposition sort moves each component's provenance with it. Token form is
-    // identical to canonicalizeDecompressed(p) (srcId never affects a key/emit path).
+    // identical to canonicalizeDecompressed(in.pos) (srcId never affects a key/emit path).
     struct M {
         Component comp;
         CompSrc src;
     };
     std::vector<M> minimals;
-    for (std::size_t i = 0; i < p.components.size(); ++i) {
-        const Component& comp = p.components[i];
+    for (std::size_t i = 0; i < in.pos.components.size(); ++i) {
+        const Component& comp = in.pos.components[i];
         if (comp.dead)
             continue;
         CompSrc reducedSrc;
-        const Component reduced = reduceDecompressedTracked(comp, src[i], reducedSrc);
+        const Component reduced = reduceDecompressedTracked(comp, in.src[i], reducedSrc);
         for (auto& [piece, pieceSrc] : splitMinimalTracked(reduced, reducedSrc)) {
             CompSrc canonSrc;
             Component canon =
@@ -1443,16 +1443,13 @@ TrackedCanon canonicalizeDecompressedTracked(const Position& p, const std::vecto
     if (minimals.empty()) {
         Component dead;
         dead.dead = true;
-        out.pos.components.push_back(std::move(dead));
-        out.src.push_back(CompSrc{});
+        out.push_back(std::move(dead), CompSrc{});
         return out;
     }
     std::sort(minimals.begin(), minimals.end(),
               [](const M& a, const M& b) { return structKey(a.comp) < structKey(b.comp); });
-    for (auto& m : minimals) {
-        out.pos.components.push_back(std::move(m.comp));
-        out.src.push_back(std::move(m.src));
-    }
+    for (auto& m : minimals)
+        out.push_back(std::move(m.comp), std::move(m.src));
     return out;
 }
 

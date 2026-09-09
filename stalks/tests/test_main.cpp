@@ -362,9 +362,9 @@ void testGraphMovetypeEdges() {
         GameGraph g;
         Node* n = g.ensure(parsePosition("aA|A,12"));
         bool foundDuplicateEdge = false;
-        for (std::size_t i = 0; i < n->children.size() && !foundDuplicateEdge; ++i)
-            for (std::size_t j = i + 1; j < n->children.size(); ++j)
-                if (n->children[i] == n->children[j] && n->childMoveType(i) != n->childMoveType(j)) {
+        for (std::size_t i = 0; i < n->edges.size() && !foundDuplicateEdge; ++i)
+            for (std::size_t j = i + 1; j < n->edges.size(); ++j)
+                if (n->edges[i].node == n->edges[j].node && n->childMoveType(i) != n->childMoveType(j)) {
                     foundDuplicateEdge = true;
                     break;
                 }
@@ -1201,7 +1201,7 @@ void testProvenance() {
     {
         const Component c = parsePosition("[0,0,0]").components[0];
         const Position pin{{c}};
-        const TrackedCanon tc = canonicalizeDecompressedTracked(pin, {stampByVertex(c)});
+        const TrackedCanon tc = canonicalizeDecompressedTracked(TrackedCanon{pin, {stampByVertex(c)}});
         checkEq(ser(tc.pos), ser(canonicalizeDecompressed(pin)), "canon [0,0,0]: token form tracked==untracked");
         const auto ids = posMultiset(tc);
         CHECK(ids.size() == 3 && ids.count(100) == 1 && ids.count(101) == 1 && ids.count(102) == 1);
@@ -1212,7 +1212,7 @@ void testProvenance() {
     {
         const Component c = parsePosition("[AB|AB]").components[0];
         const Position pin{{c}};
-        const TrackedCanon tc = canonicalizeDecompressedTracked(pin, {stampByVertex(c)});
+        const TrackedCanon tc = canonicalizeDecompressedTracked(TrackedCanon{pin, {stampByVertex(c)}});
         checkEq(ser(tc.pos), ser(canonicalizeDecompressed(pin)), "canon [AB|AB]: token form tracked==untracked");
         CHECK(pairingConsistent(tc.pos.components[0], tc.src[0]));
         const auto ids = posMultiset(tc);
@@ -1224,14 +1224,12 @@ void testProvenance() {
     {
         const Component parent = parsePosition("[0]").components[0];
         const CompSrc psrc{{{100}}};
-        Position child;
-        std::vector<CompSrc> childSrc;
-        for (auto& [pc, ps] : applyEnclosureTracked(parent, psrc, Enclosure{0, 0, 0, 0, 0})) {
-            child.components.push_back(pc);
-            childSrc.push_back(ps);
-        }
-        const TrackedCanon tc = canonicalizeDecompressedTracked(child, childSrc);
-        checkEq(ser(tc.pos), ser(canonicalizeDecompressed(child)), "move->canon: token form tracked==untracked");
+        TrackedCanon child;
+        for (auto& [pc, ps] : applyEnclosureTracked(parent, psrc, Enclosure{0, 0, 0, 0, 0}))
+            child.push_back(pc, ps);
+        const TrackedCanon tc = canonicalizeDecompressedTracked(child);
+        checkEq(ser(tc.pos), ser(canonicalizeDecompressed(child.pos)),
+                "move->canon: token form tracked==untracked");
         CHECK(pairingConsistent(tc.pos.components[0], tc.src[0]));
         const auto ids = posMultiset(tc);
         CHECK(ids.size() == 4 && ids.count(100) == 2 && ids.count(GEN_SRC) == 2);
@@ -1243,7 +1241,7 @@ void testProvenance() {
     {
         const Position p = parsePosition("[0]+[0,0]");
         const std::vector<CompSrc> psrc = {{{{200}}}, {{{201}, {202}}}};
-        const TrackedCanon tc = joinChildTracked(p, psrc, 1, Join{0, 0, 1, 0, 0});
+        const TrackedCanon tc = joinChildTracked(TrackedCanon{p, psrc}, 1, Join{0, 0, 1, 0, 0});
         checkEq(ser(tc.pos), ser(canonicalizeDecompressed(applyJoin(p, 1, Join{0, 0, 1, 0, 0}))),
                 "whole-position join: token form tracked==untracked");
         const auto ids = posMultiset(tc);
@@ -1970,7 +1968,7 @@ int main() {
         long long edges = 0, sums = 0;
         for (const auto& nd : g.nodes()) {
             ++dist[nd.nimber];
-            edges += static_cast<long long>(nd.children.size());
+            edges += static_cast<long long>(nd.edges.size());
             if (nd.isSum())
                 ++sums;
         }
