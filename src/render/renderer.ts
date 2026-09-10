@@ -498,6 +498,10 @@ export class Renderer {
         for (const e of b.entries)
           inLivingRegion.add(e.vertexId);
     }
+    const selfLoopVertexIds = new Set<number>();
+    for (const e of state.edges.values()) {
+      if (e.v1 === e.v2) selfLoopVertexIds.add(e.v1);
+    }
     for (const v of state.vertices.values()) {
       if (v.isPseudo) continue;
       const { px, py } = this.toCanvas(v.pos, camera);

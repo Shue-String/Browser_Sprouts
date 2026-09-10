@@ -372,12 +372,22 @@ function cyclicAdjacent(ti1: number, ti2: number, len: number): boolean {
   return diff === 1 || diff === len - 1;
 }
 
-/** True if three sorted token-indices are consecutive in a cyclic boundary. */
+/**
+ * True if three token-indices occupy 3 consecutive positions in a cyclic boundary
+ * (in some rotation — not necessarily starting at index 0).
+ *
+ * Sorted numerically, the three indices split the cycle into three arcs (the two
+ * gaps between sorted neighbors, plus the wrap-around gap from the largest back to
+ * the smallest); a run of 3 consecutive cyclic positions is exactly the case where
+ * two of those arcs have length 1 and the third has length `len - 2` (equivalently,
+ * every non-triplet position falls in the one long arc).
+ */
 function cyclicConsecutive(tis: number[], len: number): boolean {
   const s = [...tis].sort((a, b) => a - b);
-  const linear = s[1] - s[0] === 1 && s[2] - s[1] === 1;
-  const wrap   = s[0] === 0 && s[1] === 1 && s[2] === len - 1;
-  return linear || wrap;
+  const g1 = s[1] - s[0];
+  const g2 = s[2] - s[1];
+  const g3 = len - s[2] + s[0];
+  return (g1 === 1 && g2 === 1) || (g1 === 1 && g3 === 1) || (g2 === 1 && g3 === 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -497,15 +507,21 @@ function applyTriplets(reprs: RegionRepr[], syms: Map<VertexId, string>): boolea
     for (const tok of tokens) { for (const vid of tok.vertexIds) syms.set(vid, '6'); }
     const mergedVids = tokens.flatMap(t => t.vertexIds);
 
-    // Replace all three with a single '6'
+    // Replace all three with a single '6'. Remove them highest-index-first so
+    // each splice's index is still valid, then reinsert the merged token at the
+    // front of whatever contiguous run they formed — the front of the kept array
+    // when the run wraps around the seam (any rotation), or at the run's own
+    // start when it doesn't (see cyclicConsecutive for why exactly one of these
+    // two shapes always applies).
     const tis = [p0.ti, p1.ti, p2.ti].sort((a, b) => a - b);
     const boundary = reprs[p0.ri].boundaries[p0.bi];
-    const wrapCase = tis[0] === 0 && tis[1] === 1 && tis[2] === bLen - 1;
-    if (wrapCase) {
-      boundary.splice(bLen - 1, 1);
-      boundary.splice(0, 2, { symbol: '6', vertexIds: mergedVids });
+    const merged = { symbol: '6', vertexIds: mergedVids };
+    const wraps = tis[2] - tis[0] !== 2;
+    for (const ti of [...tis].sort((a, b) => b - a)) boundary.splice(ti, 1);
+    if (wraps) {
+      boundary.unshift(merged);
     } else {
-      boundary.splice(tis[0], 3, { symbol: '6', vertexIds: mergedVids });
+      boundary.splice(tis[0], 0, merged);
     }
 
     reprs[ri].deleted = true;

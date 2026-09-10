@@ -124,9 +124,17 @@ Node* GameGraph::build(const Position& canonical) {
         nodes_.push_back(Node{});
         n = &nodes_.back();  // deque: address stable across later push_backs
         n->enc = enc;
+        n->placeholder = true;  // not populated yet -- Node's own default (false) would say "complete"
         index_.emplace(std::string_view(n->enc), n);
     }
-    n->placeholder = false;
+    // placeholder stays true until n's value fields are actually populated below (each return
+    // site clears it) -- move expansion can throw (EncodingError from resolveChild's canonicalize/
+    // applyEnclosure/applyJoin/applyExternal), and n is already reachable via index_ at this point
+    // (shared descendants must resolve to it), so clearing the flag early would leave a thrown-through
+    // node permanently registered with default nimber=0/minMoves=0/maxMoves=0 -- indistinguishable
+    // from a real solved dead position for every later lookup for the rest of the process's lifetime.
+    // Leaving it true instead means a later build() call for the same encoding retries expansion
+    // (the existing placeholder-retry path just below the index_ lookup above).
 
     if (canonical.components.size() > 1) {
         // Sum of >=2 minimal subpositions: link the parts, combine values (XOR for the
@@ -144,6 +152,7 @@ Node* GameGraph::build(const Position& canonical) {
         n->nimber = nim;
         n->minMoves = mn;
         n->maxMoves = mx;
+        n->placeholder = false;
         return n;
     }
 
@@ -215,6 +224,7 @@ Node* GameGraph::build(const Position& canonical) {
         n->nimber = 0;
         n->minMoves = 0;
         n->maxMoves = 0;
+        n->placeholder = false;
         return n;
     }
 
@@ -244,6 +254,7 @@ Node* GameGraph::build(const Position& canonical) {
     n->nimber = m;
     n->minMoves = 1 + mn;
     n->maxMoves = 1 + mx;
+    n->placeholder = false;
     return n;
 }
 

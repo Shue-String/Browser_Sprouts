@@ -25,7 +25,7 @@
 import type { GameState, VertexId, EdgeId, RegionId, Vertex } from './types';
 import { VertexType, VertexVisualState } from './types';
 import type { SpherePoint } from '../math/sphere';
-import { normalize, slerp, arcsCross } from '../math/sphere';
+import { normalize, slerp, arcsCross, sphereAngle } from '../math/sphere';
 import { recomputeRegions } from './moves';
 import { cloneState, allocEdgeId } from './gameState';
 import { canonicalEncoding } from './encoding';
@@ -529,10 +529,8 @@ export function louseCollapseStep(
 
   const target = inner.pos;
 
-  const distA = Math.acos(Math.max(-1, Math.min(1,
-    a.pos.x*target.x + a.pos.y*target.y + a.pos.z*target.z)));
-  const distW = Math.acos(Math.max(-1, Math.min(1,
-    w.pos.x*target.x + w.pos.y*target.y + w.pos.z*target.z)));
+  const distA = sphereAngle(a.pos, target);
+  const distW = sphereAngle(w.pos, target);
 
   if (distA < LOUSE_POP_RADIUS && distW < LOUSE_POP_RADIUS) {
     const popAt = { ...target };
@@ -707,8 +705,8 @@ export function parallelDeadStep(
   if (!vp || !vq) return { done: true, popAt: null };
 
   const mid = slerp(vp.pos, vq.pos, 0.5);
-  const dp = Math.acos(Math.max(-1, Math.min(1, vp.pos.x*mid.x + vp.pos.y*mid.y + vp.pos.z*mid.z)));
-  const dq = Math.acos(Math.max(-1, Math.min(1, vq.pos.x*mid.x + vq.pos.y*mid.y + vq.pos.z*mid.z)));
+  const dp = sphereAngle(vp.pos, mid);
+  const dq = sphereAngle(vq.pos, mid);
 
   if (dp < PARALLEL_DEAD_POP_RADIUS && dq < PARALLEL_DEAD_POP_RADIUS) {
     const popAt = { ...mid };
@@ -901,8 +899,8 @@ export function tripleParallelDeadStep(
   // doesn't sweep its shrinking edges across content sitting in the smaller half.
   const mid = occupiedCentroidAntipode(state, new Set([collapse.p, collapse.q]))
     ?? slerp(vp.pos, vq.pos, 0.5);
-  const dp = Math.acos(Math.max(-1, Math.min(1, vp.pos.x*mid.x + vp.pos.y*mid.y + vp.pos.z*mid.z)));
-  const dq = Math.acos(Math.max(-1, Math.min(1, vq.pos.x*mid.x + vq.pos.y*mid.y + vq.pos.z*mid.z)));
+  const dp = sphereAngle(vp.pos, mid);
+  const dq = sphereAngle(vq.pos, mid);
 
   if (dp < TRIPLE_PARALLEL_POP_RADIUS && dq < TRIPLE_PARALLEL_POP_RADIUS) {
     const popAt = { ...mid };
@@ -1076,9 +1074,9 @@ export function triangleDeadStep(
       z: va.pos.z + vb.pos.z + vc.pos.z,
     });
 
-  const da = Math.acos(Math.max(-1, Math.min(1, va.pos.x*target.x + va.pos.y*target.y + va.pos.z*target.z)));
-  const db = Math.acos(Math.max(-1, Math.min(1, vb.pos.x*target.x + vb.pos.y*target.y + vb.pos.z*target.z)));
-  const dc = Math.acos(Math.max(-1, Math.min(1, vc.pos.x*target.x + vc.pos.y*target.y + vc.pos.z*target.z)));
+  const da = sphereAngle(va.pos, target);
+  const db = sphereAngle(vb.pos, target);
+  const dc = sphereAngle(vc.pos, target);
 
   if (da < TRIANGLE_DEAD_POP_RADIUS && db < TRIANGLE_DEAD_POP_RADIUS && dc < TRIANGLE_DEAD_POP_RADIUS) {
     const popAt = { ...target };
@@ -2052,8 +2050,7 @@ export function bigonTipStep(
   if (!vw || !va) return { done: true, popAt: null };
 
   const target = va.pos;
-  const dist = Math.acos(Math.max(-1, Math.min(1,
-    vw.pos.x*target.x + vw.pos.y*target.y + vw.pos.z*target.z)));
+  const dist = sphereAngle(vw.pos, target);
 
   if (dist < BIGON_TIP_POP_RADIUS) {
     const popAt = { ...target };
@@ -2241,12 +2238,8 @@ export function selfConnectedDeadStep(
 
   const target = collapse.symmetric ? slerp(vs.pos, vt.pos, 0.5) : vt.pos;
 
-  const distS = Math.acos(Math.max(-1, Math.min(1,
-    vs.pos.x * target.x + vs.pos.y * target.y + vs.pos.z * target.z)));
-  const distT = collapse.symmetric
-    ? Math.acos(Math.max(-1, Math.min(1,
-        vt.pos.x * target.x + vt.pos.y * target.y + vt.pos.z * target.z)))
-    : 0;
+  const distS = sphereAngle(vs.pos, target);
+  const distT = collapse.symmetric ? sphereAngle(vt.pos, target) : 0;
 
   if (distS < SCD_POP_RADIUS && distT < SCD_POP_RADIUS) {
     const popAt = { ...target };

@@ -962,11 +962,14 @@ async function buildExportLatex(entry: Entry): Promise<string> {
   if (!fresh) throw new Error("couldn't re-analyze this position for export");
   const { position, genome } = fresh;
 
-  // TODO: the Advanced-Collection fallback label (position isn't itself exactly named, but still
-  // qualifies for a family) was removed along with isInAdvancedCollection -- the Export feature
-  // needs its own replacement for this case, not yet designed.
+  // Unnamed positions (no GENOME_NAMES/bypass-only match, see foldToName) leave the header label
+  // blank -- foldedTop itself (the raw genome tuple) still appears in the closing summary row
+  // below regardless, so there's no need to also repeat it here. The Advanced-Collection fallback
+  // label this used to have (position isn't itself exactly named, but still qualifies for a
+  // family) was removed along with isInAdvancedCollection, and re-deriving that membership check
+  // is a much bigger, still-open question than this export label warrants.
   const foldedTop = foldedPlainOf(genome, 0);
-  const label = foldedTop.startsWith('(') ? 'TODO' : foldedTop;
+  const label = foldedTop.startsWith('(') ? '' : foldedTop;
 
   const leftRows: { mt: string; enc: string; nimber: number }[] = [];
   if (genome.Rc) leftRows.push({ mt: 'R', enc: genome.Rc.enc, nimber: genome.Rc.nimber });

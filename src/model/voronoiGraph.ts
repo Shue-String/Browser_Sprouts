@@ -222,6 +222,48 @@ function computeBlockInfo(
 }
 
 /** Scalar triple product: ccA · (ccB × seed). Positive → seed is on the left (CCW) side of ccA→ccB. */
+/**
+ * Spherical Delaunay triangulation — brute-force O(n^4). Circumcenter of (a,b,c):
+ * normalize((a-b)×(a-c)), sign chosen so it has positive dot product with a (sits
+ * on the same hemisphere as the seeds). Delaunay condition: no other point is
+ * strictly closer to the circumcenter.
+ */
+function computeSphericalDelaunay(
+  pts: SpherePoint[],
+): { triangles: [number, number, number][]; circumcenters: SpherePoint[] } {
+  const triangles: [number, number, number][] = [];
+  const circumcenters: SpherePoint[] = [];
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      for (let k = j + 1; k < n; k++) {
+        const a = pts[i], b = pts[j], c = pts[k];
+        const abx = a.x - b.x, aby = a.y - b.y, abz = a.z - b.z;
+        const acx = a.x - c.x, acy = a.y - c.y, acz = a.z - c.z;
+        let ccx = aby * acz - abz * acy;
+        let ccy = abz * acx - abx * acz;
+        let ccz = abx * acy - aby * acx;
+        const len = Math.sqrt(ccx * ccx + ccy * ccy + ccz * ccz);
+        if (len < 1e-10) continue;
+        ccx /= len; ccy /= len; ccz /= len;
+        if (ccx * a.x + ccy * a.y + ccz * a.z < 0) { ccx = -ccx; ccy = -ccy; ccz = -ccz; }
+        const threshold = ccx * a.x + ccy * a.y + ccz * a.z;
+        let valid = true;
+        for (let l = 0; l < n; l++) {
+          if (l === i || l === j || l === k) continue;
+          if (ccx * pts[l].x + ccy * pts[l].y + ccz * pts[l].z > threshold + 1e-10) {
+            valid = false; break;
+          }
+        }
+        if (!valid) continue;
+        triangles.push([i, j, k]);
+        circumcenters.push({ x: ccx, y: ccy, z: ccz });
+      }
+    }
+  }
+  return { triangles, circumcenters };
+}
+
 function sideSign(ccA: SpherePoint, ccB: SpherePoint, seed: SpherePoint): number {
   const cx = ccB.y * seed.z - ccB.z * seed.y;
   const cy = ccB.z * seed.x - ccB.x * seed.z;
@@ -250,42 +292,7 @@ export function buildVoronoiGraph(
   const n = seedPts.length;
   if (n < 3) return empty;
 
-  // -------------------------------------------------------------------------
-  // Spherical Delaunay triangulation — brute-force O(n^4).
-  // Circumcenter of (a,b,c): normalize((a-b)×(a-c)), sign chosen so it has
-  // positive dot product with a (sits on the same hemisphere as the seeds).
-  // Delaunay condition: no other seed is strictly closer to the circumcenter.
-  // -------------------------------------------------------------------------
-  const triangles: [number, number, number][] = [];
-  const circumcenters: SpherePoint[] = [];
-
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      for (let k = j + 1; k < n; k++) {
-        const a = seedPts[i].pos, b = seedPts[j].pos, c = seedPts[k].pos;
-        const abx = a.x - b.x, aby = a.y - b.y, abz = a.z - b.z;
-        const acx = a.x - c.x, acy = a.y - c.y, acz = a.z - c.z;
-        let ccx = aby * acz - abz * acy;
-        let ccy = abz * acx - abx * acz;
-        let ccz = abx * acy - aby * acx;
-        const len = Math.sqrt(ccx * ccx + ccy * ccy + ccz * ccz);
-        if (len < 1e-10) continue;
-        ccx /= len; ccy /= len; ccz /= len;
-        if (ccx * a.x + ccy * a.y + ccz * a.z < 0) { ccx = -ccx; ccy = -ccy; ccz = -ccz; }
-        const threshold = ccx * a.x + ccy * a.y + ccz * a.z;
-        let valid = true;
-        for (let l = 0; l < n; l++) {
-          if (l === i || l === j || l === k) continue;
-          if (ccx * seedPts[l].pos.x + ccy * seedPts[l].pos.y + ccz * seedPts[l].pos.z > threshold + 1e-10) {
-            valid = false; break;
-          }
-        }
-        if (!valid) continue;
-        triangles.push([i, j, k]);
-        circumcenters.push({ x: ccx, y: ccy, z: ccz });
-      }
-    }
-  }
+  let { triangles, circumcenters } = computeSphericalDelaunay(seedPts.map(s => s.pos));
 
   // ── Insert synthetic seeds at crowded-junction centroids ───────────────────
   // If any group of circumcenters is clustered within 3 arc-degrees of each
@@ -336,36 +343,7 @@ export function buildVoronoiGraph(
 
   // If new seeds were added, rerun the full Delaunay triangulation.
   if (addedSeed) {
-    triangles.length = 0;
-    circumcenters.length = 0;
-    const m = seedPts.length;
-    for (let i = 0; i < m; i++) {
-      for (let j = i + 1; j < m; j++) {
-        for (let k = j + 1; k < m; k++) {
-          const a = seedPts[i].pos, b = seedPts[j].pos, c = seedPts[k].pos;
-          const abx = a.x - b.x, aby = a.y - b.y, abz = a.z - b.z;
-          const acx = a.x - c.x, acy = a.y - c.y, acz = a.z - c.z;
-          let ccx = aby * acz - abz * acy;
-          let ccy = abz * acx - abx * acz;
-          let ccz = abx * acy - aby * acx;
-          const clen = Math.sqrt(ccx * ccx + ccy * ccy + ccz * ccz);
-          if (clen < 1e-10) continue;
-          ccx /= clen; ccy /= clen; ccz /= clen;
-          if (ccx * a.x + ccy * a.y + ccz * a.z < 0) { ccx = -ccx; ccy = -ccy; ccz = -ccz; }
-          const threshold = ccx * a.x + ccy * a.y + ccz * a.z;
-          let valid = true;
-          for (let l = 0; l < m; l++) {
-            if (l === i || l === j || l === k) continue;
-            if (ccx * seedPts[l].pos.x + ccy * seedPts[l].pos.y + ccz * seedPts[l].pos.z > threshold + 1e-10) {
-              valid = false; break;
-            }
-          }
-          if (!valid) continue;
-          triangles.push([i, j, k]);
-          circumcenters.push({ x: ccx, y: ccy, z: ccz });
-        }
-      }
-    }
+    ({ triangles, circumcenters } = computeSphericalDelaunay(seedPts.map(s => s.pos)));
   }
 
   // Delaunay edge "minIdx_maxIdx" → triangle indices that share it.

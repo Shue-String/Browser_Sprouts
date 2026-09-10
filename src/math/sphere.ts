@@ -285,10 +285,15 @@ export function sphereCentroid(points: SpherePoint[]): SpherePoint {
   return normalize({ x: cx, y: cy, z: cz });
 }
 
+/** Great-circle angular distance between two sphere points, in radians ([0, π]). */
+export function sphereAngle(a: SpherePoint, b: SpherePoint): number {
+  const dot = Math.max(-1, Math.min(1, a.x*b.x + a.y*b.y + a.z*b.z));
+  return Math.acos(dot);
+}
+
 /** Spherical linear interpolation between two sphere points. */
 export function slerp(a: SpherePoint, b: SpherePoint, t: number): SpherePoint {
-  const dot = Math.max(-1, Math.min(1, a.x*b.x + a.y*b.y + a.z*b.z));
-  const omega = Math.acos(dot);
+  const omega = sphereAngle(a, b);
   if (Math.abs(omega) < 1e-9) return a; // nearly identical points
   const sinOmega = Math.sin(omega);
   const wa = Math.sin((1 - t) * omega) / sinOmega;
