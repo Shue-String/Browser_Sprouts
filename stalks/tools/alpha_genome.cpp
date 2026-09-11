@@ -301,14 +301,37 @@ std::string foldToName(const std::string& plainText) {
 // MAX_GENOME_DEPTH; none of the named genomes above need deeper nesting to be recognized.
 constexpr int kMaxFoldDepth = 2;
 
+// classifyAlphaGenome/tChildrenOf/genomeTextAt are pure functions of (p, target[, depth]):
+// classifyAlphaGenome's own doc comment guarantees any valid `db` "containing p" gives the same
+// answer (every move's child is necessarily already in it), and tChildrenOf doesn't touch `db` at
+// all (childrenAllWithMoveTag is purely structural) -- so genomeTextAt built from them is pure too.
+// All three get called repeatedly on the SAME position: once directly, once again one level up
+// inside a T-child's own genomeTextAt recursion (see isYellowCandidate: it calls tChildrenOf(t)
+// directly, but resolvedGenomeName(t,db) just above it already walked
+// genomeTextAt(t,db,0,target) -> tChildrenOf(t,target), an identical call on the same t) -- and
+// across many different top-level candidates sharing overlapping move-graph substructure (siblings/
+// cousins in the same corpus), which is the dominant cost of a discovery scan over a large .spec
+// file. Memoized globally, keyed only by (target[, depth], serialize(p)) -- safe across different
+// `db` instances/files per the precondition above, so callers never need to clear this.
+std::string cacheKey(const Position& p, Token target) {
+    return std::string(1, tokenChar(target)) + "|" + serialize(p);
+}
+std::map<std::string, std::vector<Position>> gTChildrenCache;
+std::map<std::string, std::optional<AlphaGenome>> gClassifyCache;
+std::map<std::string, std::string> gGenomeTextCache;
+
 std::string genomeTextAt(const Position& p, const SpecDB& db, int depth, Token target) {
+    const std::string key = std::to_string(depth) + "|" + cacheKey(p, target);
+    const auto cached = gGenomeTextCache.find(key);
+    if (cached != gGenomeTextCache.end()) return cached->second;
+
     const auto g = classifyAlphaGenome(p, db, target);
-    if (!g) return "(unclassified)";
+    if (!g) return gGenomeTextCache.emplace(key, "(unclassified)").first->second;
     const std::string head =
         "(" + std::to_string(g->R) + "," + std::to_string(g->D) + ",{" + setStrBare(g->L) + "},{" +
         setStrBare(g->Tprime) + "}";
 
-    if (depth >= kMaxFoldDepth) return foldToName(head + ")");
+    if (depth >= kMaxFoldDepth) return gGenomeTextCache.emplace(key, foldToName(head + ")")).first->second;
 
     std::set<std::string> tTexts;  // dedup + lexicographic sort, same convention as collect.ts
     for (const Position& child : tChildrenOf(p, target))
@@ -321,12 +344,16 @@ std::string genomeTextAt(const Position& p, const SpecDB& db, int depth, Token t
         first = false;
         joined += t;
     }
-    return foldToName(head + ",[" + joined + "])");
+    return gGenomeTextCache.emplace(key, foldToName(head + ",[" + joined + "])")).first->second;
 }
 
 }  // namespace
 
 std::vector<Position> tChildrenOf(const Position& p, Token target) {
+    const std::string key = cacheKey(p, target);
+    const auto cached = gTChildrenCache.find(key);
+    if (cached != gTChildrenCache.end()) return cached->second;
+
     const Position d = p.decompressed();
     std::vector<Position> out;
     for (const auto& [child, tag] : childrenAllWithMoveTag(p)) {
@@ -338,10 +365,14 @@ std::vector<Position> tChildrenOf(const Position& p, Token target) {
         }
         if (movetype == 5) out.push_back(canonicalize(child));
     }
-    return out;
+    return gTChildrenCache.emplace(key, std::move(out)).first->second;
 }
 
 std::optional<AlphaGenome> classifyAlphaGenome(const Position& p, const SpecDB& db, Token target) {
+    const std::string key = cacheKey(p, target);
+    const auto cached = gClassifyCache.find(key);
+    if (cached != gClassifyCache.end()) return cached->second;
+
     const Position d = p.decompressed();
     AlphaGenome g;
     std::optional<int> R, D;
@@ -388,10 +419,10 @@ std::optional<AlphaGenome> classifyAlphaGenome(const Position& p, const SpecDB& 
         }
     }
 
-    if (!R.has_value() || !D.has_value()) return std::nullopt;
+    if (!R.has_value() || !D.has_value()) return gClassifyCache.emplace(key, std::nullopt).first->second;
     g.R = *R;
     g.D = *D;
-    return g;
+    return gClassifyCache.emplace(key, std::move(g)).first->second;
 }
 
 std::string genomeKey(const AlphaGenome& g) {

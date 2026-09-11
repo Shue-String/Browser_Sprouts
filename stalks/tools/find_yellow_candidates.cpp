@@ -46,6 +46,14 @@ int main(int argc, char** argv) {
     const std::set<std::string> repCanon = stalks_tools::buildRepCanonSet();
     std::cerr << "rep set: " << repCanon.size() << " distinct canonical forms\n";
 
+    // Live-streamed sibling of the final sorted outPath (same 4 columns), appended to and flushed
+    // as each candidate goes yellow, so a human can start reviewing hits immediately instead of
+    // waiting for the whole (possibly hours-long) run to finish and write outPath once at the end.
+    const std::string livePath = outPath + ".live";
+    std::ofstream liveOut(livePath, std::ios::binary);
+    liveOut << "lives\tfamily\tquickEnc\tgenome\n";
+    liveOut.flush();
+
     std::set<std::string> seenQuickEnc;
     struct Row {
         int lives;
@@ -88,7 +96,7 @@ int main(int argc, char** argv) {
             ++qualifying;
 
             const int lives = qc.rep.leftSideLives2() / 2;
-            if (lives < 1 || lives > 6) continue;
+            if (lives != 7) continue;
 
             if (repCanon.count(quickEnc) > 0) continue;  // already registered somewhere
 
@@ -110,8 +118,11 @@ int main(int argc, char** argv) {
 
             for (const std::string& family : families) {
                 if (isYellowCandidate(pBase, db, family)) {
-                    yellowRows.push_back({lives, quickEnc, family, fullGenomeText(pBase, db)});
+                    const std::string genome = fullGenomeText(pBase, db);
+                    yellowRows.push_back({lives, quickEnc, family, genome});
                     ++yellowByFamily[family];
+                    liveOut << lives << "\t" << family << "\t" << quickEnc << "\t" << genome << "\n";
+                    liveOut.flush();
                 }
             }
         }
