@@ -17,7 +17,7 @@ import type { VoronoiData, VoronoiEdgeName } from './model/voronoiGraph';
 import { computeV1Sequence, computeV2Sequence, computeLastSegment, computeLastToExitSegment, computeFullPath } from './model/voronoiJunctionPath';
 import type { JunctionPathStep, V1SequenceResult, V2SequenceResult, LastSegmentResult, LastToExitResult, FullPathResult } from './model/voronoiJunctionPath';
 import { deserializeGameState } from './model/saveState';
-import type { SaveFileV1 } from './model/saveState';
+import type { SaveFileV2 } from './model/saveState';
 
 const canvas     = document.getElementById('vt-canvas')  as HTMLCanvasElement;
 const loadBtn    = document.getElementById('load-btn')   as HTMLButtonElement;
@@ -434,7 +434,7 @@ loadInput.addEventListener('change', () => {
   loadInput.value = '';
   if (!file) return;
   void file.text().then(text => {
-    let save: SaveFileV1;
+    let save: SaveFileV2;
     try {
       save = JSON.parse(text);
     } catch (err) {
@@ -449,7 +449,7 @@ loadInput.addEventListener('change', () => {
   });
 });
 
-function loadSave(save: SaveFileV1, fileName: string): void {
+function loadSave(save: SaveFileV2, fileName: string): void {
   const deserialized = deserializeGameState(save);
   state = deserialized.state;
   recomputeRegions(state);

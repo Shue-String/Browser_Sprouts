@@ -650,6 +650,33 @@ export function recomputeRegions(
       `(comp=${cycles[i].comp}), flipped cycle ${weaker}`);
   }
 
+  // Any cycle whose near-curve probe came back null is a case
+  // probeInsidePointSphere can genuinely fail on: a cycle that is its
+  // component's ONLY exterior-side representative (no complementary bounded
+  // cycle in the same component for it to test against — e.g. an isolated
+  // self-loop/digon's outer half, or a plain pendant tree with no enclosed
+  // area at all) has a near-curve winding around its own boundary that's -1
+  // or 0 everywhere, never +1 — and for a thin/sparse curve that -1 reading
+  // can also fail to resolve at any offset distance, since a tangent-offset
+  // point that far from a paper-thin curve is no longer meaningfully "near"
+  // it at all. But components are vertex-disjoint by construction (that's
+  // what the union-find above computes), so EVERY cycle's real vertices are
+  // guaranteed unshared with any other component: a vertex's own exact
+  // position is always an unambiguous stand-in for "a point inside whatever
+  // face contains this whole component" — no offset math needed, and
+  // containingFace already excludes this cycle's own component from
+  // candidates. Used only as a last resort, when the normal near-curve
+  // search already came back empty.
+  for (const c of cycles) {
+    if (c.rep3 !== null) continue;
+    for (const di of c.darts) {
+      const origin = darts[di].origin;
+      if (pseudoIds.has(origin)) continue;
+      const v = state.vertices.get(origin);
+      if (v) { c.rep3 = v.pos; break; }
+    }
+  }
+
   // --- Classify each cycle as a bounded face vs its component's exterior cycle.
   //     A loop's two halves share an identical polygon, so containment can't tell
   //     them apart — only orientation can. With consistent dart orientation the
@@ -990,6 +1017,29 @@ function probeLeftInside(
  * cycle's own winding number agrees is interior avoids needing any hand-picked
  * "which side is left" sign convention — loop3's own orientation is already
  * ground truth.
+ *
+ * Returns null (by design, not a bug) for an OUTER cycle that isn't nested in
+ * anything else — its own near-curve winding is never +1 (reversing a loop's
+ * direction negates winding, so an outer cycle reads -1 on its bounded
+ * sibling's side and 0 everywhere else, never +1) and the caller correctly
+ * treats null as "no other region claims this — it's the global outer." See
+ * the "degenerate self-loop correction" in recomputeRegions for the one case
+ * where an outer cycle genuinely IS nested elsewhere despite this (an isolated
+ * self-loop/digon with nothing else attached), handled there directly with a
+ * real vertex position instead of retrying the winding search here.
+ *
+ * Tried at a SEQUENCE of offset distances, smallest first, rather than one
+ * fixed constant. A single fixed distance can't work for every cycle: too
+ * small and it can sit closer to a coarsely-sampled curve than that curve's
+ * own discretization can resolve by a winding-number sum (a freshly-drawn
+ * edge, e.g. a self-loop's own two halves, is often much more sparsely
+ * sampled than an established boundary); too large risks drifting into
+ * unrelated nearby territory. Escalating from a small distance means a
+ * normal, densely-sampled loop still resolves on the first try (unchanged
+ * behavior), while a coarser one gets progressively larger attempts until one
+ * actually clears its own discretization (found via testSave-2.json: a
+ * self-loop drawn on an isolated spot came back with a null probe point at
+ * the old fixed 0.01 rad offset — see [[project_dead_region_elimination]]).
  */
 function probeInsidePointSphere(
   seq: number[],
@@ -997,30 +1047,32 @@ function probeInsidePointSphere(
   pseudoIds: Set<VertexId>,
   loop3: SpherePoint[],
 ): SpherePoint | null {
-  const PROBE = 0.01; // radians
-  for (const di of seq) {
-    const d = darts[di];
-    if (pseudoIds.has(d.origin)) continue; // pseudo-vertex dart: no geometry to probe
-    const pts = d.origin === d.edge.v1 ? d.edge.points : [...d.edge.points].reverse();
-    if (pts.length < 2) continue;
-    const mi = Math.floor(pts.length / 2);
-    const A = pts[Math.max(0, mi - 1)] as V3;
-    const B = pts[Math.min(pts.length - 1, mi + 1)] as V3;
-    const M = pts[mi] as V3;
-    let t: V3 = { x: B.x - A.x, y: B.y - A.y, z: B.z - A.z };
-    const tDotM = dot(t, M);
-    t = { x: t.x - tDotM * M.x, y: t.y - tDotM * M.y, z: t.z - tDotM * M.z };
-    const L = Math.hypot(t.x, t.y, t.z);
-    if (L < 1e-9) continue;
-    t = { x: t.x / L, y: t.y / L, z: t.z / L };
-    const side = normalize(cross(M, t)) as V3;
-    for (const sign of [1, -1]) {
-      const cand = normalize({
-        x: M.x + side.x * sign * PROBE,
-        y: M.y + side.y * sign * PROBE,
-        z: M.z + side.z * sign * PROBE,
-      });
-      if (windingAround(loop3, cand) > 0.5) return cand;
+  const PROBE_SCALES = [0.01, 0.03, 0.1, 0.25]; // radians, ascending
+  for (const probe of PROBE_SCALES) {
+    for (const di of seq) {
+      const d = darts[di];
+      if (pseudoIds.has(d.origin)) continue; // pseudo-vertex dart: no geometry to probe
+      const pts = d.origin === d.edge.v1 ? d.edge.points : [...d.edge.points].reverse();
+      if (pts.length < 2) continue;
+      const mi = Math.floor(pts.length / 2);
+      const A = pts[Math.max(0, mi - 1)] as V3;
+      const B = pts[Math.min(pts.length - 1, mi + 1)] as V3;
+      const M = pts[mi] as V3;
+      let t: V3 = { x: B.x - A.x, y: B.y - A.y, z: B.z - A.z };
+      const tDotM = dot(t, M);
+      t = { x: t.x - tDotM * M.x, y: t.y - tDotM * M.y, z: t.z - tDotM * M.z };
+      const L = Math.hypot(t.x, t.y, t.z);
+      if (L < 1e-9) continue;
+      t = { x: t.x / L, y: t.y / L, z: t.z / L };
+      const side = normalize(cross(M, t)) as V3;
+      for (const sign of [1, -1]) {
+        const cand = normalize({
+          x: M.x + side.x * sign * probe,
+          y: M.y + side.y * sign * probe,
+          z: M.z + side.z * sign * probe,
+        });
+        if (windingAround(loop3, cand) > 0.5) return cand;
+      }
     }
   }
   return null;

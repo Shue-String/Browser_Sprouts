@@ -70,7 +70,7 @@ export class InputHandler {
   private gameState: GameState;
   private renderer: Renderer;
   private getCameraRef: () => RotationMatrix;
-  private onMoveCommitted: (v1: VertexId, v2: VertexId) => void;
+  private onMoveCommitted: (v1: VertexId, v2: VertexId, stroke: SpherePoint[]) => void;
   private onBeforeMove: () => void;
 
   constructor(opts: {
@@ -79,7 +79,7 @@ export class InputHandler {
     getCameraRef: () => RotationMatrix;
     onRotate: (dx: number, dy: number) => void;
     onRotateEnd: () => void;
-    onMoveCommitted: (v1: VertexId, v2: VertexId) => void;
+    onMoveCommitted: (v1: VertexId, v2: VertexId, stroke: SpherePoint[]) => void;
     /** Fires immediately before a move mutates state (for undo snapshots). */
     onBeforeMove?: () => void;
   }) {
@@ -202,14 +202,13 @@ if (hit === null) return;
 
     this.onBeforeMove(); // snapshot for undo, before the move mutates anything
 
-    applyMove(this.gameState, {
-      v1:     moveV1,
-      v2:     moveV2,
-      stroke: this.stroke.map(s => s.sphere),
-    });
+    // Captured before clearDrawState() wipes this.stroke, and before applyMove's split edges
+    // get touched by any smoothing physics -- this is the exact line the user drew.
+    const rawStroke = this.stroke.map(s => s.sphere);
+    applyMove(this.gameState, { v1: moveV1, v2: moveV2, stroke: rawStroke });
 
     this.clearDrawState();
-    this.onMoveCommitted(moveV1, moveV2);
+    this.onMoveCommitted(moveV1, moveV2, rawStroke);
   }
 
   pointerCancel(): void {

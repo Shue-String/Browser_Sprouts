@@ -29,7 +29,7 @@ import { buildVoronoiGraph } from './model/voronoiGraph';
 import { computeJunctionVoronoiPath } from './model/voronoiJunctionPath';
 import { buildSubregionHighlight } from './model/subregionHighlight';
 import { serializeGameState, deserializeGameState } from './model/saveState';
-import type { SaveFileV1 } from './model/saveState';
+import type { SaveFileV2, HistoryStepInput } from './model/saveState';
 import { openPositionBrowser, ensureWired as ensureBrowserWired, notifyLivePosition, isShowingLive, currentBrowsedCanon, onNavigated, setMoveCallbacks, setSyncCallbacks, onSyncModeChange, isSyncMode, setSyncMode, setSyncToggleEnabled, updateNavButtons, PB_PANEL_ID, PB_BODY_ID } from './ui/positionBrowser';
 import { TrackedGame } from './engine/trackedGame';
 import type { MovePreviewTarget } from './ui/positionBrowser';
@@ -221,7 +221,7 @@ setMoveCallbacks({
       if (!resolved) return;
       pushHistorySnapshot();
       applyMove(state, { v1: resolved.v1, v2: resolved.v2, stroke: resolved.stroke });
-      afterMoveCommitted(resolved.v1, resolved.v2);
+      afterMoveCommitted(resolved.v1, resolved.v2, resolved.stroke);
       movePreviewArc = null;
       movePreviewStroke = null;
       movePreviewFailRing = null;
@@ -331,16 +331,17 @@ let   camera: RotationMatrix = identityRotation();
    *  console-driven move behaves like a real one (tracked-check scheduling, committedMoves, etc). */
   commitMove(v1: number, v2: number, stroke: unknown[]) {
     pushHistorySnapshot();
-    applyMove(state, { v1, v2, stroke: stroke as SpherePoint[] });
-    afterMoveCommitted(v1, v2);
+    const sphereStroke = stroke as SpherePoint[];
+    applyMove(state, { v1, v2, stroke: sphereStroke });
+    afterMoveCommitted(v1, v2, sphereStroke);
   },
   undoLast: () => undoLast(),
   get committedMoves() {
     return history.flatMap(h => h.committed ? [h.committed] : []);
   },
   resetGame: (spots: number) => resetGame(spots),
-  /** Dev aid: load a save file (parsed SaveFileV1 object) without going through the file input. */
-  loadFromJson: (save: SaveFileV1) => loadGameState(save),
+  /** Dev aid: load a save file (parsed SaveFileV2 object) without going through the file input. */
+  loadFromJson: (save: SaveFileV2) => loadGameState(save),
   get trackedCheckEnabled() { return trackedCheckEnabled; },
   /** "ID-based Sequencing" debug toggle — which form (label vs raw vertex id) Save/Recreate-style
    *  tooling should read out of moveSeqLog's moveSeq/moveSeqRaw fields. */
@@ -462,10 +463,7 @@ const undoBtn = document.getElementById('undo-btn') as HTMLButtonElement;
 // that split shape enabled: undoLast() used to pop moveSequence*/committedMoves unconditionally,
 // so cancelling a candidate-preview stroke (which never pushes to those four/one, only to `history`)
 // silently deleted the PRIOR real move's log entry instead. Structurally impossible now.
-interface HistoryEntry {
-  state: GameState;
-  committed: { v1: VertexId; v2: VertexId } | null;
-}
+type HistoryEntry = HistoryStepInput;
 const history: HistoryEntry[] = [];
 // Move sequence, stored in both label form (default display) and raw-vertex-ID form, computed once
 // per move at commit time -- the "Use vertex ID" toggle is then a pure display swap, never a
@@ -610,7 +608,7 @@ document.addEventListener('keydown', e => {
     try {
       pushHistorySnapshot();
       applyMove(state, { v1: await_.parsed.lo, v2: await_.parsed.hi, stroke: arc });
-      afterMoveCommitted(await_.parsed.lo, await_.parsed.hi);
+      afterMoveCommitted(await_.parsed.lo, await_.parsed.hi, arc);
       manualAwait = null;
       manualHints = null;
       subregionHighlight = null;
@@ -763,7 +761,7 @@ function pushHistorySnapshot(): void {
  * the turn indicator, and run dead-region collapses. Shared by live play and
  * the Recreate controller so both paths behave identically.
  */
-function afterMoveCommitted(v1: number, v2: number): void {
+function afterMoveCommitted(v1: number, v2: number, stroke: SpherePoint[]): void {
   // A genuinely new move branches off wherever we are now — any redo tail is no longer reachable.
   redoStack.length = 0;
   // Resample all edges so point counts reflect current geometry
@@ -812,7 +810,7 @@ function afterMoveCommitted(v1: number, v2: number): void {
     // sequence even if this session's toggle happens to be off during replay.
     lastCommittedEncoding = encodePosition(state).text;
     const tag = `{${lastCommittedEncoding}}`;
-    top.committed = { v1, v2 };
+    top.committed = { v1, v2, rawStroke: stroke };
     moveSeqLog.push({
       moveSeq: labeled,
       moveSeqRaw: raw,
@@ -926,10 +924,10 @@ const input = new InputHandler({
   },
   onRotateEnd: () => { startRecenter(); wake(); },
   onBeforeMove: () => { pushHistorySnapshot(); },
-  onMoveCommitted: (v1, v2) => {
+  onMoveCommitted: (v1, v2, stroke) => {
     // Discard strokes drawn during candidate preview (only rotation is intended).
     if (candidatePreviewList) { undoLast(); return; }
-    afterMoveCommitted(v1, v2);
+    afterMoveCommitted(v1, v2, stroke);
     // During the Recreate manual-draw fallback, validate the hand-drawn move
     // against the target token before letting playback resume.
     if (manualAwait) verifyManualMove(v1, v2);
@@ -1127,7 +1125,7 @@ const loadGameInput = document.getElementById('load-game-input') as HTMLInputEle
 
 saveGameBtn.addEventListener('click', e => {
   e.stopPropagation();
-  const save = serializeGameState(state, camera, currentSpotCount, moveSeqLog.map(m => moveCheckMode ? m.moveSeqTagged : m.moveSeq), manualAwait?.parsed.token ?? null);
+  const save = serializeGameState(state, camera, currentSpotCount, moveSeqLog.map(m => moveCheckMode ? m.moveSeqTagged : m.moveSeq), manualAwait?.parsed.token ?? null, history);
   const json = JSON.stringify(save, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -1148,7 +1146,7 @@ loadGameInput.addEventListener('change', () => {
   if (!file) return;
   debugPanel.classList.remove('open');
   void file.text().then(text => {
-    let save: SaveFileV1;
+    let save: SaveFileV2;
     try {
       save = JSON.parse(text);
     } catch (err) {
@@ -1164,7 +1162,7 @@ loadGameInput.addEventListener('change', () => {
 });
 
 /** Restore `state`/`camera`/move history from a save file, resuming a paused move if one was saved. */
-function loadGameState(save: SaveFileV1): void {
+function loadGameState(save: SaveFileV2): void {
   // Abort any in-progress Recreate, mirroring the New Game confirm handler.
   if (recreateActive) {
     if (manualAwait) { manualAwait.resolve(false); manualAwait = null; }
@@ -1178,16 +1176,29 @@ function loadGameState(save: SaveFileV1): void {
   const deserialized = deserializeGameState(save);
   Object.assign(state, deserialized.state);
   recomputeRegions(state);
-  // Saved games don't persist label history; re-baseline current spots as a
-  // fresh -1..-k numbering (cosmetic only — game state itself is unaffected).
-  state.spotLabels = initialSpotLabels(state);
 
-  // `history` stays empty on load (see moveSeqLog's own doc comment: only moveSeqLog is
-  // reconstructible from a save's final geometry) -- committedMoves used to be a separate array
-  // here and was never cleared by Load, a latent desync now structurally impossible since it lives
-  // inside `history` entries.
+  // Rebuild `history` from the save's per-move steps: each step's board gets regions
+  // recomputed (same as the final state above) so it's immediately usable the instant the
+  // user undoes back into it -- a save now round-trips the full undo stack, all the way back
+  // to the start of the game, not just the final position. Spot labels are then chained
+  // forward move by move via recomputeSpotLabels, exactly mirroring what afterMoveCommitted
+  // does during live play (no longer a lossy "cosmetic renumbering" on load).
   history.length = 0;
   redoStack.length = 0;
+  for (const step of deserialized.history) {
+    recomputeRegions(step.state);
+    history.push(step);
+  }
+  let replayLabels = initialSpotLabels(history.length > 0 ? history[0].state : state);
+  if (history.length > 0) history[0].state.spotLabels = replayLabels;
+  for (let i = 0; i < history.length; i++) {
+    const committed = history[i].committed!;
+    const after = i + 1 < history.length ? history[i + 1].state : state;
+    replayLabels = recomputeSpotLabels(replayLabels, history[i].state, after, committed.v1, committed.v2);
+    after.spotLabels = replayLabels;
+  }
+  state.spotLabels = replayLabels;
+
   moveSeqLog.length = 0;
   for (const token of deserialized.moveSequence) {
     const base = stripMoveCheckTag(token);
@@ -1210,13 +1221,14 @@ function loadGameState(save: SaveFileV1): void {
   proposedArc = null;
   recenterAxis = null;
   recenterAngleLeft = 0;
-  // A loaded save has only final geometry, no intermediate per-move states — the undo-style replay
-  // resyncTrackedFromHistory uses can't apply here. Reseed the tracked map straight from that
-  // geometry instead (Catch-D for load, project_encoding_canon_rework); falls back to desynced if
-  // the WASM module isn't loaded yet or canonicalization fails, same as before this fix.
+  // A save now carries full per-move history, so it can be verified the same way undo does:
+  // mark desynced immediately (safe default while the replay is in flight), then let
+  // resyncTrackedFromHistory() walk `history` through the WASM engine and un-desync it if the
+  // whole replay matches (falls back to staying desynced if the module isn't loaded yet).
   pendingTrackedCheck = null;
-  tracked.seedFromState(state);
+  tracked.markDesynced();
   updateTrackedPanel(null);
+  void resyncTrackedFromHistory();
   input.pointerCancel();
   renderer.resetRegionColors();
   updateMoveSeq();
@@ -2210,7 +2222,7 @@ async function runRecreate(seq: ReturnType<typeof parseMoveSequence>): Promise<v
         if (strokeCrossesEdges(state, newEdge.points, newEdge.id, parsed.lo, parsed.hi)) {
           console.warn(`Recreate move ${i + 1}: committed edge ${newEdge.id} crosses existing geometry`);
         }
-        afterMoveCommitted(parsed.lo, parsed.hi);
+        afterMoveCommitted(parsed.lo, parsed.hi, stroke);
         await settle(tunables.settleMs);
         await waitForFullSettle();
         await waitForUnpause();
@@ -2288,12 +2300,19 @@ function wrapCanonDisplay(text: string, charInfo: EncodingResult['charInfo']): {
  * point "AB" collapses to a single numbered token instead of showing as two membrane letters. We
  * separately compute the *decompressed* canonical form with per-character vertex provenance
  * (canonicalizeTrackedProvenanceSync) so mouseover can highlight the corresponding board point —
- * provenance only survives when the compact form happens to equal the decompressed form (no
- * compression fired this frame); when compression collapses/reorders characters there's no clean
- * 1:1 mapping back to individual vertices any more, so hover is dropped for that render. Falls
- * back to the raw (non-canonical, but always-available) encodePosition() text when the module
- * isn't loaded yet (see canonSync's "load timing isn't guaranteed" note) or canonicalization
- * fails entirely.
+ * that provenance lines up with `compact` as-is only when compact happens to equal the
+ * decompressed form (no compression fired this frame). When compression collapses/reorders
+ * characters there's no clean 1:1 mapping from the *decompressed* provenance any more, but
+ * encodePosition() (`enc`) already computes its own compressed form with full per-character
+ * provenance -- built for the on-canvas point-encoding hover -- from the live boundary-walk
+ * order rather than the true symmetry-minimal one. When that live-order compressed text happens
+ * to match `compact` once bracket-wrapped, its provenance is exactly as good, so hover doesn't
+ * need to be dropped for the *entire* render just because compression fired somewhere in it.
+ * Only when neither lines up (both a differing canonical relabeling AND a compression choice
+ * `enc`'s own local pass didn't make) do we fall back further, to the always-fully-provenanced
+ * decompressed form -- still correct, just without the compressed notation. Falls back to the
+ * raw (non-canonical, but always-available) encodePosition() text when the module isn't loaded
+ * yet (see canonSync's "load timing isn't guaranteed" note) or canonicalization fails entirely.
  */
 function computeLiveEncodingDisplay(state: GameState, enc: EncodingResult): { text: string; charInfo: EncodingResult['charInfo'] } {
   const decomposed = encodePositionDecompressed(state);
@@ -2319,17 +2338,19 @@ function computeLiveEncodingDisplay(state: GameState, enc: EncodingResult): { te
       })()
     : enc.charInfo;
   const compact = canonSync(enc.text);
-  const rawLiveText = compact ?? decompLiveText;
-  const rawLiveCharInfo: EncodingResult['charInfo'] = compact
-    ? (compact === decompLiveText
-        ? decompLiveCharInfo
-        : compact.split('').map(() => ({ vertexIds: [] })))
-    : decompLiveCharInfo;
-  // rawLiveText only needs bracket-wrapping when it came from the WASM engine (compact or
-  // tracked.enc), which emits brackets/⊕ neither for — the encodePosition() fallback already
-  // has them (see the ⊕/[] delimiter key in encoding.ts).
-  const needsWrap = compact !== null || tracked !== null;
-  return needsWrap ? wrapCanonDisplay(rawLiveText, rawLiveCharInfo) : { text: rawLiveText, charInfo: rawLiveCharInfo };
+  if (compact === null) {
+    return tracked ? wrapCanonDisplay(decompLiveText, decompLiveCharInfo) : { text: decompLiveText, charInfo: decompLiveCharInfo };
+  }
+  if (compact === decompLiveText) {
+    return wrapCanonDisplay(compact, decompLiveCharInfo);
+  }
+  // enc.text/enc.charInfo are already bracket-wrapped (encodePosition() always wraps), so compare
+  // against a wrapped `compact` rather than trying to align the two at the raw-token level.
+  const wrappedCompactText = wrapCanonDisplay(compact, compact.split('').map(() => ({ vertexIds: [] }))).text;
+  if (wrappedCompactText === enc.text) {
+    return { text: enc.text, charInfo: enc.charInfo };
+  }
+  return wrapCanonDisplay(decompLiveText, decompLiveCharInfo);
 }
 
 function boundaryListing(state: { regions: Map<number, { id: number; isDead: boolean; isOuter: boolean; boundaries: { entries: { vertexId: number; side: string }[] }[] }> }): string {
