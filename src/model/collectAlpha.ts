@@ -186,8 +186,12 @@ function quickAlphaSplitOf(enc: string): { realAlphaEnc: string; awayEncs: strin
  * `depth` controls how far [T] nests -- see MAX_GENOME_DEPTH/MAX_NESTED_GENOME_LIVES: at
  * MAX_GENOME_DEPTH, the result is truncated to a bare FourGeneGenome (no T-children computed at all,
  * since nothing would ever recurse past this depth anyway), so recursion always terminates. Null on
- * any engine failure or a position that doesn't contain exactly one alpha token. */
-async function computeAlphaGenomeAt(
+ * any engine failure or a position that doesn't contain exactly one alpha token.
+ *
+ * Memoized by (depth, enc) -- see computeAlphaGenomeAt below. `depth` is part of the key because a
+ * call at depth 2 truncates before computing [T] at all, while the same `enc` at depth 0/1 needs the
+ * full recursion; the two are different results for the same position, not duplicate work. */
+async function computeAlphaGenomeAtCached(
   enc: string,
   depth: number,
 ): Promise<{ position: PositionRef; genome: AlphaGenome | FourGeneGenome } | null> {
@@ -267,6 +271,34 @@ async function computeAlphaGenomeAt(
   );
 
   return { position, genome: { R, D, L: sortedDedup(L), Tprime: sortedDedup(Tprime), Rc, Dc, Lc, TprimeC, T } };
+}
+
+/** Every (depth, enc) pair computeAlphaGenomeAtCached has ever been asked for, keyed on its own
+ * in-flight/settled PROMISE rather than just the eventual value -- caching the promise (not just its
+ * resolution) means two callers that ask for the same (depth, enc) while the first computation is
+ * still in flight share that one computation instead of each independently kicking off their own
+ * (this matters a lot in practice: computeAlphaGenomeAt's own recursion fans out via Promise.all, so
+ * sibling T-children of a shared descendant routinely race each other into this function before
+ * either has finished). Module-scope and never evicted -- a position's genome at a given depth never
+ * changes, so this is pure reuse with no staleness risk, the same "persist across the whole session"
+ * choice ttree.ts's own genomeCache already makes for the same reason. Measured: this was the T-Tree
+ * pane's dominant cost -- 20,425 analyze() calls (~6s) building a 186-node tree, because
+ * computeAlphaGenomeAt had NO memoization of its own and was reinvoked 14,289 times for only 621
+ * distinct (depth, enc) pairs (e.g. the small position "2a" alone was recomputed from scratch 2,290
+ * times) -- ttree.ts's genomeCache only guards its own top-level ensureNode calls, it can't see
+ * inside this function's own recursion into nested T-children. */
+const genomeAtCache = new Map<string, Promise<{ position: PositionRef; genome: AlphaGenome | FourGeneGenome } | null>>();
+
+function computeAlphaGenomeAt(
+  enc: string,
+  depth: number,
+): Promise<{ position: PositionRef; genome: AlphaGenome | FourGeneGenome } | null> {
+  const key = `${depth}:${enc}`;
+  const cached = genomeAtCache.get(key);
+  if (cached) return cached;
+  const promise = computeAlphaGenomeAtCached(enc, depth);
+  genomeAtCache.set(key, promise);
+  return promise;
 }
 
 /** Public entry point: compute the full (depth-0) genome of a position -- always an AlphaGenome

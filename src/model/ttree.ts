@@ -23,7 +23,7 @@
  * top-down recursive pass: required-ness isn't always known the first time a node is reached.
  */
 
-import { analyze, canonFull } from '../engine/stalks';
+import { analyze, canon, canonFull } from '../engine/stalks';
 import {
   type AlphaGenome,
   type FourGeneGenome,
@@ -198,7 +198,13 @@ export type TTreeResult = { ok: true; graph: TTreeGraph } | { ok: false; error: 
 /** Builds the full T-Tree rooted at `rootEncRaw` (worklist/BFS -- see the module doc comment for
  * why a single top-down pass isn't enough). */
 export async function buildTTree(rootEncRaw: string): Promise<TTreeResult> {
-  const typed = rootEncRaw.trim();
+  // A left side is properly denoted with a trailing '/' rather than ']' (stalks/src/collections.hpp's
+  // own convention -- see bracketDisplaySlash/leftSideDisplay), but the engine's own parser only
+  // strips '[' and ']' as no-op grouping characters (see encoding.cpp's cleaned()) and has no idea
+  // '/' means the same thing; accept either form here rather than making the user swap punctuation
+  // to paste a "proper" left side back in. Every '/' is unambiguously that closing marker (it never
+  // appears anywhere else in an encoding), so a blanket replace is exact, not a heuristic.
+  const typed = rootEncRaw.trim().replace(/\//g, ']');
   if (!typed) return { ok: false, error: 'Enter a position encoding.' };
 
   // Normalize to the engine's own bracketless canonical form before using it as this node's
@@ -218,7 +224,17 @@ export async function buildTTree(rootEncRaw: string): Promise<TTreeResult> {
   const nodes = new Map<string, TTreeNode>();
   const edges: TTreeEdge[] = [];
 
-  async function ensureNode(enc: string, embedded?: AlphaGenome | FourGeneGenome): Promise<TTreeNode | null> {
+  // A T-child's raw enc (collectAlpha.ts's movetype-5 candidate list) is a plain string-join of
+  // its alpha-bearing and away components in whatever order that candidate happened to build them
+  // in ('+' is a commutative disjoint-sum separator, so e.g. "12+2a" and "2a+12" denote the exact
+  // same real position) -- never itself re-canonicalized. Two different candidates reaching the
+  // identical real position but joined in a different component order would otherwise dedup as two
+  // separate nodes. Canonicalizing here (once, before the dedup check) is what actually gives every
+  // node its "real structural encoding" identity the module doc comment already promises; this is a
+  // TS-side fix, not a Stalks one -- canon() itself already normalizes component order correctly
+  // (see canon.cpp's own subposition sort), this call was just missing.
+  async function ensureNode(encRaw: string, embedded?: AlphaGenome | FourGeneGenome): Promise<TTreeNode | null> {
+    const enc = (await canon(encRaw)) || encRaw;
     const existing = nodes.get(enc);
     if (existing) return existing;
     const genome = await warmCache(enc, embedded, 0);
@@ -404,7 +420,14 @@ export function layoutTTree(graph: TTreeGraph): TTreeLayout {
 
   // Every edge, as an undirected adjacency (a node's barycenter should account for neighbors in
   // BOTH directions -- the required/bypass parent above it and any children below it -- not just
-  // the direction the current sweep happens to be moving through).
+  // the direction the current sweep happens to be moving through). A bypass's `via` node needs BOTH
+  // legs of its implied path wired in (from->via AND via->to) -- missing the second leg left a via
+  // node's column order decided purely by its distance to `from`, blind to where its own `to`
+  // (usually several rows further down, and often the only OTHER thing tying it anywhere) actually
+  // sits; with many via-siblings tied on that single shared `from` score, ties broke on arbitrary
+  // insertion order instead, which is what let a via node land at a far column while both its real
+  // neighbors sat close together elsewhere. Matches ui/ttree.ts's own buildNeighbors, which already
+  // wires in all three legs for its (separate) pixel-position averaging pass.
   const neighbors = new Map<string, string[]>();
   const addEdge = (a: string, b: string) => {
     (neighbors.get(a) ?? neighbors.set(a, []).get(a)!).push(b);
@@ -412,7 +435,10 @@ export function layoutTTree(graph: TTreeGraph): TTreeLayout {
   };
   for (const e of graph.edges) {
     addEdge(e.from, e.to);
-    if (e.via) addEdge(e.from, e.via);
+    if (e.via) {
+      addEdge(e.from, e.via);
+      addEdge(e.via, e.to);
+    }
   }
 
   const PASSES = 4;
