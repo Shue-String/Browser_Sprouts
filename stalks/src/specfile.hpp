@@ -78,6 +78,17 @@ struct SpecValue {
 struct SpecEdge {
     SpecValue child;
     int movetype = 0;
+    int offset = 0;  // Quick-mode child edge offset (0/1); always 0 in Exact mode.
+
+    // Indices (into whichever node list this edge's owning SpecNode lives in -- a single loaded
+    // SpecDB's nodes(), or a merged list built from several) of the child's minimal component(s):
+    // one entry for an ordinary child, >=2 for a disconnected sum. Populated ONLY when the loader
+    // is asked for it (see loadSpecGraph's retainChildIndices) -- most callers only ever read
+    // `.child`/`.movetype` and this would otherwise be dead weight on multi-hundred-MB corpora.
+    // Empty when not requested. This is what lets saveSpecNodes() re-emit a valid .spec stream
+    // from already-loaded data (e.g. several files merged by encoding) with no live GameGraph and
+    // no recomputation.
+    std::vector<std::size_t> childIndices;
 };
 
 // A loaded minimal node: its encoding, recomputed value, and its outgoing edges in on-disk order.
@@ -109,13 +120,30 @@ public:
     const std::vector<SpecNode>& nodes() const { return nodes_; }
 
 private:
-    friend SpecDB loadSpecGraph(std::istream& in);
+    friend SpecDB loadSpecGraph(std::istream& in, bool retainChildIndices);
     GameGraph::Mode mode_ = GameGraph::Mode::Exact;
     std::vector<SpecNode> nodes_;
     std::unordered_map<std::string, std::size_t> index_;
 };
 
-SpecDB loadSpecGraph(std::istream& in);
-SpecDB loadSpecGraphFromFile(const std::string& path);
+// `retainChildIndices`: when true, each loaded SpecEdge also gets its childIndices populated (see
+// SpecEdge above) so the result can be losslessly re-serialized via saveSpecNodes -- e.g. to merge
+// several .spec files by encoding without recomputing any value. Defaults to false (existing
+// behavior, no extra memory) since only that merge use case needs it.
+SpecDB loadSpecGraph(std::istream& in, bool retainChildIndices = false);
+SpecDB loadSpecGraphFromFile(const std::string& path, bool retainChildIndices = false);
+
+// Writes already-resolved SpecNodes directly to a .spec stream -- no live GameGraph needed. `nodes`
+// must already be in a valid topological order: every edge's childIndices must refer to strictly
+// earlier positions in `nodes`. This is what a multi-file merge (loading each source with
+// retainChildIndices=true, then unioning by encoding while preserving each file's own relative
+// order -- itself already topological, and a source file is always closed under its own edges, so
+// simple order-preserving concatenation-with-dedup stays topological) can hand back to disk without
+// re-solving anything. Values (SpecNode::value, SpecEdge::child) are trusted as given, not
+// recomputed -- callers that didn't derive them from a real loaded/solved graph will get a corrupt
+// file back out.
+std::size_t saveSpecNodes(GameGraph::Mode mode, const std::vector<SpecNode>& nodes, std::ostream& out);
+std::size_t saveSpecNodesToFile(GameGraph::Mode mode, const std::vector<SpecNode>& nodes,
+                                 const std::string& path);
 
 } // namespace stalks

@@ -10,9 +10,7 @@ stalks/saves/master_meta.json.bak*
 stalks/011.txt
 stalks/100.txt
 
-stalks/saves/alpha_beta_pair_vs_split.spec
-stalks/saves/single_alpha_5real.spec
-stalks/saves/single_alpha_5real_richboundary.spec
+stalks/saves/merged_alpha_corpus.spec
 
 Sprouts_ShuePairings*
 extract_shue_pairings.py

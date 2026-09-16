@@ -280,6 +280,47 @@ std::size_t writeMinimalSpec(const GameGraph& g, const std::vector<const Node*>&
     return mins.size();
 }
 
+// Same on-disk layout as writeMinimalSpec, but sourced from already-resolved SpecNode/SpecEdge
+// data (see saveSpecNodes) instead of a live GameGraph -- every edge's childIndices already ARE
+// indices into `nodes`, so no Node*/indexOf remapping is needed; the caller (a merge of several
+// loaded files) is responsible for those indices being globally consistent and topological.
+std::size_t writeSpecNodeList(GameGraph::Mode mode, const std::vector<SpecNode>& nodes, std::ostream& out) {
+    const bool quick = (mode == GameGraph::Mode::Quick);
+
+    out.write(kMagic, sizeof(kMagic));
+    putByte(out, kVersion);
+    putByte(out, quick ? 1 : 0);
+    putVarint(out, nodes.size());
+
+    for (std::size_t rank = 0; rank < nodes.size(); ++rank) {
+        const SpecNode& n = nodes[rank];
+        putPackedString(out, n.enc);
+        putVarint(out, n.edges.size());
+        for (const SpecEdge& e : n.edges) {
+            if (e.childIndices.empty())
+                throw std::runtime_error(
+                    "specfile: saveSpecNodes needs childIndices on every edge -- load source "
+                    "files with retainChildIndices=true");
+            for (std::size_t ci : e.childIndices)
+                if (ci >= rank)
+                    throw std::runtime_error(
+                        "specfile: saveSpecNodes: edge target is not strictly earlier than its "
+                        "source -- nodes are not in topological order");
+            if (e.childIndices.size() == 1) {
+                putVarint(out, (rank - e.childIndices[0]) << 1);
+            } else {
+                putVarint(out, (e.childIndices.size() << 1) | 1);
+                for (std::size_t ci : e.childIndices)
+                    putVarint(out, rank - ci);
+            }
+            if (quick)
+                putByte(out, static_cast<std::uint8_t>(e.offset & 1));
+            putVarint(out, static_cast<std::uint64_t>(e.movetype));
+        }
+    }
+    return nodes.size();
+}
+
 }  // namespace
 
 std::size_t saveSpecGraph(const GameGraph& g, const std::vector<const Node*>& roots, std::ostream& out) {
@@ -294,7 +335,19 @@ std::size_t saveSpecGraphToFile(const GameGraph& g, const std::vector<const Node
     return saveSpecGraph(g, roots, out);
 }
 
-SpecDB loadSpecGraph(std::istream& in) {
+std::size_t saveSpecNodes(GameGraph::Mode mode, const std::vector<SpecNode>& nodes, std::ostream& out) {
+    return writeSpecNodeList(mode, nodes, out);
+}
+
+std::size_t saveSpecNodesToFile(GameGraph::Mode mode, const std::vector<SpecNode>& nodes,
+                                 const std::string& path) {
+    std::ofstream out(path, std::ios::binary);
+    if (!out)
+        throw std::runtime_error("specfile: cannot open '" + path + "' for writing");
+    return saveSpecNodes(mode, nodes, out);
+}
+
+SpecDB loadSpecGraph(std::istream& in, bool retainChildIndices) {
     char magic[4];
     if (!in.read(magic, sizeof(magic)) || std::memcmp(magic, kMagic, sizeof(magic)) != 0)
         throw std::runtime_error("specfile: bad magic");
@@ -325,26 +378,33 @@ SpecDB loadSpecGraph(std::istream& in) {
         std::set<int> vals;
         int minChild = 0, maxChild = 0;
         bool haveChild = false;
-        auto applyDelta = [&](std::uint64_t delta, int& nim, int& mn, int& mx) {
+        auto applyDelta = [&](std::uint64_t delta, int& nim, int& mn, int& mx,
+                               std::vector<std::size_t>* idxOut) {
             if (delta == 0 || delta > i)
                 throw std::runtime_error("specfile: child index out of range");
-            const SpecValue& cv = db.nodes_[static_cast<std::size_t>(i - delta)].value;
+            const std::size_t childIdx = static_cast<std::size_t>(i - delta);
+            const SpecValue& cv = db.nodes_[childIdx].value;
             nim ^= cv.nimber;
             mn += cv.minMoves;
             mx += cv.maxMoves;
+            if (idxOut)
+                idxOut->push_back(childIdx);
         };
         for (std::uint64_t c = 0; c < childCount; ++c) {
             const std::uint64_t desc = getVarint(in);
             int nim = 0, mn = 0, mx = 0;
+            std::vector<std::size_t> childIndices;
+            std::vector<std::size_t>* idxOut = retainChildIndices ? &childIndices : nullptr;
             if ((desc & 1) == 0) {
-                applyDelta(desc >> 1, nim, mn, mx);
+                applyDelta(desc >> 1, nim, mn, mx, idxOut);
             } else {
                 const std::uint64_t compCount = desc >> 1;
                 for (std::uint64_t k = 0; k < compCount; ++k)
-                    applyDelta(getVarint(in), nim, mn, mx);
+                    applyDelta(getVarint(in), nim, mn, mx, idxOut);
             }
+            const int offset = quick ? (getByte(in) & 1) : 0;
             if (quick)
-                nim ^= (getByte(in) & 1);
+                nim ^= offset;
             const int movetype = static_cast<int>(getVarint(in));
 
             SpecEdge edge;
@@ -352,6 +412,9 @@ SpecDB loadSpecGraph(std::istream& in) {
             edge.child.minMoves = mn;
             edge.child.maxMoves = mx;
             edge.movetype = movetype;
+            edge.offset = offset;
+            if (retainChildIndices)
+                edge.childIndices = std::move(childIndices);
             node.edges.push_back(edge);
 
             vals.insert(nim);
@@ -380,11 +443,11 @@ SpecDB loadSpecGraph(std::istream& in) {
     return db;
 }
 
-SpecDB loadSpecGraphFromFile(const std::string& path) {
+SpecDB loadSpecGraphFromFile(const std::string& path, bool retainChildIndices) {
     std::ifstream in(path, std::ios::binary);
     if (!in)
         throw std::runtime_error("specfile: cannot open '" + path + "' for reading");
-    return loadSpecGraph(in);
+    return loadSpecGraph(in, retainChildIndices);
 }
 
 const SpecNode* SpecDB::findMinimal(const std::string& enc) const {
