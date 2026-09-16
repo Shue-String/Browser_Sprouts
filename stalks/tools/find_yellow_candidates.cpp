@@ -1,6 +1,8 @@
 // Offline discovery tool: of every single-subposition (minimal), single-alpha left side reachable
 // from the given .spec file(s) whose (R,D,{L},{T'}) core matches ANY currently-named family exactly
-// (via familyNameForCoreKey) and whose left-side lives (leftSideLives2()/2) is <= 6, and which is NOT
+// (via familyNameForCoreKey) and whose left-side lives (leftSideLives2()/2) is <= the given maxLives
+// cap (a plain CLI argument -- was a hardcoded "== 7" until 2026-09-15's registry-rebuild-from-
+// scratch experiment needed to try several caps without a rebuild each time), and which is NOT
 // already registered under any Advanced Collection (same repCanon check as
 // unregistered_left_sides.cpp) -- report which ones "go yellow" per isYellowCandidate (see
 // alpha_genome.hpp), i.e. are genuine new members of THEIR OWN matching family by the same rule
@@ -16,7 +18,7 @@
 // quick-canon identity and the rep-set membership check. Each tool's own scan/filter/output shape
 // still differs enough that only these three predicates were worth sharing, not the whole loop.
 //
-// Usage: find_yellow_candidates <out.tsv> <spec1.spec> [spec2.spec ...]
+// Usage: find_yellow_candidates <maxLives> <out.tsv> <spec1.spec> [spec2.spec ...]
 #include "alpha_genome.hpp"
 #include "canon.hpp"
 #include "collections.hpp"
@@ -27,6 +29,7 @@
 #include "tokens.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -38,11 +41,12 @@ using namespace stalks;
 using namespace stalks_tools;
 
 int main(int argc, char** argv) {
-    if (argc < 3) {
-        std::cerr << "usage: find_yellow_candidates <out.tsv> <spec1.spec> [spec2.spec ...]\n";
+    if (argc < 4) {
+        std::cerr << "usage: find_yellow_candidates <maxLives> <out.tsv> <spec1.spec> [spec2.spec ...]\n";
         return 1;
     }
-    const std::string outPath = argv[1];
+    const int maxLives = std::atoi(argv[1]);
+    const std::string outPath = argv[2];
     const std::set<std::string> repCanon = stalks_tools::buildRepCanonSet();
     std::cerr << "rep set: " << repCanon.size() << " distinct canonical forms\n";
 
@@ -65,7 +69,7 @@ int main(int argc, char** argv) {
     long long candidatesChecked = 0;
     std::map<std::string, long long> checkedByFamily, yellowByFamily;
 
-    for (int i = 2; i < argc; ++i) {
+    for (int i = 3; i < argc; ++i) {
         const std::string path = argv[i];
         SpecDB db;
         try {
@@ -96,7 +100,7 @@ int main(int argc, char** argv) {
             ++qualifying;
 
             const int lives = qc.rep.leftSideLives2() / 2;
-            if (lives != 7) continue;
+            if (lives > maxLives) continue;
 
             if (repCanon.count(quickEnc) > 0) continue;  // already registered somewhere
 

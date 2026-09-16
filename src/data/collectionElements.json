@@ -1792,7 +1792,6 @@
             { "encoding": "12C|2Ca", "minSpots": 5 },
             { "encoding": "1CD|CD,2a", "minSpots": 5 },
             { "encoding": "2,1C|2Ca", "minSpots": 5 },
-            { "encoding": "2,CDEF|CDEF,a", "minSpots": 5 },
             { "encoding": "2,CDE|CDE,2a", "minSpots": 6 },
             { "encoding": "1,2,C|2Ca", "minSpots": 6 },
             { "encoding": "6,C|2Ca", "minSpots": 5 },

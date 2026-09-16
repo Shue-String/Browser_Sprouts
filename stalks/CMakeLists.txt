@@ -90,6 +90,9 @@ target_link_libraries(dump_token_life PRIVATE stalks_core)
 add_executable(find_child_parents tools/find_child_parents.cpp tools/alpha_genome.cpp)
 target_link_libraries(find_child_parents PRIVATE stalks_core)
 
+add_executable(audit_registry tools/audit_registry.cpp tools/alpha_genome.cpp)
+target_link_libraries(audit_registry PRIVATE stalks_core)
+
 # Every target defined above, in one place -- add a new add_executable()'s name here too, or it
 # silently builds with none of the warning flags below.
 set(STALKS_ALL_TARGETS
@@ -98,7 +101,7 @@ set(STALKS_ALL_TARGETS
     dump_collections_roster quick_reduction_counts verify_left_side region_frequency
     unregistered_left_sides yellow_check find_yellow_candidates find_yellow_candidates_structural
     double_crit_probe unregistered_double_crit_regions double_crit_candidates_report winning_tree
-    dump_token_life find_child_parents
+    dump_token_life find_child_parents audit_registry
 )
 
 if(MSVC)
