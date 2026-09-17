@@ -254,10 +254,29 @@ const NamedFamily* familyForCoreKey(const std::string& coreKey) {
 // documented collision-losers (S_10/S_16/S_17/S_18/S_20/S_24/S_25/S_26) never appeared in the
 // checked list AT ALL -- every one of their candidates was silently being tested against a
 // higher-priority sibling instead and rejected there.
+//
+// DEDUPED BY NAME (fixed 2026-09-16): genome_defs.generated.hpp's legacyFoldKeys() can add MULTIPLE
+// NamedFamily entries sharing both the same coreKey AND the same NAME as each other (and as the real,
+// non-legacy entry) -- e.g. S_1's own two legacy fold keys are both literally named "S_1" and both
+// hardcode coreKey "(0,1,{0},{})" (S_1's own bare core). Before this fix, a caller iterating this
+// vector's raw entries got "S_1" back once per such duplicate (3 times, for S_1) even though
+// isYellowCandidate(candidate, db, "S_1") always re-resolves the name via familyForName (first
+// match wins) and so gives the SAME verdict every time -- a real bug found via
+// find_yellow_candidates.exe's output: 1,119 distinct S_1 candidates were each written 3x (3,357 rows
+// for 1,119 real hits) in a from-scratch registry-rebuild scan, caught because the raw output looked
+// suspiciously tripled, not because any wrong verdict was produced. Deduping by NAME here (not just
+// pointer identity) is the correct fix: two different NamedFamily objects with the same name are, as
+// far as every caller of this function is concerned, indistinguishable (isYellowCandidate only ever
+// takes the name, never the specific object), so they should never be reported as two "different"
+// families to test.
 std::vector<const NamedFamily*> allFamiliesForCoreKey(const std::string& coreKey) {
     std::vector<const NamedFamily*> out;
-    for (const auto& f : namedFamilies())
-        if (f.coreKey == coreKey) out.push_back(&f);
+    std::set<std::string> seenNames;
+    for (const auto& f : namedFamilies()) {
+        if (f.coreKey != coreKey) continue;
+        if (!seenNames.insert(f.name).second) continue;
+        out.push_back(&f);
+    }
     return out;
 }
 
@@ -293,6 +312,55 @@ std::string foldToName(const std::string& plainText) {
     const auto bracket = plainText.find(",[");
     const std::string coreKey = bracket != std::string::npos ? plainText.substr(0, bracket) + ")" : plainText;
     const std::string fallback = bypassOnlyFoldName(coreKey);
+    return fallback.empty() ? plainText : fallback;
+}
+
+// Forward-declared: genomeTextAt is defined further down (it's the function that calls
+// foldToNameChecked below), but bypassOnlyFoldNameChecked needs to call it too (to fold a
+// grandchild for the bypass check) -- no hoisting in C++, so a prototype is required here.
+std::string genomeTextAt(const Position& p, const SpecDB& db, int depth, Token target);
+
+// `bypassOnlyFoldName`, but ALSO verifying that every one of `p`'s own T-children is accounted for
+// -- a bypass back to this same family, since a bypass-only family has nothing to require. Mirrors
+// collectAlpha.ts's `bypassOnlyFoldNameChecked` (see that function's own doc comment for the full
+// rationale: root-caused 2026-09-16 via `[1,12,2a/` folding to "S_1" despite its own T-child
+// `[12,27a8/` having no bypass back to S_1 -- the swap REGISTRY, collections.cpp/isYellowCandidate,
+// already rejected this position correctly; only this DISPLAY-fold path was still using the looser,
+// core-only rule).
+//
+// Deliberately does NOT reuse `isYellowCandidate` directly: that function (and
+// `resolvedGenomeName`, which it calls) is hardcoded to ALPHA, while `genomeTextAt`/`foldToName`
+// here are genuinely generic over `target` (double_crit_genome.cpp calls this same pipeline with a
+// different crit token) -- reusing the ALPHA-only helper would silently check the WRONG token's
+// T-children whenever `target != ALPHA`. This re-derives the identical per-child rule
+// (isYellowCandidate's own `hasBypass` loop, with `family.tChildPlains` empty so
+// `satisfiesRequired` is always false) using the already-`target`-parametrized `tChildrenOf`/
+// `genomeTextAt` this file already has, so the two implementations can't drift on WHAT the rule is,
+// only (necessarily) on being target-generic where isYellowCandidate is ALPHA-only by design.
+std::string bypassOnlyFoldNameChecked(const Position& p, const SpecDB& db, Token target,
+                                       const std::string& coreKey) {
+    const NamedFamily* family = familyForCoreKey(coreKey);
+    if (!family || !family->tChildPlains.empty()) return std::string();
+    for (const Position& t : tChildrenOf(p, target)) {
+        bool hasBypass = false;
+        for (const Position& gc : tChildrenOf(t, target)) {
+            if (genomeTextAt(gc, db, 0, target) == family->name) {
+                hasBypass = true;
+                break;
+            }
+        }
+        if (!hasBypass) return std::string();
+    }
+    return family->name;
+}
+
+std::string foldToNameChecked(const std::string& plainText, const Position& p, const SpecDB& db,
+                               Token target) {
+    const auto it = namedGenomes().find(plainText);
+    if (it != namedGenomes().end()) return it->second;
+    const auto bracket = plainText.find(",[");
+    const std::string coreKey = bracket != std::string::npos ? plainText.substr(0, bracket) + ")" : plainText;
+    const std::string fallback = bypassOnlyFoldNameChecked(p, db, target, coreKey);
     return fallback.empty() ? plainText : fallback;
 }
 
@@ -344,7 +412,8 @@ std::string genomeTextAt(const Position& p, const SpecDB& db, int depth, Token t
         first = false;
         joined += t;
     }
-    return gGenomeTextCache.emplace(key, foldToName(head + ",[" + joined + "])")).first->second;
+    return gGenomeTextCache.emplace(key, foldToNameChecked(head + ",[" + joined + "])", p, db, target))
+        .first->second;
 }
 
 }  // namespace

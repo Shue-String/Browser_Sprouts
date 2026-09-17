@@ -14,3 +14,7 @@ stalks/saves/merged_alpha_corpus.spec
 
 Sprouts_ShuePairings*
 extract_shue_pairings.py
+
+stalks/yellow_candidates*
+stalks/ttree_extras*
+stalks/held_out_5families*

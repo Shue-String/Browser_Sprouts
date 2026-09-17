@@ -59,6 +59,7 @@ import {
   NAMED_FAMILY_GENOME_TEXT,
   NAMED_FAMILY_GROUPS,
   bypassOnlyFoldName,
+  bypassOnlyFoldNameChecked,
   classifyTChildren,
   computeAlphaGenome,
   expandGenomeShorthand,
@@ -290,7 +291,7 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
   const cls = depthClass(depth);
   if (!isFullGenome(g)) {
     const plain = head + ')';
-    return foldToName(g, plain, `<span class="${cls}">${escapeHtml(plain)}</span>`, cls);
+    return foldToName(g, plain, `<span class="${cls}">${escapeHtml(plain)}</span>`, cls, depth);
   }
 
   const seen = new Set<string>();
@@ -326,22 +327,28 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
     `<span class="${cls}">${escapeHtml(head)},[</span>` +
     childHtmls.join(`<span class="${cls}">,</span>`) +
     `<span class="${cls}">])</span>`;
-  return foldToName(g, plain, html, cls);
+  return foldToName(g, plain, html, cls, depth);
 }
 
 /** When the Quick-Genome toggle is on, fold a genome node whose exact plain-text tuple matches a
  * known shorthand (see GENOME_NAMES) down to its name, replacing the full tuple rendering -- or,
- * failing that, whose bare core matches a bypass-only family (see bypassOnlyFoldName), since a
- * finite hand-authored GENOME_NAMES table can never enumerate every real T-list such a family's
- * members can have. */
+ * failing that, whose bare core matches a bypass-only family AND every one of its own T-children is
+ * actually accounted for (see bypassOnlyFoldNameChecked) when `g` is a full genome; a depth-capped
+ * bare tuple (no T list to check) falls back to the unchecked bypassOnlyFoldName, since there is no
+ * better option at that depth. A finite hand-authored GENOME_NAMES table can never enumerate every
+ * real T-list such a family's members can have, which is why the bypass-only fallback exists at
+ * all -- but the fallback must not fire for a T-child that neither satisfies a required T-gene nor
+ * bypasses back to the family (see bypassOnlyFoldNameChecked's own doc comment: root-caused
+ * 2026-09-16 via `[1,12,2a/` displaying as "S_1" despite its own T-child having no such bypass). */
 function foldToName(
-  g: { R: number | null; D: number | null; L: number[]; Tprime: number[] },
+  g: AlphaGenome | FourGeneGenome,
   plain: string,
   html: string,
   cls: string,
+  depth: number,
 ): { plain: string; html: string } {
   if (!quickGenome) return { plain, html };
-  const name = GENOME_NAMES[plain] ?? bypassOnlyFoldName(g);
+  const name = GENOME_NAMES[plain] ?? (isFullGenome(g) ? bypassOnlyFoldNameChecked(g, resolveChild, depth) : bypassOnlyFoldName(g));
   if (!name) return { plain, html };
   return { plain: name, html: `<span class="${cls}">${escapeHtml(name)}</span>` };
 }

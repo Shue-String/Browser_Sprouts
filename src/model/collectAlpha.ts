@@ -790,6 +790,29 @@ export function bypassOnlyFoldName(g: { R: number | null; D: number | null; L: n
   return family && family.tChildPlains.length === 0 ? family.name : null;
 }
 
+/** `bypassOnlyFoldName`, but ALSO verifying -- via the exact same classifyTChildren rule
+ * isYellowCandidate and the T-gene table already use -- that every one of `g`'s own T-children is
+ * accounted for (a bypass back to this same family, since a bypass-only family has nothing to
+ * require). A bare core match alone is NOT sufficient: an unrelated T-child that neither satisfies
+ * a required T-gene (impossible here, tChildPlains is empty by definition) nor bypasses back to the
+ * family means `g` is not actually a member, even though its own (R,D,{L},{T'}) happens to equal
+ * the family's core. Root-caused 2026-09-16: `[1,12,2a/` displayed as "S_1" despite its own T-child
+ * `[12,27a8/` having no bypass back to S_1 (and S_1 has no required T-gene to excuse it either) --
+ * the swap REGISTRY (collections.cpp/isYellowCandidate) already rejected this position correctly;
+ * only this DISPLAY-fold path was still using the looser, core-only rule. Returns null (no fold)
+ * while any T-child's own resolution is still pending, matching `foldedPlainText`'s existing
+ * "self-corrects on a later call" convention rather than folding prematurely on incomplete data.
+ * Only meaningful for a FULL genome (g.T known) -- callers folding a depth-capped bare tuple (no T
+ * list to check) should keep using the unchecked `bypassOnlyFoldName` above; there is no better
+ * option at that depth. */
+export function bypassOnlyFoldNameChecked(g: AlphaGenome, resolveChild: ResolveChild, depth: number): string | null {
+  const family = familyForCore(g);
+  if (!family || family.tChildPlains.length !== 0) return null;
+  const rows = classifyTChildren(g.T, family, family.name, resolveChild, depth);
+  if (rows.some(r => r.pending || r.isExtra)) return null;
+  return family.name;
+}
+
 /** Resolves a T-child's own genome given its encoding and (if already loaded) an embedded genome
  * object -- injected rather than hardcoded so each caller can supply its own fetch/cache strategy
  * (e.g. collect.ts's `lookupGenome`, which triggers its own pane's re-render on a fresh engine
@@ -833,7 +856,7 @@ function foldedPlainText(
   }
   children.sort();
   const plain = `${head},[${children.join(',')}])`;
-  return GENOME_NAMES[plain] ?? bypassOnlyFoldName(g) ?? plain;
+  return GENOME_NAMES[plain] ?? bypassOnlyFoldNameChecked(g, resolveChild, depth) ?? plain;
 }
 
 /** `g`'s own exact fold (see foldedPlainText) if it has one, else null. Moved here (2026-09-03)

@@ -96,6 +96,12 @@ target_link_libraries(audit_registry PRIVATE stalks_core)
 add_executable(merge_specs tools/merge_specs.cpp)
 target_link_libraries(merge_specs PRIVATE stalks_core)
 
+add_executable(check_ttree_extras tools/check_ttree_extras.cpp tools/alpha_genome.cpp)
+target_link_libraries(check_ttree_extras PRIVATE stalks_core)
+
+add_executable(probe_dupe_nodes tools/probe_dupe_nodes.cpp)
+target_link_libraries(probe_dupe_nodes PRIVATE stalks_core)
+
 # Every target defined above, in one place -- add a new add_executable()'s name here too, or it
 # silently builds with none of the warning flags below.
 set(STALKS_ALL_TARGETS
@@ -104,7 +110,8 @@ set(STALKS_ALL_TARGETS
     dump_collections_roster quick_reduction_counts verify_left_side region_frequency
     unregistered_left_sides yellow_check find_yellow_candidates find_yellow_candidates_structural
     double_crit_probe unregistered_double_crit_regions double_crit_candidates_report winning_tree
-    dump_token_life find_child_parents audit_registry merge_specs
+    dump_token_life find_child_parents audit_registry merge_specs check_ttree_extras
+    probe_dupe_nodes
 )
 
 if(MSVC)
