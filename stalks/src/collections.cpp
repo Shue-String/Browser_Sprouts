@@ -1561,6 +1561,19 @@ void recordQuickReduction(const std::string& key) {
     ++quickReductionCountsMutable()[key];
 }
 
+// Testing-only leave-one-out hook -- see collections.hpp's setExcludedRegistryKey doc comment.
+std::string& excludedRegistryKeyMutable() {
+    static std::string key;
+    return key;
+}
+}  // namespace
+
+void setExcludedRegistryKey(const std::string& key) {
+    excludedRegistryKeyMutable() = key;
+}
+
+namespace {
+
 // ---------------------------------------------------------------------------
 // quickCanon's fixpoint, restructured 2026-08-21 (user-specified priority order) from a single
 // global lex-least race across all reduction types into six PRIORITY-ORDERED steps, run in strict
@@ -1685,6 +1698,8 @@ bool stepSingleCrit(Position& cur, int& offset) {
             const auto it = registry().find(cand.leftKey);
             if (it == registry().end())
                 continue;
+            if (!excludedRegistryKeyMutable().empty() && "[" + it->second.display + "/" == excludedRegistryKeyMutable())
+                continue;
             cur.components[ci] = applyCritSwap(cur.components[ci], cand.leftRegion,
                                                 it->second.head.regions[0], {cand.slot});
             offset ^= it->second.offset;
@@ -1703,6 +1718,8 @@ bool stepDoubleCrit(Position& cur, int& offset) {
         for (const auto& cand : enumerateDoubleCrits(snapshot)) {
             const auto it = doubleCritRegistry().find(cand.leftKey);
             if (it == doubleCritRegistry().end())
+                continue;
+            if (!excludedRegistryKeyMutable().empty() && "[" + it->second.display + "/" == excludedRegistryKeyMutable())
                 continue;
             cur.components[ci] = applyCritSwap(cur.components[ci], cand.region,
                                                 it->second.head.regions[0],
@@ -1732,6 +1749,8 @@ bool stepMultiRegion(Position& cur, int& offset) {
             for (const auto& cand : enumerateMultiCrits(comp)) {
                 const auto it = multiRegistry().find(cand.leftKey);
                 if (it == multiRegistry().end())
+                    continue;
+                if (!excludedRegistryKeyMutable().empty() && "[" + it->second.display + "/" == excludedRegistryKeyMutable())
                     continue;
                 Position np = cur;
                 np.components[ci] =

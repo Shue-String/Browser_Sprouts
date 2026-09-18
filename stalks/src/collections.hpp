@@ -61,6 +61,17 @@ QuickCanonResult quickCanon(const Position& p);
 void resetQuickReductionCounts();
 const std::map<std::string, long long>& quickReductionCounts();
 
+// Testing-only hook for a true leave-one-out registry-necessity audit (see
+// tools/audit_registry_necessity.cpp): while `key` (the exact "[" + display + "/" text a
+// successful match would record via recordQuickReduction) is set, every one of steps 3-5
+// (single-crit/double-crit/multi-region registry matching) treats a match against THAT SPECIFIC
+// entry as if it weren't registered at all, falling through to whatever OTHER rule would apply
+// next -- without needing a rebuild per candidate. Does not affect crit-cell/scab-cell congruity or
+// DisaPoint compression (those aren't registry entries, nothing to exclude). Global and NOT
+// thread-safe, same caveat as quickReductionCounts -- fine for these single-threaded offline tools,
+// never call this from anything else. Pass an empty string to clear.
+void setExcludedRegistryKey(const std::string& key);
+
 // Canonical registry key for a left side authored as an encoding string (e.g. "2a", "0,a",
 // "12,a", or the double-crit "0,ba" -- the text between '[' and '/', crit membranes written as
 // the ordered markers 'a','b',...). Exposed for tests and for seeding the registry. Throws

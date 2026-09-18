@@ -102,6 +102,18 @@ target_link_libraries(check_ttree_extras PRIVATE stalks_core)
 add_executable(probe_dupe_nodes tools/probe_dupe_nodes.cpp)
 target_link_libraries(probe_dupe_nodes PRIVATE stalks_core)
 
+add_executable(audit_registry_redundancy tools/audit_registry_redundancy.cpp)
+target_link_libraries(audit_registry_redundancy PRIVATE stalks_core)
+
+add_executable(check_candidates tools/check_candidates.cpp tools/alpha_genome.cpp)
+target_link_libraries(check_candidates PRIVATE stalks_core)
+
+add_executable(verify_registry_shrink tools/verify_registry_shrink.cpp)
+target_link_libraries(verify_registry_shrink PRIVATE stalks_core)
+
+add_executable(audit_registry_necessity tools/audit_registry_necessity.cpp)
+target_link_libraries(audit_registry_necessity PRIVATE stalks_core)
+
 # Every target defined above, in one place -- add a new add_executable()'s name here too, or it
 # silently builds with none of the warning flags below.
 set(STALKS_ALL_TARGETS
@@ -111,7 +123,8 @@ set(STALKS_ALL_TARGETS
     unregistered_left_sides yellow_check find_yellow_candidates find_yellow_candidates_structural
     double_crit_probe unregistered_double_crit_regions double_crit_candidates_report winning_tree
     dump_token_life find_child_parents audit_registry merge_specs check_ttree_extras
-    probe_dupe_nodes
+    probe_dupe_nodes audit_registry_redundancy check_candidates verify_registry_shrink
+    audit_registry_necessity
 )
 
 if(MSVC)

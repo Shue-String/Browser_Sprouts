@@ -18,3 +18,11 @@ extract_shue_pairings.py
 stalks/yellow_candidates*
 stalks/ttree_extras*
 stalks/held_out_5families*
+stalks/registry_redundancy_audit*
+stalks/registry_baseline.tsv
+stalks/registry_after_shrink_audit.tsv
+stalks/registry_necessity_audit.tsv
+stalks/registry_round2_status.tsv
+stalks/registry_round2_necessity.tsv
+stalks/n6_sweep_result.txt
+stalks/n6_sweep_round2.txt
