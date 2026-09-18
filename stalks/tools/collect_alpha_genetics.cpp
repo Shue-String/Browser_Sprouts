@@ -47,8 +47,10 @@
 #include "tokens.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -65,9 +67,21 @@ struct QuickDisp {
     int offset = 0;
 };
 
+// quickCanon() itself has no memoization (it's a from-scratch crit-cell/scab-cell/registry/
+// DisaPoint fixpoint search every call, see collections.cpp). This tool calls it once per
+// qualifying position plus once per T-child found, and T-children repeat heavily across
+// sibling/cousin positions in a large corpus -- confirmed empirically (90% cache hit rate on
+// the 3-spot corpus: 193791 hits / 20624 misses). Local to this tool -- quickCanon's registry
+// is fixed for the process lifetime, so this is a pure function of serialize(p), safe to cache
+// unconditionally.
+std::map<std::string, QuickDisp> gQuickDispCache;
+
 QuickDisp quickDisp(const Position& p) {
+    const std::string key = serialize(p);
+    const auto cached = gQuickDispCache.find(key);
+    if (cached != gQuickDispCache.end()) return cached->second;
     const QuickCanonResult qc = quickCanon(p);
-    return {serialize(qc.rep), qc.offset};
+    return gQuickDispCache.emplace(key, QuickDisp{serialize(qc.rep), qc.offset}).first->second;
 }
 
 struct TChild {
@@ -103,16 +117,35 @@ std::string setStrBare(const std::set<int>& s) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 3) {
-        std::cerr << "usage: collect_alpha_genetics <out.json> <spec1.spec> [spec2.spec ...]\n";
+    // Optional --max-lives=N, may appear anywhere among the spec-file args (mirrors
+    // filter_collect_alpha_lives.js's own flag). Kept unfiltered (INT_MAX) by default, matching
+    // the tool's original "always emit the full scanned set" contract for ad-hoc analysis --
+    // filtering happens here (skipping entries entirely, before they're ever serialized) rather
+    // than only in the downstream JS step because the full unfiltered corpus scan now produces a
+    // JSON text file (3.7GB on the current merged_alpha_corpus.spec, 1M+ qualifying positions)
+    // past Node's readFileSync string-length ceiling (~512MB) -- the JS step can no longer even
+    // load it to filter. Filtering in-process, before ever building the giant output string,
+    // sidesteps that entirely rather than working around Node's limit.
+    int maxLives = std::numeric_limits<int>::max();
+    std::vector<std::string> positional;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg.rfind("--max-lives=", 0) == 0) {
+            maxLives = std::atoi(arg.c_str() + 12);
+        } else {
+            positional.push_back(arg);
+        }
+    }
+    if (positional.size() < 2) {
+        std::cerr << "usage: collect_alpha_genetics [--max-lives=N] <out.json> <spec1.spec> [spec2.spec ...]\n";
         return 1;
     }
-    const std::string outPath = argv[1];
+    const std::string outPath = positional[0];
 
     std::map<std::string, Entry> byEnc;  // dedup across files, keyed by enc
 
-    for (int i = 2; i < argc; ++i) {
-        const std::string path = argv[i];
+    for (std::size_t i = 1; i < positional.size(); ++i) {
+        const std::string path = positional[i];
         SpecDB db;
         try {
             db = loadSpecGraphFromFile(path);
@@ -136,11 +169,7 @@ int main(int argc, char** argv) {
                 continue;
             }
             if (!hasSpecialPoint(p)) continue;  // shouldn't happen given isSingleAlpha; defensive
-            const Position d = p.decompressed();
 
-            Entry e;
-            e.enc = node.enc;
-            e.quick = quickDisp(p);
             // canonicalizeFull, not p itself: p deliberately stays DisaPoint-decompressed (see
             // canon.hpp -- canonicalize() compresses Hollow/Split/Triplet but not DisaPoints) so
             // the movetype classification below sees the base structural form it always has.
@@ -148,19 +177,38 @@ int main(int argc, char** argv) {
             // 2 (see tokens.hpp); computing it on the decompressed form would never see a DISA
             // token to apply that rule to. Isolated to just this field via a throwaway copy, so it
             // doesn't disturb the movetype pipeline's own canonical form.
-            e.lives = canonicalizeFull(p).leftSideLives2() / 2;
+            const int lives = canonicalizeFull(p).leftSideLives2() / 2;
+            // Checked before any of the expensive per-position work below (quickCanon, the R/D/
+            // L/T' + T-children enumeration): this position's own lives value alone decides
+            // whether IT is kept, independent of any other position -- its T-children (which have
+            // strictly lower lives, being one move away) still get their own independent turn as
+            // db.nodes() reaches them directly, so skipping this entry's own expensive work here
+            // loses nothing. Same overall result as the old two-step full-scan-then-JS-filter
+            // pipeline, just filtering before the expensive work instead of after it.
+            if (lives > maxLives) continue;
 
-            const auto genome = stalks_tools::classifyAlphaGenome(p, db);
-            if (!genome) continue;  // shouldn't happen; skip defensively
-            e.R = genome->R;
-            e.D = genome->D;
-            e.L = genome->L;
-            e.Tprime = genome->Tprime;
+            const Position d = p.decompressed();
+            Entry e;
+            e.enc = node.enc;
+            e.lives = lives;
+            e.quick = quickDisp(p);
 
-            // T-children (movetype 5, untouched-alpha children) are NOT part of the genome bucket
-            // key computed above, so they're gathered in their own pass -- see this file's
-            // top-of-comment doc for why T stays separate.
+            // R/D/L/T' (movetypes 1-4) AND T-children (movetype 5) in ONE pass over this
+            // position's children -- classifyAlphaGenome and tChildrenOf (alpha_genome.cpp) each
+            // do their own separate childrenAllWithMoveTag+specialPointMovetypes walk, memoized
+            // by exact position; that memoization only pays off for POSITIONS REVISITED from
+            // multiple places (the recursive tools like find_yellow_candidates), but every
+            // top-level position here is visited exactly once (db.nodes() is already deduped),
+            // so calling both would mean walking every child TWICE for zero cache benefit -- the
+            // actual dominant, unavoidable cost of this scan (confirmed: the quickDisp memo above
+            // alone only cut ~15% off total time despite a 90% hit rate, because the two full
+            // enumeration passes this replaces were never being deduped at all). Inlined here
+            // rather than added as a new shared alpha_genome.cpp function to keep this fix scoped
+            // to this tool -- other callers' existing cache semantics are untouched.
+            std::optional<int> R, D;
+            std::set<int> L, Tprime;
             std::set<std::pair<std::string, int>> seenTChild;
+            bool warnedMissing = false;
             for (const auto& [child, tag] : childrenAllWithMoveTag(p)) {
                 const EdgeTag et = edgeTagFromMoveTag(d, tag);
                 const auto sparse = specialPointMovetypes(p, et, child);
@@ -168,15 +216,51 @@ int main(int argc, char** argv) {
                 for (const auto& [tok, mt] : sparse) {
                     if (tok == ALPHA) { movetype = mt; break; }
                 }
-                if (movetype != 5) continue;
+                if (movetype <= 0) continue;  // alpha not classified on this edge -- shouldn't happen
 
                 SpecValue val;
-                if (!db.value(child, val)) continue;  // already warned by classifyAlphaGenome
-                const Position childCanon = canonicalize(child);
-                const QuickDisp qd = quickDisp(childCanon);
-                if (seenTChild.insert({qd.enc, qd.offset}).second)
-                    e.T.push_back({serialize(childCanon), qd, val.nimber});
+                if (!db.value(child, val)) {
+                    if (!warnedMissing) {
+                        std::cerr << "  warning: child of " << serialize(p)
+                                  << " not found in graph, skipping edge(s)\n";
+                        warnedMissing = true;
+                    }
+                    continue;
+                }
+
+                switch (movetype) {
+                    case 1:
+                        if (R.has_value() && *R != val.nimber)
+                            std::cerr << "  warning: multiple distinct R values for " << serialize(p) << "\n";
+                        R = val.nimber;
+                        break;
+                    case 2:
+                        if (D.has_value() && *D != val.nimber)
+                            std::cerr << "  warning: multiple distinct D values for " << serialize(p) << "\n";
+                        D = val.nimber;
+                        break;
+                    case 3:
+                        L.insert(val.nimber);
+                        break;
+                    case 4:
+                        Tprime.insert(val.nimber);
+                        break;
+                    case 5: {
+                        const Position childCanon = canonicalize(child);
+                        const QuickDisp qd = quickDisp(childCanon);
+                        if (seenTChild.insert({qd.enc, qd.offset}).second)
+                            e.T.push_back({serialize(childCanon), qd, val.nimber});
+                        break;
+                    }
+                    default:
+                        break;
+                }
             }
+            if (!R.has_value() || !D.has_value()) continue;  // shouldn't happen; skip defensively
+            e.R = *R;
+            e.D = *D;
+            e.L = L;
+            e.Tprime = Tprime;
 
             ++qualifying;
             byEnc.emplace(node.enc, std::move(e));

@@ -9,10 +9,23 @@
  * once per node instead of once for a single pane-wide searched genome (see that module's own doc
  * comments for the underlying rule).
  *
- * Not a discovery tool: every position encountered is resolved via the same two-tier lookup
- * Collect's own `lookupGenome` uses (the offline `collectAlphaGenomes.json` byEnc index first, a
- * live `computeAlphaGenome()` WASM call second) -- this only errors when a position genuinely
- * fails to analyze, not because it's missing from the small offline dataset.
+ * Not a discovery tool, but -- unlike Collect's own `lookupGenome` -- every genome here is
+ * resolved LIVE (`computeAlphaGenome()`, a WASM call), never from the offline
+ * `collectAlphaGenomes.json` snapshot: that file is built from a fixed, necessarily incomplete
+ * `.spec` corpus (`stalks/tools/collect_alpha_genetics.cpp` only counts a move's child as a
+ * T-child when that child ALSO happens to be a pre-solved node in the same corpus -- a real move
+ * to a position the corpus never independently reached is silently dropped, no error). A position
+ * that's IN the snapshot but has a silently truncated T-list is indistinguishable from a genuinely
+ * complete one to a caller that trusts it, which is exactly what broke `[0,1,5,2a/`'s bypass
+ * verification (root-caused 2026-09-17): its T-child `0,1,2,2a` displayed 11 T-children from the
+ * snapshot instead of the true 14, and the missing 14th (`0,1,2a`) was the one that would have
+ * proven the bypass back to S_1. Only this module's own in-session `genomeCache` (below) is
+ * reused across calls -- correct because it's populated exclusively from live results, never from
+ * the snapshot. A single T-Tree only ever touches the handful of positions actually in it, so
+ * resolving everything live costs about a second even cold (confirmed: warming ~1100 positions to
+ * depth 6 for this exact bug's repro), nowhere near enough to justify trusting unverifiable
+ * offline data instead. Collect's OWN pane still uses the snapshot for its general "search any
+ * position" flow -- that usage was never the correctness problem here and is unchanged.
  *
  * A node earns a place in the tree only once something in the tree actually requires it (the
  * root always does, by construction); a node reached ONLY via a bypass arrow never gets its own
@@ -51,12 +64,11 @@ interface GenomeDbJson {
   genomes: Record<string, unknown>;
   byEnc: Record<string, ByEncHit>;
 }
+// Only `lives` is read from this snapshot (see livesOf) -- that field is a pure function of a
+// position's own structure, with no dependency on the corpus's move-discovery completeness (unlike
+// T, R, D, L, Tprime -- see this file's own doc comment), so it carries none of the staleness risk
+// that made genome data unsafe to trust from here.
 const BY_ENC = (genomeDbJson as unknown as GenomeDbJson).byEnc;
-
-function byEncGenome(enc: string): AlphaGenome | undefined {
-  const hit = BY_ENC[enc];
-  return hit ? { R: hit.R, D: hit.D, L: hit.L, Tprime: hit.Tprime, T: hit.T } : undefined;
-}
 
 /** Per-token life value: generated from tokens.hpp's leftSideLives2() (halved -- see that
  * function's own doc comment: "used exclusively for left-side life counts", exactly this feature's
@@ -110,8 +122,6 @@ async function resolveGenomeAsync(
   embedded?: AlphaGenome | FourGeneGenome,
 ): Promise<AlphaGenome | FourGeneGenome | undefined> {
   if (embedded && isFullGenome(embedded)) return embedded;
-  const direct = byEncGenome(enc);
-  if (direct) return direct;
   const cached = genomeCache.get(enc);
   if (cached !== undefined) return cached ?? undefined;
   const fresh = await computeAlphaGenome(enc);
@@ -120,26 +130,33 @@ async function resolveGenomeAsync(
   return g;
 }
 
-/** How many T-generations deep a single `warmCache` call chases live fetches, relative to the
- * node it's warming (NOT relative to the whole tree -- each node in the worklist below gets its
- * own local warm-up, so an arbitrarily large/deep T-Tree is fine; only one node's own immediate
- * naming/classification needs are ever in flight at once). Matches the depth collect.ts's own
- * MAX_LOOKUP_FETCH_DEPTH uses for the same "don't let one lookup cascade into an unbounded chain
- * of fresh engine calls" reason. */
-const MAX_WARM_DEPTH = 4;
-
-/** Recursively resolves `enc`'s own genome AND warms the cache for its nested T-children up to
- * MAX_WARM_DEPTH, so that a subsequent SYNCHRONOUS `cacheResolveChild` call (see below) -- as used
- * by `resolvedFoldName`/`classifyTChildren`'s own recursive descent -- never has to fall back to
- * "still pending" for anything this call already touched. */
+/** Recursively resolves `enc`'s own genome AND warms the cache for every nested T-descendant, so
+ * that a subsequent SYNCHRONOUS `cacheResolveChild` call (see below) -- as used by
+ * `resolvedFoldName`/`classifyTChildren`'s own recursive descent -- never has to fall back to
+ * "still pending" for anything reachable from this call.
+ *
+ * No depth cap (a bounded MAX_WARM_DEPTH -- an EARLIER version of this function used one -- is
+ * unsound here, not just conservative): `genomeCache` dedups by encoding, so a shared descendant
+ * only ever gets warmed via whichever path reaches it FIRST, and a fixed cap counts hops from the
+ * OUTER root, not from wherever that position actually got first visited -- a position reached
+ * shallowly gets its own children explored several hops further than the identical position
+ * reached deeper down, purely depending on `Promise.all` scheduling order, not on the tree's real
+ * shape. Root-caused 2026-09-18: this silently starved the bypass check for `[0,1,5,2a/` (needed
+ * a grandchild several hops past where the old cap=4 had already run out for that specific
+ * traversal order) even though the exact same query resolved fine through a plain, uncapped
+ * depth-first warm in isolation -- i.e. the SAME data, just reachable at a depth the cap forbade
+ * exploring past. Termination doesn't need a cap: a real T-move strictly reduces a position's own
+ * complexity (fewer lives), so no position can ever be its own descendant, and this recursion
+ * bottoms out naturally once a branch reaches positions with no more T-children -- exactly the
+ * same recursion `resolvedFoldName`/`classifyTChildren` themselves do once the data exists, so
+ * this can never need to touch more than they would anyway. */
 async function warmCache(
   enc: string,
   embedded: AlphaGenome | FourGeneGenome | undefined,
-  depth: number,
 ): Promise<AlphaGenome | FourGeneGenome | undefined> {
   const g = await resolveGenomeAsync(enc, embedded);
-  if (g && isFullGenome(g) && depth < MAX_WARM_DEPTH) {
-    await Promise.all(g.T.map(t => warmCache(t.enc, t.genome, depth + 1)));
+  if (g && isFullGenome(g)) {
+    await Promise.all(g.T.map(t => warmCache(t.enc, t.genome)));
   }
   return g;
 }
@@ -149,8 +166,6 @@ async function warmCache(
  * own. */
 const cacheResolveChild: ResolveChild = (enc, embedded) => {
   if (embedded && isFullGenome(embedded)) return embedded;
-  const direct = byEncGenome(enc);
-  if (direct) return direct;
   return genomeCache.get(enc) ?? undefined;
 };
 
@@ -237,7 +252,7 @@ export async function buildTTree(rootEncRaw: string): Promise<TTreeResult> {
     const enc = (await canon(encRaw)) || encRaw;
     const existing = nodes.get(enc);
     if (existing) return existing;
-    const genome = await warmCache(enc, embedded, 0);
+    const genome = await warmCache(enc, embedded);
     if (!genome || !isFullGenome(genome)) return null;
     const lives = await livesOf(enc);
     const adjustedLives = await adjustedLivesOfEnc(enc);
