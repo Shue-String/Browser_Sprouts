@@ -27,10 +27,9 @@
 // finalRep/finalOffset for every element, edit the registry, rebuild, then feed the same TSV to
 // verify_registry_shrink to confirm every ORIGINAL element -- including ones whose own entry was
 // deleted -- still reduces to the identical (finalRep, finalOffset) it did before the edit.
-#include "canon.hpp"
 #include "collections.hpp"
-#include "encoding.hpp"
 #include "position.hpp"
+#include "registry_audit_common.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -39,15 +38,8 @@
 #include <vector>
 
 using namespace stalks;
-
-namespace {
-std::string tsvEscape(const std::string& s) {
-    std::string out;
-    out.reserve(s.size());
-    for (char c : s) out += (c == '\t' || c == '\n' || c == '\r') ? ' ' : c;
-    return out;
-}
-}  // namespace
+using stalks_tools::tryQuickCanonElement;
+using stalks_tools::tsvEscape;
 
 int main(int argc, char** argv) {
     const std::string outPath = argc >= 2 ? argv[1] : "registry_redundancy_audit.tsv";
@@ -69,12 +61,10 @@ int main(int argc, char** argv) {
             resetQuickReductionCounts();
             Position p;
             QuickCanonResult qc;
-            try {
-                p = canonicalize(parsePosition("[" + e + "]"));
-                qc = quickCanon(p);
-            } catch (const EncodingError& ex) {
+            std::string errMsg;
+            if (!tryQuickCanonElement(e, p, qc, errMsg)) {
                 ++errors;
-                std::cerr << "PARSE ERROR  " << r.name << "  " << e << "  (" << ex.what() << ")\n";
+                std::cerr << "PARSE ERROR  " << r.name << "  " << e << "  (" << errMsg << ")\n";
                 continue;
             }
             const auto& counts = quickReductionCounts();

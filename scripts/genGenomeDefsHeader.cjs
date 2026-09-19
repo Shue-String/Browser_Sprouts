@@ -41,9 +41,9 @@ function genomeDefLiteral(def) {
   return `{${def.R}, ${def.D}, ${L}, ${Tprime}, ${T}}`;
 }
 
-function generate() {
-  const data = JSON.parse(fs.readFileSync(JSON_PATH, 'utf8'));
-
+// Pure: JSON data in, generated file text out -- no disk I/O, so scripts/checkGeneratedHeaders.cjs
+// can reuse this exact logic to check OUT_PATH for staleness without re-deriving it.
+function generateContent(data) {
   const familyEntries = Object.entries(data.families)
     .map(([name, def]) => `    {${cppStr(name)}, ${genomeDefLiteral(def)}},`)
     .join('\n');
@@ -55,7 +55,7 @@ function generate() {
     })
     .join('\n');
 
-  const header = `// GENERATED FILE -- do not hand-edit.
+  return `// GENERATED FILE -- do not hand-edit.
 // Produced by scripts/genGenomeDefsHeader.cjs from src/data/genomeDefs.json (the single
 // hand-authored source of these shapes -- see src/model/collectAlpha.ts's GENOME_DEFS doc
 // comment). Re-run that script after editing the JSON, then rebuild the native tools that
@@ -108,9 +108,14 @@ ${legacyEntries}
 }  // namespace genome_defs_generated
 }  // namespace stalks_tools
 `;
+}
 
-  fs.writeFileSync(OUT_PATH, header, 'utf8');
+function generate() {
+  const data = JSON.parse(fs.readFileSync(JSON_PATH, 'utf8'));
+  fs.writeFileSync(OUT_PATH, generateContent(data), 'utf8');
   console.log(`Wrote ${path.relative(REPO_ROOT, OUT_PATH)} (${Object.keys(data.families).length} families, ${data.legacyFoldKeys.length} legacy keys)`);
 }
 
-generate();
+module.exports = { JSON_PATH, OUT_PATH, generateContent };
+
+if (require.main === module) generate();

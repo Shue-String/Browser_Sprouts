@@ -313,8 +313,7 @@ export async function buildTTree(rootEncRaw: string): Promise<TTreeResult> {
     const rows = classifyTChildren(node.genome.T, family, node.name, cacheResolveChild);
 
     for (const row of rows) {
-      const isRequired = !!family && typeof row.resolvedName === 'string' && family.tChildPlains.includes(row.resolvedName);
-      if (isRequired) {
+      if (row.satisfiesRequired) {
         const childNode = await ensureNode(row.t.enc, row.tGenome ?? row.t.genome);
         if (!childNode) continue;
         addEdge({ from: enc, to: childNode.id, kind: 'required' });
@@ -418,6 +417,32 @@ function computeLevels(graph: TTreeGraph): Map<string, number> {
  * children's current columns. This is a heuristic, not a globally-optimal crossing minimizer (the
  * user was explicit that's fine: "if there's no easy route, I'm fine if we skip this -- I can
  * hand-adjust the graph myself"). */
+/** Every edge, as an undirected adjacency. A bypass's `via` node needs BOTH legs of its implied
+ * path wired in (from->via AND via->to), not just from->to -- for layoutTTree's barycenter
+ * ordering below, a node's neighbors must account for BOTH directions (the required/bypass parent
+ * above it and any children below it), and missing the via->to leg once left a via node's column
+ * order decided purely by its distance to `from`, blind to where its own `to` (usually several
+ * rows further down, and often the only OTHER thing tying it anywhere) actually sits; with many
+ * via-siblings tied on that single shared `from` score, ties broke on arbitrary insertion order
+ * instead, which is what let a via node land at a far column while both its real neighbors sat
+ * close together elsewhere. Shared with ui/ttree.ts, which uses the identical adjacency for its
+ * own (separate) pixel-position averaging pass. */
+export function buildTTreeNeighbors(graph: TTreeGraph): Map<string, string[]> {
+  const neighbors = new Map<string, string[]>();
+  const add = (a: string, b: string) => {
+    (neighbors.get(a) ?? neighbors.set(a, []).get(a)!).push(b);
+    (neighbors.get(b) ?? neighbors.set(b, []).get(b)!).push(a);
+  };
+  for (const e of graph.edges) {
+    add(e.from, e.to);
+    if (e.via) {
+      add(e.from, e.via);
+      add(e.via, e.to);
+    }
+  }
+  return neighbors;
+}
+
 export function layoutTTree(graph: TTreeGraph): TTreeLayout {
   const level = computeLevels(graph);
   const levelSet = new Set<number>(level.values());
@@ -433,28 +458,7 @@ export function layoutTTree(graph: TTreeGraph): TTreeLayout {
   const col = new Map<string, number>();
   for (const row of rows) row.forEach((id, i) => col.set(id, i));
 
-  // Every edge, as an undirected adjacency (a node's barycenter should account for neighbors in
-  // BOTH directions -- the required/bypass parent above it and any children below it -- not just
-  // the direction the current sweep happens to be moving through). A bypass's `via` node needs BOTH
-  // legs of its implied path wired in (from->via AND via->to) -- missing the second leg left a via
-  // node's column order decided purely by its distance to `from`, blind to where its own `to`
-  // (usually several rows further down, and often the only OTHER thing tying it anywhere) actually
-  // sits; with many via-siblings tied on that single shared `from` score, ties broke on arbitrary
-  // insertion order instead, which is what let a via node land at a far column while both its real
-  // neighbors sat close together elsewhere. Matches ui/ttree.ts's own buildNeighbors, which already
-  // wires in all three legs for its (separate) pixel-position averaging pass.
-  const neighbors = new Map<string, string[]>();
-  const addEdge = (a: string, b: string) => {
-    (neighbors.get(a) ?? neighbors.set(a, []).get(a)!).push(b);
-    (neighbors.get(b) ?? neighbors.set(b, []).get(b)!).push(a);
-  };
-  for (const e of graph.edges) {
-    addEdge(e.from, e.to);
-    if (e.via) {
-      addEdge(e.from, e.via);
-      addEdge(e.via, e.to);
-    }
-  }
+  const neighbors = buildTTreeNeighbors(graph);
 
   const PASSES = 4;
   for (let pass = 0; pass < PASSES; pass++) {

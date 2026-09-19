@@ -935,7 +935,17 @@ export interface TChildClassification {
   resolvedName: string | null;
   matches: BypassMatch[] | null;
   pending: boolean;
+  satisfiesRequired: boolean;
   isExtra: boolean;
+}
+
+/** Whether `plain` (a T-child's own folded-plain identity, e.g. from resolvedFoldName/
+ * foldedPlainOfTChild) is one of `family`'s own required T-children. The single place this test is
+ * made, so every caller -- classifyTChildren's own `satisfiesRequired` below, and any other caller
+ * checking the same "required" rule against a plain it already has in hand -- stays in sync if the
+ * rule itself ever changes. */
+export function familyRequiresTChildPlain(family: NamedFamily | undefined, plain: string | null): boolean {
+  return typeof plain === 'string' && !!family && family.tChildPlains.includes(plain);
 }
 
 export function classifyTChildren(
@@ -950,10 +960,10 @@ export function classifyTChildren(
     const resolvedName = tGenome ? resolvedFoldName(tGenome, resolveChild, depth + 1) : null;
     const matches = targetName && tGenome ? findBypassMatches(tGenome, targetName, resolveChild, depth + 1) : null;
     const pending = tGenome === undefined || (targetName !== null && matches === null);
-    const satisfiesRequired = typeof resolvedName === 'string' && !!family && family.tChildPlains.includes(resolvedName);
+    const satisfiesRequired = familyRequiresTChildPlain(family, resolvedName);
     const hasBypass = !!matches && matches.length > 0;
     const isExtra = !!family && !pending && !satisfiesRequired && !hasBypass;
-    return { t, tGenome, resolvedName, matches, pending, isExtra };
+    return { t, tGenome, resolvedName, matches, pending, satisfiesRequired, isExtra };
   });
 }
 

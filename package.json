@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && vite build --config vite.voronoiTest.config.js",
-    "preview": "vite preview"
+    "build": "npm run check:generated && tsc && vite build && vite build --config vite.voronoiTest.config.js",
+    "preview": "vite preview",
+    "gen:headers": "node scripts/genCollectionElementsHeader.cjs && node scripts/genGenomeDefsHeader.cjs",
+    "check:generated": "node scripts/checkGeneratedHeaders.cjs"
   },
   "devDependencies": {
     "typescript": "^5.4.0",

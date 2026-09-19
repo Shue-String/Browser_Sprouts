@@ -102,16 +102,16 @@ target_link_libraries(check_ttree_extras PRIVATE stalks_core)
 add_executable(probe_dupe_nodes tools/probe_dupe_nodes.cpp)
 target_link_libraries(probe_dupe_nodes PRIVATE stalks_core)
 
-add_executable(audit_registry_redundancy tools/audit_registry_redundancy.cpp)
+add_executable(audit_registry_redundancy tools/audit_registry_redundancy.cpp tools/registry_audit_common.cpp)
 target_link_libraries(audit_registry_redundancy PRIVATE stalks_core)
 
 add_executable(check_candidates tools/check_candidates.cpp tools/alpha_genome.cpp)
 target_link_libraries(check_candidates PRIVATE stalks_core)
 
-add_executable(verify_registry_shrink tools/verify_registry_shrink.cpp)
+add_executable(verify_registry_shrink tools/verify_registry_shrink.cpp tools/registry_audit_common.cpp)
 target_link_libraries(verify_registry_shrink PRIVATE stalks_core)
 
-add_executable(audit_registry_necessity tools/audit_registry_necessity.cpp)
+add_executable(audit_registry_necessity tools/audit_registry_necessity.cpp tools/registry_audit_common.cpp)
 target_link_libraries(audit_registry_necessity PRIVATE stalks_core)
 
 # Every target defined above, in one place -- add a new add_executable()'s name here too, or it

@@ -19,10 +19,9 @@
 //
 // Usage: audit_registry_necessity <baseline.tsv> [out.tsv]
 // Default output path: "registry_necessity_audit.tsv". Prints a running summary to stderr.
-#include "canon.hpp"
 #include "collections.hpp"
-#include "encoding.hpp"
 #include "position.hpp"
+#include "registry_audit_common.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -30,26 +29,9 @@
 #include <vector>
 
 using namespace stalks;
-
-namespace {
-std::vector<std::string> splitTsv(const std::string& line) {
-    std::vector<std::string> out;
-    std::size_t start = 0;
-    for (std::size_t i = 0; i <= line.size(); ++i) {
-        if (i == line.size() || line[i] == '\t') {
-            out.push_back(line.substr(start, i - start));
-            start = i + 1;
-        }
-    }
-    return out;
-}
-std::string tsvEscape(const std::string& s) {
-    std::string out;
-    out.reserve(s.size());
-    for (char c : s) out += (c == '\t' || c == '\n' || c == '\r') ? ' ' : c;
-    return out;
-}
-}  // namespace
+using stalks_tools::splitTsv;
+using stalks_tools::tryQuickCanonElement;
+using stalks_tools::tsvEscape;
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -91,18 +73,15 @@ int main(int argc, char** argv) {
         setExcludedRegistryKey(ownKey);
         Position p;
         QuickCanonResult qc;
-        bool parseOk = true;
-        try {
-            p = canonicalize(parsePosition("[" + element + "]"));
-            qc = quickCanon(p);
-        } catch (const EncodingError& ex) {
-            parseOk = false;
-            ++errors;
-            std::cerr << "PARSE ERROR  " << family << "  " << element << "  (" << ex.what() << ")\n";
-        }
+        std::string errMsg;
+        const bool parseOk = tryQuickCanonElement(element, p, qc, errMsg);
         setExcludedRegistryKey("");  // always clear before the next iteration
 
-        if (!parseOk) continue;
+        if (!parseOk) {
+            ++errors;
+            std::cerr << "PARSE ERROR  " << family << "  " << element << "  (" << errMsg << ")\n";
+            continue;
+        }
 
         const std::string actualRep = serialize(qc.rep);
         const bool matches = (actualRep == expectedRep && qc.offset == expectedOffset);

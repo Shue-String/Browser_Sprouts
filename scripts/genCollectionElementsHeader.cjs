@@ -54,9 +54,9 @@ ${entries}
 }`;
 }
 
-function generate() {
-  const data = JSON.parse(fs.readFileSync(JSON_PATH, 'utf8'));
-
+// Pure: JSON data in, generated file text out -- no disk I/O, so scripts/checkGeneratedHeaders.cjs
+// can reuse this exact logic to check OUT_PATH for staleness without re-deriving it.
+function generateContent(data) {
   const sections = [
     ['single', 'singleCritFamilies'],
     ['double', 'doubleCritFamilies'],
@@ -65,7 +65,7 @@ function generate() {
 
   const body = sections.map(([key, fnName]) => familiesFunction(fnName, data[key])).join('\n\n');
 
-  const header = `// GENERATED FILE -- do not hand-edit.
+  return `// GENERATED FILE -- do not hand-edit.
 // Produced by scripts/genCollectionElementsHeader.cjs from src/data/collectionElements.json (the
 // single hand-authored source of every registered Advanced Collection element -- see that file's
 // "notes" fields for provenance commentary not reproduced here). Re-run that script after editing
@@ -74,13 +74,18 @@ function generate() {
 
 ${body}
 `;
+}
 
-  fs.writeFileSync(OUT_PATH, header, 'utf8');
+function generate() {
+  const data = JSON.parse(fs.readFileSync(JSON_PATH, 'utf8'));
+  fs.writeFileSync(OUT_PATH, generateContent(data), 'utf8');
   let groups = 0, elements = 0;
-  for (const [key] of sections)
+  for (const key of ['single', 'double', 'multi'])
     for (const fam of data[key])
       for (const g of fam.groups) { groups++; elements += g.elements.length; }
   console.log(`Wrote ${path.relative(REPO_ROOT, OUT_PATH)} (${data.single.length + data.double.length + data.multi.length} families, ${groups} groups, ${elements} elements)`);
 }
 
-generate();
+module.exports = { JSON_PATH, OUT_PATH, generateContent };
+
+if (require.main === module) generate();

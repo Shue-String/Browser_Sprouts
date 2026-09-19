@@ -1566,6 +1566,13 @@ std::string& excludedRegistryKeyMutable() {
     static std::string key;
     return key;
 }
+
+// True if `display` (a registry entry's own authored text) is the one entry currently excluded via
+// setExcludedRegistryKey -- used by every registry step (stepSingleCrit/stepDoubleCrit/
+// stepMultiRegion) to skip a match against that one entry during a leave-one-out necessity check.
+bool isExcludedRegistryEntry(const std::string& display) {
+    return !excludedRegistryKeyMutable().empty() && "[" + display + "/" == excludedRegistryKeyMutable();
+}
 }  // namespace
 
 void setExcludedRegistryKey(const std::string& key) {
@@ -1698,7 +1705,7 @@ bool stepSingleCrit(Position& cur, int& offset) {
             const auto it = registry().find(cand.leftKey);
             if (it == registry().end())
                 continue;
-            if (!excludedRegistryKeyMutable().empty() && "[" + it->second.display + "/" == excludedRegistryKeyMutable())
+            if (isExcludedRegistryEntry(it->second.display))
                 continue;
             cur.components[ci] = applyCritSwap(cur.components[ci], cand.leftRegion,
                                                 it->second.head.regions[0], {cand.slot});
@@ -1719,7 +1726,7 @@ bool stepDoubleCrit(Position& cur, int& offset) {
             const auto it = doubleCritRegistry().find(cand.leftKey);
             if (it == doubleCritRegistry().end())
                 continue;
-            if (!excludedRegistryKeyMutable().empty() && "[" + it->second.display + "/" == excludedRegistryKeyMutable())
+            if (isExcludedRegistryEntry(it->second.display))
                 continue;
             cur.components[ci] = applyCritSwap(cur.components[ci], cand.region,
                                                 it->second.head.regions[0],
@@ -1750,7 +1757,7 @@ bool stepMultiRegion(Position& cur, int& offset) {
                 const auto it = multiRegistry().find(cand.leftKey);
                 if (it == multiRegistry().end())
                     continue;
-                if (!excludedRegistryKeyMutable().empty() && "[" + it->second.display + "/" == excludedRegistryKeyMutable())
+                if (isExcludedRegistryEntry(it->second.display))
                     continue;
                 Position np = cur;
                 np.components[ci] =

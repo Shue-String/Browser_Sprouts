@@ -65,6 +65,7 @@ import {
   computeAlphaGenome,
   expandGenomeShorthand,
   familyForCore,
+  familyRequiresTChildPlain,
   fmtNimber,
   genomeKey,
   isFullGenome,
@@ -246,12 +247,18 @@ export function bracketDisplaySlash(enc: string): string {
   );
 }
 
-/** Quick-canon display label for a position reference -- see the module header. Membrane letters
- * are shifted per the paper's own left/right pairing convention (see shiftMembraneLetters) so
- * every on-screen label (history list, detail header, T rows, relevancy column, ...) matches the
- * LaTeX export instead of only the export showing the paper's convention. */
+/** An encoding formatted the paper's way: membrane letters shifted per its own left/right pairing
+ * convention (shiftMembraneLetters), alpha marked (markAlpha), then bracket/slash-wrapped
+ * (bracketDisplaySlash) -- the single place this 3-step chain is written, since every on-screen or
+ * exported label (history list, detail header, T rows, relevancy column, LaTeX export, ttree.ts's
+ * own node labels, ...) needs the identical formatting to stay consistent with each other. */
+export function paperDisplay(enc: string): string {
+  return bracketDisplaySlash(markAlpha(shiftMembraneLetters(enc)));
+}
+
+/** Quick-canon display label for a position reference -- see the module header. */
 function quickLabel(ref: PositionRef): string {
-  return bracketDisplaySlash(markAlpha(shiftMembraneLetters(ref.quickEnc))) + (ref.quickOffset ? ' ⊕ 1' : '');
+  return paperDisplay(ref.quickEnc) + (ref.quickOffset ? ' ⊕ 1' : '');
 }
 
 function fmtSet(vals: number[]): string {
@@ -527,7 +534,7 @@ async function computeRelevancy(rootGenome: AlphaGenome | FourGeneGenome, t: TCh
   if (!plain.startsWith('(')) return { kind: 'name', name: plain };
 
   const family = familyForCore(rootGenome);
-  if (family && family.tChildPlains.includes(plain)) return { kind: 'name', name: family.name };
+  if (familyRequiresTChildPlain(family, plain)) return { kind: 'name', name: family!.name };
 
   const tGenome = t.genome ?? byEncGenome(t.enc) ?? (await computeAlphaGenome(t.enc))?.genome;
   if (tGenome && isFullGenome(tGenome)) {
@@ -901,7 +908,7 @@ function renderDetail(): void {
   const labelEl = genomeEl.querySelector<HTMLElement>('.collect-detail-label-copyable');
   labelEl?.addEventListener('click', () => {
     const statusEl = document.getElementById('collect-export-status') as HTMLSpanElement | null;
-    const copyText = bracketDisplaySlash(markAlpha(shiftMembraneLetters(entry.position.enc)));
+    const copyText = paperDisplay(entry.position.enc);
     void navigator.clipboard.writeText(copyText).then(
       () => { if (statusEl) { statusEl.textContent = 'Copied position to clipboard.'; statusEl.classList.remove('error'); } },
       () => { if (statusEl) { statusEl.textContent = "Couldn't copy to clipboard."; statusEl.classList.add('error'); } },
@@ -937,7 +944,7 @@ function toLatexSymbols(text: string): string {
  * shifted per the paper's own left/right pairing convention (see shiftMembraneLetters), alpha
  * marked, bracket-wrapped, and with ⊕/α converted to real LaTeX macros. */
 function exportEncoding(enc: string): string {
-  return toLatexSymbols(bracketDisplaySlash(markAlpha(shiftMembraneLetters(enc))));
+  return toLatexSymbols(paperDisplay(enc));
 }
 
 /** A T-child/T-grandchild's own real (canon) structural encoding, formatted for export the same

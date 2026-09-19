@@ -18,10 +18,9 @@
 // family\toffset\telement\tfinalRep\tfinalOffset\tstatus\tfiredKeysInstead) -- only the element/
 // finalRep/finalOffset columns are used, the rest are carried through for context in mismatch
 // output. Exits nonzero if any mismatch is found.
-#include "canon.hpp"
 #include "collections.hpp"
-#include "encoding.hpp"
 #include "position.hpp"
+#include "registry_audit_common.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -30,20 +29,8 @@
 #include <vector>
 
 using namespace stalks;
-
-namespace {
-std::vector<std::string> splitTsv(const std::string& line) {
-    std::vector<std::string> out;
-    std::size_t start = 0;
-    for (std::size_t i = 0; i <= line.size(); ++i) {
-        if (i == line.size() || line[i] == '\t') {
-            out.push_back(line.substr(start, i - start));
-            start = i + 1;
-        }
-    }
-    return out;
-}
-}  // namespace
+using stalks_tools::splitTsv;
+using stalks_tools::tryQuickCanonElement;
 
 int main(int argc, char** argv) {
     if (argc != 2) {
@@ -75,12 +62,10 @@ int main(int argc, char** argv) {
         ++total;
         Position p;
         QuickCanonResult qc;
-        try {
-            p = canonicalize(parsePosition("[" + element + "]"));
-            qc = quickCanon(p);
-        } catch (const EncodingError& ex) {
+        std::string errMsg;
+        if (!tryQuickCanonElement(element, p, qc, errMsg)) {
             ++errors;
-            std::cerr << "PARSE ERROR  " << family << "  " << element << "  (" << ex.what() << ")\n";
+            std::cerr << "PARSE ERROR  " << family << "  " << element << "  (" << errMsg << ")\n";
             continue;
         }
         const std::string actualRep = serialize(qc.rep);

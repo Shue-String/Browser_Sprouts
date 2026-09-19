@@ -18,11 +18,15 @@ extract_shue_pairings.py
 stalks/yellow_candidates*
 stalks/ttree_extras*
 stalks/held_out_5families*
-stalks/registry_redundancy_audit*
-stalks/registry_baseline.tsv
-stalks/registry_after_shrink_audit.tsv
-stalks/registry_necessity_audit.tsv
-stalks/registry_round2_status.tsv
-stalks/registry_round2_necessity.tsv
-stalks/n6_sweep_result.txt
-stalks/n6_sweep_round2.txt
+
+# Ad-hoc audit/scan tool output (stalks/tools/*.cpp CLIs -- audit_registry_*, unregistered_left_sides,
+# etc. -- that dump straight into stalks/ with a name chosen per run). A blanket root-level pattern
+# instead of one filename added here per new tool run, since that one-off-filename list kept growing
+# stale (new tool output using a name that didn't match any existing entry) faster than anyone
+# remembered to extend it. Doesn't touch already-tracked files (.gitignore never hides or untracks
+# something already in the index) -- stalks/CMakeLists.txt and the committed
+# stalks/unregistered_*_life(s).txt baselines stay tracked regardless; the negation below is just
+# explicit documentation of that for CMakeLists.txt specifically.
+stalks/*.tsv
+stalks/*.txt
+!stalks/CMakeLists.txt

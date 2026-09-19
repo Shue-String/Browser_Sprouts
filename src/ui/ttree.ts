@@ -8,7 +8,6 @@
  * src/model/ttree.ts for the tree-building and layout logic this only renders.
  */
 
-import { shiftMembraneLetters } from '../model/collectAlpha';
 import { canonFullSync } from '../engine/stalks';
 import {
   type TTreeGraph,
@@ -16,10 +15,11 @@ import {
   type TTreeLayoutPos,
   type TTreeNode,
   buildTTree,
+  buildTTreeNeighbors,
   layoutTTree,
   toLatexMath,
 } from '../model/ttree';
-import { bracketDisplaySlash, markAlpha } from './collect';
+import { paperDisplay } from './collect';
 
 let wired = false;
 let lastGraph: TTreeGraph | null = null;
@@ -36,7 +36,7 @@ function nodeLabel(node: TTreeNode): string[] {
   // with an identical label (DisaPoint compression is lossy for true identity; node.id, the actual
   // dedup key, is unaffected). Falls back to the structural form if the engine isn't loaded yet.
   const displayEnc = canonFullSync(node.id) ?? node.id;
-  const enc = bracketDisplaySlash(markAlpha(shiftMembraneLetters(displayEnc)));
+  const enc = paperDisplay(displayEnc);
   return node.name && node.requiredByAny ? [enc, node.name] : [enc];
 }
 
@@ -69,25 +69,6 @@ function boxSize(node: TTreeNode): { w: number; h: number } {
 }
 
 interface Rect { x: number; y: number; w: number; h: number }
-
-/** Every edge as an undirected adjacency, for the priority-style horizontal alignment below --
- * plus the implied via-to link a bypass edge doesn't otherwise carry as a separate edge object
- * (from->to is added unconditionally, giving via and to both good neighbor context as well). */
-function buildNeighbors(graph: TTreeGraph): Map<string, string[]> {
-  const neighbors = new Map<string, string[]>();
-  const add = (a: string, b: string) => {
-    (neighbors.get(a) ?? neighbors.set(a, []).get(a)!).push(b);
-    (neighbors.get(b) ?? neighbors.set(b, []).get(b)!).push(a);
-  };
-  for (const e of graph.edges) {
-    add(e.from, e.to);
-    if (e.kind === 'bypass' && e.via) {
-      add(e.from, e.via);
-      add(e.via, e.to);
-    }
-  }
-  return neighbors;
-}
 
 /** Per-node pixel rects. Row and left-to-right ORDER within a row both come straight from
  * `layout` (its own row-monotonicity-corrected grid and barycenter column ranks); what this adds
@@ -147,7 +128,7 @@ function computeNodeRects(graph: TTreeGraph, layout: TTreeLayout): Map<string, R
     }
   }
 
-  const neighbors = buildNeighbors(graph);
+  const neighbors = buildTTreeNeighbors(graph);
   const halfGap = (a: string, b: string) =>
     (size.get(a) as { w: number }).w / 2 + GAP_X + (size.get(b) as { w: number }).w / 2;
   const average = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
