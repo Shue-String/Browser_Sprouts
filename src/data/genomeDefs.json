@@ -26,7 +26,13 @@
     "S_23": { "R": 0, "D": 3, "L": [2], "Tprime": [1], "T": [{ "name": "S_2" }, { "name": "S_3" }, { "name": "S_1", "shift": 1 }] },
     "S_24": { "R": 0, "D": 3, "L": [0, 1], "Tprime": [], "T": [{ "name": "S_2" }, { "name": "S_1", "shift": 1 }, { "name": "S_3" }] },
     "S_25": { "R": 0, "D": 3, "L": [0, 2], "Tprime": [], "T": [{ "name": "S_2" }, { "name": "S_3" }, { "name": "S_1", "shift": 1 }] },
-    "S_26": { "R": 0, "D": 3, "L": [0, 1, 2], "Tprime": [], "T": [{ "name": "S_2" }, { "name": "S_3" }, { "name": "S_1", "shift": 1 }] }
+    "S_26": { "R": 0, "D": 3, "L": [0, 1, 2], "Tprime": [], "T": [{ "name": "S_2" }, { "name": "S_3" }, { "name": "S_1", "shift": 1 }] },
+    "S_27": { "R": 3, "D": 1, "L": [0], "Tprime": [], "T": [{ "name": "S_1", "shift": 1 }, { "name": "S_2", "shift": 1 }, { "name": "S_3" }, { "name": "S_5" }] },
+    "S_28": { "R": 3, "D": 1, "L": [0], "Tprime": [], "T": [{ "name": "S_1", "shift": 1 }, { "name": "S_2", "shift": 1 }, { "name": "S_3" }, { "name": "S_4" }, { "name": "S_5" }] },
+    "S_29": { "R": 3, "D": 2, "L": [1, 3], "Tprime": [], "T": [{ "name": "S_1" }, { "name": "S_1", "shift": 1 }, { "name": "S_25" }, { "name": "S_8" }] },
+    "S_30": { "R": 3, "D": 1, "L": [0], "Tprime": [2], "T": [{ "name": "S_1", "shift": 1 }, { "name": "S_2", "shift": 1 }, { "name": "S_3" }, { "name": "S_5" }] },
+    "S_31": { "R": 1, "D": 2, "L": [1, 3], "Tprime": [], "T": [{ "name": "S_1" }, { "name": "S_12" }, { "name": "S_25" }, { "name": "S_2", "shift": 1 }] },
+    "S_32": { "R": 1, "D": 1, "L": [0], "Tprime": [0], "T": [{ "name": "S_1", "shift": 2 }, { "name": "S_23" }, { "name": "S_2", "shift": 1 }, { "name": "S_5" }] }
   },
   "legacyFoldKeys": [
     { "key": "(0,1,{0},{},[S_1⊕1])", "name": "S_1", "tChildPlains": ["S_1⊕1"] },

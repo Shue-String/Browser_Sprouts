@@ -681,13 +681,20 @@ function leftSideDisplay(enc: string): string {
  * single-port shapes use 'a' as a schematic port placeholder in the registry, not necessarily the
  * literal alpha token). Keyed by rosterFolderName() so collect.ts's Collections panel lists them
  * under the right folder (aliased onto an existing NAMED_FAMILIES folder for S_1/S_2, or its own
- * roster-only folder otherwise -- see COLLECTION_ROSTER_FOLDER_NAMES). */
+ * roster-only folder otherwise -- see COLLECTION_ROSTER_FOLDER_NAMES). Does NOT include the
+ * collection's own rep -- see KNOWN_COLLECTION_REP, rendered separately (pinned to the top of the
+ * panel's item list, in bold) since it's the shared reduction target, not an ordinary member. */
 export const KNOWN_COLLECTION_MEMBERS: Record<string, string[]> = Object.fromEntries(
-  COLLECTION_ROSTERS.map(r => {
-    const labels = r.elements.map(leftSideDisplay);
-    if (r.rep) labels.push(leftSideDisplay(r.rep));
-    return [rosterFolderName(r.name), labels];
-  }),
+  COLLECTION_ROSTERS.map(r => [rosterFolderName(r.name), r.elements.map(leftSideDisplay)]),
+);
+
+/** A collection's own shared reduction target (the roster's deliberately-OMITTED lowest-order/rep
+ * element -- see registry()'s and doubleCritRegistry()'s comments on why it's left out of the C++
+ * matching map itself: a region already in rep form must never re-match), keyed the same way as
+ * KNOWN_COLLECTION_MEMBERS. A collection sharing its pair-partner's rep instead of having its own
+ * (S_2 shares S_1's; S_4 shares S_3's) has no entry here. */
+export const KNOWN_COLLECTION_REP: Record<string, string> = Object.fromEntries(
+  COLLECTION_ROSTERS.filter(r => r.rep).map(r => [rosterFolderName(r.name), leftSideDisplay(r.rep)]),
 );
 
 /** Folder names the roster JSON contributes to the Collections panel, in the JSON's own (authored)

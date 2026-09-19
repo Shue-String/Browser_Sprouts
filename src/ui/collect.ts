@@ -55,6 +55,7 @@ import {
   COLLECTION_ROSTER_FOLDER_NAMES,
   GENOME_NAMES,
   KNOWN_COLLECTION_MEMBERS,
+  KNOWN_COLLECTION_REP,
   NAMED_FAMILIES,
   NAMED_FAMILY_GENOME_TEXT,
   NAMED_FAMILY_GROUPS,
@@ -1048,6 +1049,14 @@ function renderCollectionItems(name: string, members: Entry[]): { itemsHtml: str
   // the identical label twice; the real entry (clickable, backed by an actual genome) wins.
   const memberLabels = new Set(members.map(m => m.label));
   const staticLabels = (KNOWN_COLLECTION_MEMBERS[name] ?? []).filter(s => !memberLabels.has(s));
+  // The collection's own rep (shared reduction target) is pinned to the top of the list, in bold --
+  // it's not an ordinary member, so it's rendered separately from staticLabels/memberItems rather
+  // than sorted in among them, and shown even when nothing else classifies into this family yet.
+  const repLabel = KNOWN_COLLECTION_REP[name];
+  const repItem =
+    repLabel && !memberLabels.has(repLabel)
+      ? `<div class="collect-coll-member collect-coll-static collect-coll-rep" title="Known roster rep from stalks/src/collections.cpp -- the collection's own shared reduction target.">${escapeHtml(repLabel)}</div>`
+      : '';
   const memberItems = members.map(
     m => `<div class="collect-coll-member${m.label === activeLabel ? ' active' : ''}" data-label="${escapeHtml(m.label)}">${escapeHtml(m.label)}</div>`,
   );
@@ -1055,32 +1064,35 @@ function renderCollectionItems(name: string, members: Entry[]): { itemsHtml: str
     s =>
       `<div class="collect-coll-member collect-coll-static" title="Known roster member from stalks/src/collections.cpp -- a schematic left-side shape, not an analyzed Collect entry.">${escapeHtml(s)}</div>`,
   );
-  const allItems = [...memberItems, ...staticItems];
+  const allItems = [repItem, ...memberItems, ...staticItems].filter(Boolean);
   const itemsHtml = allItems.length === 0 ? '<div class="collect-coll-empty">(none)</div>' : allItems.join('');
-  return { itemsHtml, count: members.length + staticLabels.length };
+  return { itemsHtml, count: members.length + staticLabels.length + (repItem ? 1 : 0) };
 }
 
 /** The name/count/genome header row shared by both a top-level group's <summary> and a nested
  * offset block's own header -- only names in NAMED_GENOME_DEFS (S_1, S_1⊕1, S_2, S_3, S_5, S_6,
  * S_7, S_8, S_9, ...) actually stand for a real single-alpha genome tuple; Z_1/Z_2 (the roster's
- * own two-crit "S_3"/"S_4", roster-only) have no entry, so no genome text is shown for them. */
-function renderCollectionHeaderRow(name: string, count: number): string {
+ * own two-crit "S_3"/"S_4", roster-only) have no entry, so no genome text is shown for them.
+ * `countText` is omitted entirely for a nested offset block's own header -- all of a family's
+ * counts (base plus any non-empty "X⊕n" siblings) are shown ONCE, on the top-level summary only,
+ * joined by " ; " (see renderCollectionGroup). */
+function renderCollectionHeaderRow(name: string, countText?: string): string {
   const genomeText = NAMED_FAMILY_GENOME_TEXT[name];
   const genomeHtml = genomeText
     ? `<span class="collect-coll-header-genome" title="${escapeHtml(genomeText)}">${escapeHtml(genomeText)}</span>`
     : '';
-  return `<span class="collect-coll-header-row"><span class="collect-coll-name">${escapeHtml(name)} <span class="collect-coll-count">(${count})</span></span>${genomeHtml}</span>`;
+  const countHtml = countText !== undefined ? ` <span class="collect-coll-count">(${escapeHtml(countText)})</span>` : '';
+  return `<span class="collect-coll-header-row"><span class="collect-coll-name">${escapeHtml(name)}${countHtml}</span>${genomeHtml}</span>`;
 }
 
 /** One nested, non-collapsible sub-block for a base family's own "X⊕n" sibling -- rendered INSIDE
  * the base's own <details> (see renderCollectionGroup) so it's hidden while the base is collapsed
  * and only shown once the base is expanded, per the user's request: still its own fully labeled
  * name/genome/member list, just visually subordinate to the base rather than a separate, ~4x-as-
- * numerous set of top-level folders. */
-function renderOffsetBlock(name: string, members: Entry[]): string {
-  const { itemsHtml, count } = renderCollectionItems(name, members);
+ * numerous set of top-level folders. No count of its own -- see renderCollectionHeaderRow. */
+function renderOffsetBlock(name: string, itemsHtml: string): string {
   return `<div class="collect-coll-offset">
-    <div class="collect-coll-offset-header">${renderCollectionHeaderRow(name, count)}</div>
+    <div class="collect-coll-offset-header">${renderCollectionHeaderRow(name)}</div>
     ${itemsHtml}
   </div>`;
 }
@@ -1088,18 +1100,28 @@ function renderOffsetBlock(name: string, members: Entry[]): string {
 /** One `<details>` group for the Collections panel -- collapsed by default per the user's request,
  * with `offsets` (a base family's "X⊕n" siblings, if any -- see NAMED_FAMILY_GROUPS) nested inside
  * as renderOffsetBlock sub-sections, so expanding the base reveals its own siblings too without
- * those needing separate top-level folders. */
+ * those needing separate top-level folders. Per the user's request: an offset with NOTHING in it
+ * (no real members, no static roster elements -- a sibling shift that just doesn't happen to have
+ * been discovered/registered) is dropped entirely rather than shown as an empty nested block, so a
+ * family with only its base populated shows just the base, with no "(0)" offset clutter. Every
+ * surviving count (base, then each shown offset in order) is folded into ONE count string on the
+ * top-level summary, joined by " ; " -- a family with no extra offsets just shows its own bare
+ * number, same as before this existed. */
 function renderCollectionGroup(
   name: string,
   members: Entry[],
   offsets: string[],
   byFamily: Map<string, Entry[]>,
 ): string {
-  const { itemsHtml, count } = renderCollectionItems(name, members);
-  const offsetsHtml = offsets.map(offsetName => renderOffsetBlock(offsetName, byFamily.get(offsetName) ?? [])).join('');
+  const base = renderCollectionItems(name, members);
+  const shownOffsets = offsets
+    .map(offsetName => ({ name: offsetName, ...renderCollectionItems(offsetName, byFamily.get(offsetName) ?? []) }))
+    .filter(o => o.count > 0);
+  const countText = [base.count, ...shownOffsets.map(o => o.count)].join(' ; ');
+  const offsetsHtml = shownOffsets.map(o => renderOffsetBlock(o.name, o.itemsHtml)).join('');
   return `<details class="collect-coll-group">
-    <summary>${renderCollectionHeaderRow(name, count)}</summary>
-    ${itemsHtml}
+    <summary>${renderCollectionHeaderRow(name, countText)}</summary>
+    ${base.itemsHtml}
     ${offsetsHtml}
   </details>`;
 }
