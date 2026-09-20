@@ -763,6 +763,14 @@ export const KNOWN_COLLECTION_REP: Record<string, string> = Object.fromEntries(
   COLLECTION_ROSTERS.filter(r => r.rep).map(r => [rosterFolderName(r.name), leftSideDisplay(r.rep)]),
 );
 
+/** Same keys/values as KNOWN_COLLECTION_REP, but the roster's own RAW encoding (no Greek-letter/
+ * bracket display conversion) -- for a caller that needs to feed the rep back into the engine
+ * (computeAlphaGenome etc.), which expects collections.cpp's own literal 'a'/'b' port-letter
+ * convention, not leftSideDisplay's rendering of it. */
+export const KNOWN_COLLECTION_REP_RAW: Record<string, string> = Object.fromEntries(
+  COLLECTION_ROSTERS.filter(r => r.rep).map(r => [rosterFolderName(r.name), r.rep]),
+);
+
 /** Folder names the roster JSON contributes to the Collections panel, in the JSON's own (authored)
  * order -- exported so collect.ts can render one folder per currently-registered collection (S_1,
  * S_1⊕1, Z_1, Z_2, and whatever's added later) even when no NAMED_GENOME_DEFS entry exists for it
