@@ -1866,6 +1866,166 @@
           ]
         }
       ]
+    },
+    {
+      "rep": "2,2227a8",
+      "groups": [
+        {
+          "name": "S_100",
+          "offset": 0,
+          "elements": []
+        }
+      ]
+    },
+    {
+      "rep": "2,a,26",
+      "groups": [
+        {
+          "name": "S_113",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2,a,224",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4,25a",
+      "groups": [
+        {
+          "name": "S_191",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "4,233a",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "1,2,2,2,a",
+      "groups": [
+        {
+          "name": "S_203",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2,2,2,5,a",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3,2227a8",
+      "groups": [
+        {
+          "name": "S_208",
+          "offset": 0,
+          "elements": []
+        }
+      ]
+    },
+    {
+      "rep": "3,2222a",
+      "groups": [
+        {
+          "name": "S_211",
+          "offset": 0,
+          "elements": []
+        }
+      ]
+    },
+    {
+      "rep": "227382a",
+      "groups": [
+        {
+          "name": "S_212",
+          "offset": 0,
+          "elements": []
+        }
+      ]
+    },
+    {
+      "rep": "122a2",
+      "groups": [
+        {
+          "name": "S_213",
+          "offset": 0,
+          "elements": []
+        }
+      ]
+    },
+    {
+      "rep": "2252a",
+      "groups": [
+        {
+          "name": "S_214",
+          "offset": 0,
+          "elements": []
+        }
+      ]
+    },
+    {
+      "rep": "3,a,26",
+      "groups": [
+        {
+          "name": "S_215",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3,a,224",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "222738a",
+      "groups": [
+        {
+          "name": "S_216",
+          "offset": 0,
+          "elements": []
+        }
+      ]
+    },
+    {
+      "rep": "2225a",
+      "groups": [
+        {
+          "name": "S_217",
+          "offset": 0,
+          "elements": []
+        }
+      ]
+    },
+    {
+      "rep": "1222a",
+      "groups": [
+        {
+          "name": "S_218",
+          "offset": 0,
+          "elements": []
+        }
+      ]
+    },
+    {
+      "rep": "3a,2222",
+      "groups": [
+        {
+          "name": "S_219",
+          "offset": 0,
+          "elements": []
+        }
+      ]
     }
   ],
   "double": [
@@ -3172,10 +3332,6 @@
               "minSpots": null
             },
             {
-              "encoding": "2AB|2Ca|1,C,AB",
-              "minSpots": null
-            },
-            {
               "encoding": "2AB|2Ca|1ABC",
               "minSpots": null
             },
@@ -3220,28 +3376,12 @@
               "minSpots": null
             },
             {
-              "encoding": "2AB|2Ca|AB,22C",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|2Ca|AB,27C8",
-              "minSpots": null
-            },
-            {
               "encoding": "2AB|2Ca|ADE|7C8DBE",
               "minSpots": null
             },
             {
               "encoding": "2AB|2Ca|C,1AB",
               "minSpots": 6
-            },
-            {
-              "encoding": "2AB|2Ca|CDE|AB,DE",
-              "minSpots": 6
-            },
-            {
-              "encoding": "2AB|2Ca|CDE|ABDE",
-              "minSpots": null
             },
             {
               "encoding": "2AB|2a,222AB",
@@ -3560,10 +3700,6 @@
               "minSpots": null
             },
             {
-              "encoding": "2Aa|2,2BCD|A,BCD",
-              "minSpots": null
-            },
-            {
               "encoding": "2Aa|2,4,4,A",
               "minSpots": 6
             },
@@ -3585,10 +3721,6 @@
             },
             {
               "encoding": "2Aa|2,67A8",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|2,A,224",
               "minSpots": null
             },
             {
@@ -3693,14 +3825,6 @@
             },
             {
               "encoding": "2Aa|22777A888",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|22BCD|A,BCD",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|22BC|2,A,BC",
               "minSpots": null
             },
             {
@@ -3860,43 +3984,11 @@
               "minSpots": 6
             },
             {
-              "encoding": "2Aa|27BC8|2,A,BC",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|27BC8|2,ABC",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|27BC8|A,2BC",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|27BCD8|A,BCD",
-              "minSpots": 6
-            },
-            {
-              "encoding": "2Aa|2ABCD|2,BCD",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|2ABC|27BC8",
-              "minSpots": null
-            },
-            {
               "encoding": "2Aa|2ABC|4,BC",
               "minSpots": null
             },
             {
-              "encoding": "2Aa|2B2CD|A,BCD",
-              "minSpots": null
-            },
-            {
               "encoding": "2Aa|2B4C|7A8BC",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|2BAC|27BC8",
               "minSpots": null
             },
             {
@@ -3905,14 +3997,6 @@
             },
             {
               "encoding": "2Aa|2BCD|2ABCD",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|2BCD|2ABDC",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|2BCD|2ACBD",
               "minSpots": null
             },
             {
@@ -3985,10 +4069,6 @@
             },
             {
               "encoding": "2Aa|4BCD|ABCD",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|4BCD|ABDC",
               "minSpots": null
             },
             {
@@ -4108,10 +4188,6 @@
               "minSpots": 6
             },
             {
-              "encoding": "2Aa|A,BCD|2,2,BCD",
-              "minSpots": null
-            },
-            {
               "encoding": "2Aa|ABCDE|2,BCDE",
               "minSpots": null
             },
@@ -4124,15 +4200,7 @@
               "minSpots": null
             },
             {
-              "encoding": "2Aa|ABCD|2,2BDC",
-              "minSpots": null
-            },
-            {
               "encoding": "2Aa|ABCD|22BCD",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|ABCD|22BDC",
               "minSpots": null
             },
             {
@@ -4140,15 +4208,7 @@
               "minSpots": null
             },
             {
-              "encoding": "2Aa|ABCD|27BDC8",
-              "minSpots": null
-            },
-            {
               "encoding": "2Aa|ABCD|2B2CD",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|ABCD|2C2BD",
               "minSpots": null
             },
             {
@@ -4161,10 +4221,6 @@
             },
             {
               "encoding": "2Aa|ABC|2,27BC8",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Aa|ABC|2,2B2C",
               "minSpots": null
             },
             {
@@ -4222,10 +4278,6 @@
             {
               "encoding": "2Aa|ABC|BC,222",
               "minSpots": null
-            },
-            {
-              "encoding": "2Aa|ABC|BC,2728",
-              "minSpots": 6
             },
             {
               "encoding": "2Aa|ABC|BDEF|CDEF",
@@ -4352,10 +4404,6 @@
               "minSpots": null
             },
             {
-              "encoding": "2Aa|BCD|BCE|2,A,DE",
-              "minSpots": null
-            },
-            {
               "encoding": "2Aa|BCD|BCE|2,ADE",
               "minSpots": null
             },
@@ -4366,10 +4414,6 @@
             {
               "encoding": "2Aa|BCD|BCE|A,2DE",
               "minSpots": null
-            },
-            {
-              "encoding": "2Aa|BCD|BEF|A,CDEF",
-              "minSpots": 6
             },
             {
               "encoding": "2Aa|BCD|BEF|ACEFD",
@@ -4924,10 +4968,6 @@
               "minSpots": 6
             },
             {
-              "encoding": "4A|2Ba|2,7A8B",
-              "minSpots": null
-            },
-            {
               "encoding": "4A|2Ba|2,A,2B",
               "minSpots": null
             },
@@ -4964,10 +5004,6 @@
               "minSpots": null
             },
             {
-              "encoding": "4A|2Ba|A,27B8",
-              "minSpots": null
-            },
-            {
               "encoding": "4A|2Ba|A,4B",
               "minSpots": null
             },
@@ -4986,10 +5022,6 @@
             {
               "encoding": "4A|2Ba|B,22A",
               "minSpots": null
-            },
-            {
-              "encoding": "4A|2Ba|B,27A8",
-              "minSpots": 6
             },
             {
               "encoding": "4A|2Ba|B,4A",
@@ -6408,10 +6440,6 @@
               "minSpots": 6
             },
             {
-              "encoding": "AB|2Aa|4CD|BCD",
-              "minSpots": null
-            },
-            {
               "encoding": "AB|2Aa|67B8",
               "minSpots": 6
             },
@@ -6532,10 +6560,6 @@
               "minSpots": null
             },
             {
-              "encoding": "AB|2Ca|2,2A7C8B",
-              "minSpots": null
-            },
-            {
               "encoding": "AB|2Ca|2,4ACB",
               "minSpots": null
             },
@@ -6613,10 +6637,6 @@
             },
             {
               "encoding": "AB|2Ca|2A77C88B",
-              "minSpots": null
-            },
-            {
-              "encoding": "AB|2Ca|2ADE|BCDE",
               "minSpots": null
             },
             {
@@ -8762,14 +8782,6 @@
               "minSpots": null
             },
             {
-              "encoding": "1Aa|2BC|BC,22A",
-              "minSpots": null
-            },
-            {
-              "encoding": "1Aa|2BC|BC,27A8",
-              "minSpots": null
-            },
-            {
               "encoding": "1Aa|BCD|AEBF|CDEF",
               "minSpots": null
             },
@@ -9070,10 +9082,6 @@
               "minSpots": null
             },
             {
-              "encoding": "22AB|C,1a|2,C,AB",
-              "minSpots": null
-            },
-            {
               "encoding": "22AB|C,1a|C,2AB",
               "minSpots": null
             },
@@ -9230,10 +9238,6 @@
               "minSpots": null
             },
             {
-              "encoding": "27AB8|2,ABC|C,1a",
-              "minSpots": null
-            },
-            {
               "encoding": "27AB8|2,ACD|2a,BCD",
               "minSpots": null
             },
@@ -9342,14 +9346,6 @@
               "minSpots": null
             },
             {
-              "encoding": "27AB8|C,1a|2,C,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "27AB8|C,1a|C,2AB",
-              "minSpots": null
-            },
-            {
               "encoding": "27ABC8|2a,2A2BC",
               "minSpots": null
             },
@@ -9359,10 +9355,6 @@
             },
             {
               "encoding": "27ABC8|2a,DE|DE,ABC",
-              "minSpots": null
-            },
-            {
-              "encoding": "27ABC8|D,ABC|2D,2a",
               "minSpots": null
             },
             {
@@ -9515,14 +9507,6 @@
             },
             {
               "encoding": "2ABC|2,1B|2a,AC",
-              "minSpots": null
-            },
-            {
-              "encoding": "2ABC|27AB8|C,1a",
-              "minSpots": null
-            },
-            {
-              "encoding": "2ABC|27AC8|B,1a",
               "minSpots": null
             },
             {
@@ -9866,10 +9850,6 @@
               "minSpots": null
             },
             {
-              "encoding": "2AB|2C,2a|AB,27C8",
-              "minSpots": null
-            },
-            {
               "encoding": "2AB|2CD|AB,CDa",
               "minSpots": 6
             },
@@ -9954,19 +9934,7 @@
               "minSpots": null
             },
             {
-              "encoding": "2AB|77C88a|1,C,AB",
-              "minSpots": null
-            },
-            {
               "encoding": "2AB|77C88a|5,C,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|77C88a|AB,22C",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|77C88a|AB,27C8",
               "minSpots": null
             },
             {
@@ -10014,23 +9982,7 @@
               "minSpots": null
             },
             {
-              "encoding": "2AB|C,1a|1,C,AB",
-              "minSpots": null
-            },
-            {
               "encoding": "2AB|C,1a|5,C,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|C,1a|AB,22C",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|C,1a|AB,27C8",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|CDE|2C,2a|AB,DE",
               "minSpots": null
             },
             {
@@ -11606,10 +11558,6 @@
               "minSpots": null
             },
             {
-              "encoding": "4ABC|ABDC|2D,2a",
-              "minSpots": null
-            },
-            {
               "encoding": "4ABC|D,ABC|2D,2a",
               "minSpots": null
             },
@@ -11782,10 +11730,6 @@
               "minSpots": null
             },
             {
-              "encoding": "4A|1Ba|A,27B8",
-              "minSpots": null
-            },
-            {
               "encoding": "4A|1a,BC|2,A,BC",
               "minSpots": null
             },
@@ -11823,14 +11767,6 @@
             },
             {
               "encoding": "4A|2,3,A,a",
-              "minSpots": null
-            },
-            {
-              "encoding": "4A|2,7A8B|2B,2a",
-              "minSpots": null
-            },
-            {
-              "encoding": "4A|2,7A8B|B,1a",
               "minSpots": null
             },
             {
@@ -12254,10 +12190,6 @@
               "minSpots": 5
             },
             {
-              "encoding": "4A|77B88a|2,7A8B",
-              "minSpots": null
-            },
-            {
               "encoding": "4A|77B88a|2,A,2B",
               "minSpots": null
             },
@@ -12266,15 +12198,7 @@
               "minSpots": null
             },
             {
-              "encoding": "4A|77B88a|A,27B8",
-              "minSpots": null
-            },
-            {
               "encoding": "4A|77B88a|B,22A",
-              "minSpots": null
-            },
-            {
-              "encoding": "4A|77B88a|B,27A8",
               "minSpots": null
             },
             {
@@ -12368,10 +12292,6 @@
             {
               "encoding": "4A|A,1a",
               "minSpots": 5
-            },
-            {
-              "encoding": "4A|A,27B8|2B,2a",
-              "minSpots": null
             },
             {
               "encoding": "4A|A,2BC|1a,BC",
@@ -12474,19 +12394,7 @@
               "minSpots": null
             },
             {
-              "encoding": "4A|B,1a|A,27B8",
-              "minSpots": null
-            },
-            {
               "encoding": "4A|B,1a|B,22A",
-              "minSpots": null
-            },
-            {
-              "encoding": "4A|B,1a|B,27A8",
-              "minSpots": null
-            },
-            {
-              "encoding": "4A|B,27A8|2B,2a",
               "minSpots": null
             },
             {
@@ -13114,10 +13022,6 @@
               "minSpots": null
             },
             {
-              "encoding": "ABCD|27ABD8|2C,2a",
-              "minSpots": null
-            },
-            {
               "encoding": "ABCD|27ABE8|2a,CDE",
               "minSpots": null
             },
@@ -13298,10 +13202,6 @@
               "minSpots": null
             },
             {
-              "encoding": "ABC|2A,2a|BC,2728",
-              "minSpots": null
-            },
-            {
               "encoding": "ABC|2A7D8BC|2D,2a",
               "minSpots": null
             },
@@ -13450,10 +13350,6 @@
               "minSpots": null
             },
             {
-              "encoding": "ABC|ABD|E,1a|2,E,CD",
-              "minSpots": null
-            },
-            {
               "encoding": "ABC|ABD|E,1a|E,2CD",
               "minSpots": null
             },
@@ -13488,10 +13384,6 @@
             {
               "encoding": "ABC|ADE|BDF|a,CEF",
               "minSpots": 6
-            },
-            {
-              "encoding": "ABC|ADE|F,BCDE|2F,2a",
-              "minSpots": null
             },
             {
               "encoding": "ABC|DEF|2,ABDE|2a,CF",
@@ -13755,10 +13647,6 @@
             },
             {
               "encoding": "AB|2Aa|1,B,2728",
-              "minSpots": null
-            },
-            {
-              "encoding": "AB|2Aa|1,CDE|B,CDE",
               "minSpots": null
             },
             {
@@ -14098,10 +13986,6 @@
               "minSpots": null
             },
             {
-              "encoding": "AB|ACD|4,CD|2B,2a",
-              "minSpots": null
-            },
-            {
               "encoding": "AB|ACD|7CE8a|1,BDE",
               "minSpots": null
             },
@@ -14360,18 +14244,6 @@
           "offset": 3,
           "elements": [
             {
-              "encoding": "2CD|2Ca|2,2,2D",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Ca|2C,DE|2,2,DE",
-              "minSpots": null
-            },
-            {
-              "encoding": "2Ca|2D2E|2C,DE",
-              "minSpots": null
-            },
-            {
               "encoding": "2Ca|2D2E|7C8DE",
               "minSpots": null
             },
@@ -14391,22 +14263,6 @@
             },
             {
               "encoding": "24A|2AB|2Ba",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|2Aa|2,23B",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|2Aa|2728B",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|2Aa|47B8",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|2Aa|B,24",
               "minSpots": null
             },
             {
@@ -14510,10 +14366,6 @@
               "minSpots": null
             },
             {
-              "encoding": "4A|AB|2BC|2Ca",
-              "minSpots": null
-            },
-            {
               "encoding": "6A|2AB|2Ba",
               "minSpots": null
             },
@@ -14531,10 +14383,6 @@
             },
             {
               "encoding": "AB|2AC|2Da|7D8BC",
-              "minSpots": null
-            },
-            {
-              "encoding": "AB|2CD|2Ca|2ADB",
               "minSpots": null
             },
             {
@@ -14574,15 +14422,7 @@
               "minSpots": null
             },
             {
-              "encoding": "AB|AC|BD|2Ea|7E8CD",
-              "minSpots": null
-            },
-            {
               "encoding": "AB|CD|2AC|2Ea|BDE",
-              "minSpots": null
-            },
-            {
-              "encoding": "AB|CD|2Ea|ACF|BDEF",
               "minSpots": null
             }
           ]
@@ -15630,6 +15470,2340 @@
           "elements": [
             {
               "encoding": "7AB8a|2,2,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3ABC|2ABaC",
+      "groups": [
+        {
+          "name": "S_93",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3ABC|2ACaB",
+              "minSpots": null
+            },
+            {
+              "encoding": "3ABC|2BAaC",
+              "minSpots": null
+            },
+            {
+              "encoding": "2ABaC|3,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3ABC|3ABCa",
+      "groups": [
+        {
+          "name": "S_94",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3ABC|3ACBa",
+              "minSpots": null
+            },
+            {
+              "encoding": "3ABC|3BACa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3ABC|2,ABCa",
+      "groups": [
+        {
+          "name": "S_95",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3ABC|2,ACBa",
+              "minSpots": null
+            },
+            {
+              "encoding": "2,ABCa|3,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3ABC|2ABCa",
+      "groups": [
+        {
+          "name": "S_96",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3ABC|2ACBa",
+              "minSpots": null
+            },
+            {
+              "encoding": "3ABC|2BACa",
+              "minSpots": null
+            },
+            {
+              "encoding": "2ABCa|3,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3ABC|a,2ABC",
+      "groups": [
+        {
+          "name": "S_97",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3ABC|a,2ACB",
+              "minSpots": null
+            },
+            {
+              "encoding": "3,ABC|a,2ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3ABC|2,a,ABC",
+      "groups": [
+        {
+          "name": "S_98",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3,ABC|2,a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3ABC|2a,ABC",
+      "groups": [
+        {
+          "name": "S_99",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3,ABC|2a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2,2227a8",
+      "groups": [
+        {
+          "name": "S_100",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|2,2A7a8B",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4ABC|ABCa",
+      "groups": [
+        {
+          "name": "S_101",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "4ABC|ACBa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3A|ABCD|BCDa",
+      "groups": [
+        {
+          "name": "S_102",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3A|ABCD|BDCa",
+              "minSpots": null
+            },
+            {
+              "encoding": "3A|BCDa|A,BCD",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4A|A,22a",
+      "groups": [
+        {
+          "name": "S_103",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2AB|AB,22a",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2ABC|2ABCa",
+      "groups": [
+        {
+          "name": "S_104",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2ABC|2ACBa",
+              "minSpots": null
+            },
+            {
+              "encoding": "2ABC|2BACa",
+              "minSpots": null
+            },
+            {
+              "encoding": "2ABCa|2,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4A|A,23a",
+      "groups": [
+        {
+          "name": "S_105",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "4A|A,27a8",
+              "minSpots": null
+            },
+            {
+              "encoding": "2AB|AB,23a",
+              "minSpots": null
+            },
+            {
+              "encoding": "2AB|AB,27a8",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2ABa|4,AB",
+      "groups": [
+        {
+          "name": "S_106",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3A|ABC|2BCa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2A3B|2ABa",
+      "groups": [
+        {
+          "name": "S_107",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2ABa|3,2AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2ABa|2,3,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "22AB|2ABa",
+      "groups": [
+        {
+          "name": "S_108",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "23AB|2ABa",
+              "minSpots": null
+            },
+            {
+              "encoding": "23AB|2BAa",
+              "minSpots": null
+            },
+            {
+              "encoding": "2ABa|27AB8",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4A|2,A,2a",
+      "groups": [
+        {
+          "name": "S_109",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "4A|2,A,3a",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABa|AB,223",
+      "groups": [
+        {
+          "name": "S_110",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABa|AB,2728",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3AB|CDa|ABCD",
+      "groups": [
+        {
+          "name": "S_111",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3AB|CDa|AB,CD",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|3A3BC",
+      "groups": [
+        {
+          "name": "S_112",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABCa|3B3AC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|22ABC",
+      "groups": [
+        {
+          "name": "S_114",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABCa|22ACB",
+              "minSpots": null
+            },
+            {
+              "encoding": "22ABC|a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|23ABC",
+      "groups": [
+        {
+          "name": "S_115",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABCa|23ACB",
+              "minSpots": null
+            },
+            {
+              "encoding": "ABCa|23BAC",
+              "minSpots": null
+            },
+            {
+              "encoding": "23ABC|a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|27ABC8",
+      "groups": [
+        {
+          "name": "S_116",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABCa|27ACB8",
+              "minSpots": null
+            },
+            {
+              "encoding": "27ABC8|a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4AB|3a,AB",
+      "groups": [
+        {
+          "name": "S_117",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "4,AB|3a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "3AB|3Ca|ABC",
+              "minSpots": null
+            },
+            {
+              "encoding": "3A|ABC|3a,BC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3A|ABCD|a,BCD",
+      "groups": [
+        {
+          "name": "S_118",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3A|A,BCD|a,BCD",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4AB|a,3AB",
+      "groups": [
+        {
+          "name": "S_119",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "4,AB|a,3AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4AB|3ABa",
+      "groups": [
+        {
+          "name": "S_120",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3ABa|4,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4AB|3,ABa",
+      "groups": [
+        {
+          "name": "S_121",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3,ABa|4,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "4AB|3,a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "4,AB|3,a,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4A|ABC|BCa",
+      "groups": [
+        {
+          "name": "S_122",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "Aa|4BC|ABC",
+              "minSpots": null
+            },
+            {
+              "encoding": "2AB|CDa|ABCD",
+              "minSpots": null
+            },
+            {
+              "encoding": "2AB|CDa|AB,CD",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2AB|2A3Ba",
+      "groups": [
+        {
+          "name": "S_123",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2AB|3,2ABa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "AB|2ACD|BCDa",
+      "groups": [
+        {
+          "name": "S_124",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|2ACD|BDCa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4A|2,3Aa",
+      "groups": [
+        {
+          "name": "S_125",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "4A|2,7A8a",
+              "minSpots": null
+            },
+            {
+              "encoding": "AB|AC|2BD|2,CDa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2,ABa|4,AB",
+      "groups": [
+        {
+          "name": "S_126",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3A|ABC|2,BCa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2A3B|2,ABa",
+      "groups": [
+        {
+          "name": "S_127",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2,ABa|3,2AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2,ABa|2,3,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "22AB|2,ABa",
+      "groups": [
+        {
+          "name": "S_128",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "23AB|2,ABa",
+              "minSpots": null
+            },
+            {
+              "encoding": "27AB8|2,ABa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "AB|2AC|3BaC",
+      "groups": [
+        {
+          "name": "S_129",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|2AC|3CBa",
+              "minSpots": null
+            },
+            {
+              "encoding": "AB|2AC|3,BCa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "AB|5AC|BCa",
+      "groups": [
+        {
+          "name": "S_130",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|ACa|37BC8",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4A|4,Aa",
+      "groups": [
+        {
+          "name": "S_131",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3A|4B|ABa",
+              "minSpots": null
+            },
+            {
+              "encoding": "3A|2BC|BC,Aa",
+              "minSpots": null
+            },
+            {
+              "encoding": "AB|AC|DE|2BD|CEa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|2,3ABC",
+      "groups": [
+        {
+          "name": "S_132",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABCa|2,3ACB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2,3ABC|a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4,AB|a,2AB",
+      "groups": [
+        {
+          "name": "S_133",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3A|ABC|a,2BC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2AB|3A7a8B",
+      "groups": [
+        {
+          "name": "S_134",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2AB|3,7AB8a",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2ABC|a,3ABC",
+      "groups": [
+        {
+          "name": "S_135",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2ABC|a,3ACB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2AB|a,5AB",
+      "groups": [
+        {
+          "name": "S_136",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2AB|a,37AB8",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2ABC|3,a,ABC",
+      "groups": [
+        {
+          "name": "S_137",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2,ABC|3,a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3AB|ACD|BCDa",
+      "groups": [
+        {
+          "name": "S_138",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3AB|ACD|a,BCD",
+              "minSpots": null
+            },
+            {
+              "encoding": "ABC|ADa|3,BCD",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2A3B|a,2AB",
+      "groups": [
+        {
+          "name": "S_139",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3,2AB|a,2AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "a,2AB|2,3,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4A|a,23A",
+      "groups": [
+        {
+          "name": "S_140",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "4A|a,27A8",
+              "minSpots": null
+            },
+            {
+              "encoding": "AB|AC|2BD|a,2CD",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "22AB|a,2AB",
+      "groups": [
+        {
+          "name": "S_141",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "23AB|a,2AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "27AB8|a,2AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "AB|ACDE|a,BCDE",
+      "groups": [
+        {
+          "name": "S_142",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABC|ADE|a,BCDE",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2AB|ACD|BCDa",
+      "groups": [
+        {
+          "name": "S_143",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2AB|ACD|a,BCD",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3ABC|3ABaC",
+      "groups": [
+        {
+          "name": "S_144",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3ABC|3ACaB",
+              "minSpots": null
+            },
+            {
+              "encoding": "3ABC|3BAaC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2AB|2,3AaB",
+      "groups": [
+        {
+          "name": "S_145",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2AB|2,3ABa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "AB|ACD|2,BCDa",
+      "groups": [
+        {
+          "name": "S_146",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|ACD|2,CBDa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "AB|AC|1BaC",
+      "groups": [
+        {
+          "name": "S_147",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|AC|37BaC8",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2ABC|2ABaC",
+      "groups": [
+        {
+          "name": "S_148",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2ABC|2ACaB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2ABC|2BAaC",
+              "minSpots": null
+            },
+            {
+              "encoding": "2ABaC|2,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2AB|23aAB",
+      "groups": [
+        {
+          "name": "S_149",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2AB|23AaB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2AB|2A3aB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2AB|3,2AaB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|2A2BC",
+      "groups": [
+        {
+          "name": "S_150",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABCa|2B2AC",
+              "minSpots": null
+            },
+            {
+              "encoding": "2A2BC|a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2A2B|3AaB",
+      "groups": [
+        {
+          "name": "S_151",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2A2B|3ABa",
+              "minSpots": null
+            },
+            {
+              "encoding": "2A2B|3,ABa",
+              "minSpots": null
+            },
+            {
+              "encoding": "2A2B|a,3AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2A2B|3,a,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2ABC|a,2ABC",
+      "groups": [
+        {
+          "name": "S_152",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2ABC|a,2ACB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2,ABC|a,2ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2ABC|2,ABCa",
+      "groups": [
+        {
+          "name": "S_153",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2ABC|2,ACBa",
+              "minSpots": null
+            },
+            {
+              "encoding": "2,ABC|2,ABCa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2AaB|4,AB",
+      "groups": [
+        {
+          "name": "S_154",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3A|ABC|2BaC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2AB|5ABa",
+      "groups": [
+        {
+          "name": "S_155",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|ACD|3,BCDa",
+              "minSpots": null
+            },
+            {
+              "encoding": "AB|ACD|3,CBDa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2AB|2,a,3AB",
+      "groups": [
+        {
+          "name": "S_156",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2ABC|2,a,ABC",
+              "minSpots": null
+            },
+            {
+              "encoding": "2,ABC|2,a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|2A3BC",
+      "groups": [
+        {
+          "name": "S_157",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABCa|2A3CB",
+              "minSpots": null
+            },
+            {
+              "encoding": "ABCa|2B3AC",
+              "minSpots": null
+            },
+            {
+              "encoding": "2A3BC|a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4,AB|2,a,AB",
+      "groups": [
+        {
+          "name": "S_158",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3A|ABC|2,a,BC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2ABC|3ABaC",
+      "groups": [
+        {
+          "name": "S_159",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2ABC|3ACaB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2ABC|3BAaC",
+              "minSpots": null
+            },
+            {
+              "encoding": "2ABC|3,ABCa",
+              "minSpots": null
+            },
+            {
+              "encoding": "2ABC|3,ACBa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2AaB|2,3AB",
+      "groups": [
+        {
+          "name": "S_160",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2,3AB|2,a,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2A3B|2AaB",
+      "groups": [
+        {
+          "name": "S_161",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2AaB|3,2AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2A3B|2,a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2AaB|2,3,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "3,2AB|2,a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2,3,AB|2,a,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2AB|5AaB",
+      "groups": [
+        {
+          "name": "S_162",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2AB|37AaB8",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "4A|a,22A",
+      "groups": [
+        {
+          "name": "S_163",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2AB|1,a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2AB|a,23,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "22AB|2AaB",
+      "groups": [
+        {
+          "name": "S_164",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "23AB|2AaB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2AaB|27AB8",
+              "minSpots": null
+            },
+            {
+              "encoding": "22AB|2,a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "23AB|2,a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "27AB8|2,a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "AB|3AC|2,a,BC",
+              "minSpots": null
+            },
+            {
+              "encoding": "ABC|ABD|2,a,CD",
+              "minSpots": null
+            },
+            {
+              "encoding": "AB|AC|BD|CE|2,a,DE",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3ABaC|2,ABC",
+      "groups": [
+        {
+          "name": "S_165",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2,ABC|3,ABCa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|2,2,ABC",
+      "groups": [
+        {
+          "name": "S_166",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "a,ABC|2,2,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABa|22A2B",
+      "groups": [
+        {
+          "name": "S_167",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABa|2,2A2B",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|2,2ABC",
+      "groups": [
+        {
+          "name": "S_168",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABCa|2,2ACB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2,2ABC|a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3AB|AB,23a",
+      "groups": [
+        {
+          "name": "S_169",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3AB|AB,27a8",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3AB|1a,AB",
+      "groups": [
+        {
+          "name": "S_170",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3AB|5a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "3AB|AB,37a8",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABa|3,5AB",
+      "groups": [
+        {
+          "name": "S_171",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABa|3,37AB8",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "Aa|1,1A",
+      "groups": [
+        {
+          "name": "S_172",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "Aa|1A,23",
+              "minSpots": null
+            },
+            {
+              "encoding": "Aa|2BC|1,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABa|35AB",
+      "groups": [
+        {
+          "name": "S_173",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABa|3738AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABa|12,AB",
+      "groups": [
+        {
+          "name": "S_174",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABa|25,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "ABa|AB,2738",
+              "minSpots": null
+            },
+            {
+              "encoding": "2AB|CDa|CD,2AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|3,3ABC",
+      "groups": [
+        {
+          "name": "S_175",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABCa|3,3ACB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|33ABC",
+      "groups": [
+        {
+          "name": "S_176",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABCa|33ACB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "5ABC|ABCa",
+      "groups": [
+        {
+          "name": "S_177",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "5ABC|ACBa",
+              "minSpots": null
+            },
+            {
+              "encoding": "5ABC|a,ABC",
+              "minSpots": null
+            },
+            {
+              "encoding": "ABCa|37ABC8",
+              "minSpots": null
+            },
+            {
+              "encoding": "ABCa|37ACB8",
+              "minSpots": null
+            },
+            {
+              "encoding": "37ABC8|a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "1ABC|ABCa",
+      "groups": [
+        {
+          "name": "S_178",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "1ABC|ACBa",
+              "minSpots": null
+            },
+            {
+              "encoding": "1ABC|a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3,2AB|3a,AB",
+      "groups": [
+        {
+          "name": "S_179",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3a,AB|2,3,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3AaB|27AB8",
+      "groups": [
+        {
+          "name": "S_180",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3ABa|27AB8",
+              "minSpots": null
+            },
+            {
+              "encoding": "27AB8|3,ABa",
+              "minSpots": null
+            },
+            {
+              "encoding": "27AB8|a,3AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "27AB8|3,a,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "22AB|3a,AB",
+      "groups": [
+        {
+          "name": "S_181",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "23AB|3a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "27AB8|3a,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "22AB|3AaB",
+      "groups": [
+        {
+          "name": "S_182",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "22AB|3ABa",
+              "minSpots": null
+            },
+            {
+              "encoding": "22AB|3,ABa",
+              "minSpots": null
+            },
+            {
+              "encoding": "22AB|a,3AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "22AB|3,a,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|23,ABC",
+      "groups": [
+        {
+          "name": "S_183",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "a,ABC|23,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|1,ABC",
+      "groups": [
+        {
+          "name": "S_184",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "1,ABC|a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "1AB|3AaB",
+      "groups": [
+        {
+          "name": "S_185",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "1AB|3ABa",
+              "minSpots": null
+            },
+            {
+              "encoding": "1AB|3,ABa",
+              "minSpots": null
+            },
+            {
+              "encoding": "1AB|a,3AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "1AB|3,a,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "5AB|3AaB",
+      "groups": [
+        {
+          "name": "S_186",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "5AB|3ABa",
+              "minSpots": null
+            },
+            {
+              "encoding": "5AB|3,ABa",
+              "minSpots": null
+            },
+            {
+              "encoding": "3AaB|37AB8",
+              "minSpots": null
+            },
+            {
+              "encoding": "3ABa|37AB8",
+              "minSpots": null
+            },
+            {
+              "encoding": "37AB8|3,ABa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "5AB|3a,AB",
+      "groups": [
+        {
+          "name": "S_187",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "37AB8|3a,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3A|12,Aa",
+      "groups": [
+        {
+          "name": "S_188",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3A|25,Aa",
+              "minSpots": null
+            },
+            {
+              "encoding": "3A|Aa,2738",
+              "minSpots": null
+            },
+            {
+              "encoding": "3A|2BC|Aa,2BC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3AaB|2,2AB",
+      "groups": [
+        {
+          "name": "S_189",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3ABa|2,2AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2,2AB|3,ABa",
+              "minSpots": null
+            },
+            {
+              "encoding": "2,2AB|a,3AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2,2AB|3,a,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|2,3,ABC",
+      "groups": [
+        {
+          "name": "S_190",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "a,ABC|2,3,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3A|2a,5A",
+      "groups": [
+        {
+          "name": "S_192",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3A|2a,37A8",
+              "minSpots": null
+            },
+            {
+              "encoding": "3A|2BC|2a,ABC",
+              "minSpots": null
+            },
+            {
+              "encoding": "AB|2AC|2a,3BC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3ABC|3,ABCa",
+      "groups": [
+        {
+          "name": "S_193",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3ABC|3,ACBa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2A2B|2AaB",
+      "groups": [
+        {
+          "name": "S_194",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2A2B|2,a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2AaB|2,2,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2,2,AB|2,a,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2Aa|232A",
+      "groups": [
+        {
+          "name": "S_195",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2A2B|2a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2Aa|2,2,2A",
+              "minSpots": null
+            },
+            {
+              "encoding": "2a,AB|2,2,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2A2B|2,ABa",
+      "groups": [
+        {
+          "name": "S_196",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2,ABa|2,2,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2A2B|2ABa",
+      "groups": [
+        {
+          "name": "S_197",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2ABa|2,2,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3AaB|2,2,AB",
+      "groups": [
+        {
+          "name": "S_198",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3ABa|2,2,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "3,ABa|2,2,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "a,3AB|2,2,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "2,2,AB|3,a,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2A2B|a,2AB",
+      "groups": [
+        {
+          "name": "S_199",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "a,2AB|2,2,AB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "AB|AC|2BD|CDa",
+      "groups": [
+        {
+          "name": "S_200",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|ACD|BCE|DEa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2,2AB|2,ABa",
+      "groups": [
+        {
+          "name": "S_201",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|2AC|2BaC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "6A|2Aa",
+      "groups": [
+        {
+          "name": "S_202",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2Aa|2,23A",
+              "minSpots": null
+            },
+            {
+              "encoding": "2Aa|2728A",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "AB|2AC|2BCa",
+      "groups": [
+        {
+          "name": "S_204",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|AC|BD|7CD8a",
+              "minSpots": null
+            },
+            {
+              "encoding": "AB|CD|ACE|BDEa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "AB|ACa|4,BC",
+      "groups": [
+        {
+          "name": "S_205",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3A|BC|ABD|CDa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "24A|2Aa",
+      "groups": [
+        {
+          "name": "S_206",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2Aa|47A8",
+              "minSpots": null
+            },
+            {
+              "encoding": "2Aa|A,24",
+              "minSpots": null
+            },
+            {
+              "encoding": "4A|AB|2Ba",
+              "minSpots": null
+            },
+            {
+              "encoding": "AB|2Ca|2ACB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2AaB|2,2AB",
+      "groups": [
+        {
+          "name": "S_207",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2,2AB|2,a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "AB|2AC|2,a,BC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3,2227a8",
+      "groups": [
+        {
+          "name": "S_208",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|3,2A7a8B",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3A|22A2a",
+      "groups": [
+        {
+          "name": "S_209",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3A|2,2A2a",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3A|222Aa",
+      "groups": [
+        {
+          "name": "S_210",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "3A|2,22Aa",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3,2222a",
+      "groups": [
+        {
+          "name": "S_211",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|3,2A2Ba",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "227382a",
+      "groups": [
+        {
+          "name": "S_212",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|2A738Ba",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "122a2",
+      "groups": [
+        {
+          "name": "S_213",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|1A2aB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2252a",
+      "groups": [
+        {
+          "name": "S_214",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|2A5Ba",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "222738a",
+      "groups": [
+        {
+          "name": "S_216",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|2A738aB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2225a",
+      "groups": [
+        {
+          "name": "S_217",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|2A5aB",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "1222a",
+      "groups": [
+        {
+          "name": "S_218",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|1A2Ba",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "3a,2222",
+      "groups": [
+        {
+          "name": "S_219",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "AB|3a,2A2B",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABa|3A5B",
+      "groups": [
+        {
+          "name": "S_220",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABa|37A3B8",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "ABCa|3,2ABC",
+      "groups": [
+        {
+          "name": "S_221",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "ABCa|3,2ACB",
+              "minSpots": null
+            },
+            {
+              "encoding": "3,2ABC|a,ABC",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "1,2,2,2,a",
+      "groups": [
+        {
+          "name": "S_203",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "2AB|2,2,2,a,AB",
               "minSpots": null
             }
           ]

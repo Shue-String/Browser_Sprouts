@@ -80,6 +80,18 @@ export interface FourGeneGenome {
   Dc?: MoveChildRef;
   Lc?: MoveChildRef[];
   TprimeC?: MoveChildRef[];
+  /** This genome's own quick-canon form (see PositionRef.quickEnc/quickOffset) -- carried directly
+   * on the genome object (not threaded as a separate parameter) so foldedPlainText/registryFoldName
+   * below can recognize `g` as a member of ANY registered Advanced Collection (not just the 32
+   * genomeDefs.json families) straight off its own structure, via the same collections.cpp registry
+   * quickCanon() itself matches against -- no hand-authored genome tuple needed. See
+   * [[project_genome_naming_registry_fix]]. Populated wherever a genome is actually computed
+   * (computeAlphaGenomeAtCached, both branches -- it already has `position` in scope there); absent
+   * on a genome loaded from the offline collectAlphaGenomes.json snapshot until that snapshot is
+   * regenerated to carry it too (registryFoldName just skips the check when absent, same as any
+   * other "not resolved yet" case this file already tolerates). */
+  quickEnc?: string;
+  quickOffset?: number;
 }
 
 /** A single movetype-5 ("T") T-child: the position it reaches, its nimber, its own lives
@@ -256,7 +268,13 @@ async function computeAlphaGenomeAtCached(
   }
 
   if (depth >= MAX_GENOME_DEPTH) {
-    return { position, genome: { R, D, L: sortedDedup(L), Tprime: sortedDedup(Tprime), Rc, Dc, Lc, TprimeC } };
+    return {
+      position,
+      genome: {
+        R, D, L: sortedDedup(L), Tprime: sortedDedup(Tprime), Rc, Dc, Lc, TprimeC,
+        quickEnc: position.quickEnc, quickOffset: position.quickOffset,
+      },
+    };
   }
 
   const T = await Promise.all(
@@ -270,7 +288,13 @@ async function computeAlphaGenomeAtCached(
     }),
   );
 
-  return { position, genome: { R, D, L: sortedDedup(L), Tprime: sortedDedup(Tprime), Rc, Dc, Lc, TprimeC, T } };
+  return {
+    position,
+    genome: {
+      R, D, L: sortedDedup(L), Tprime: sortedDedup(Tprime), Rc, Dc, Lc, TprimeC, T,
+      quickEnc: position.quickEnc, quickOffset: position.quickOffset,
+    },
+  };
 }
 
 /** Every (depth, enc) pair computeAlphaGenomeAtCached has ever been asked for, keyed on its own
@@ -603,6 +627,72 @@ interface CollectionsRosterFile {
 }
 const COLLECTION_ROSTERS = (collectionsRosterJson as unknown as CollectionsRosterFile).collections;
 
+/** Distinct lowercase crit-port letters ('a'-'z') in a roster's authored left-side text -- mirrors
+ * stalks/tools/alpha_genome.cpp's own `distinctPortLetters`. Only ever 1 (single-crit or
+ * multi-region, both k=1) or 2 (double-crit, "Z_1"/"Z_2") for anything currently in the roster. */
+function distinctPortLetters(s: string): number {
+  return new Set([...s].filter(ch => ch >= 'a' && ch <= 'z')).size;
+}
+
+/** Every registered collection's own reduction target + offset, keyed by the reduced position's
+ * quick-canon encoding (a `PositionRef.quickEnc`-shaped string) -- the TS-side counterpart of
+ * alpha_genome.cpp's `registryNameIndex()` (see that function's own doc comment for the full
+ * rationale, identical here: a T-child in S_33+ territory has no genomeDefs.json entry at all, so
+ * `foldedPlainText`/`registryFoldName` below need to recognize it structurally instead, straight off
+ * the same collections.cpp registry quickCanon() already matches against). Unlike the native version,
+ * this only quick-canons ONE element per collection (`elements[0]`), not every one: every element of
+ * a named group reduces, by definition of registry membership, to that SAME (rep, offset) pair, so a
+ * single representative is sufficient -- with 3,755 total elements across 236 collections (S_1 alone
+ * has ~1,400), quick-canoning all of them would mean thousands of WASM round trips for no extra
+ * information. Double-crit (k=2) collections ("Z_1"/"Z_2") are skipped the same way the native
+ * version skips double-crit reps: a genuine T-child carries exactly one live special point (alpha),
+ * so a two-port left side can never structurally match it.
+ *
+ * Built once, lazily, the first time `ensureRegistryIndex` is called (module load, see below) --
+ * `registryIndexReady` resolves once it's done. `registryFoldName` reads the settled snapshot
+ * synchronously and simply finds nothing while the build is still in flight, exactly matching this
+ * file's existing "pending -> not named yet, not an error, self-corrects on a later call" convention
+ * (see foldedPlainText's own doc comment) -- callers that need to guarantee it's ready first (T-Tree,
+ * whose build is already async end to end) can `await registryIndexReady` directly; collect.ts
+ * instead schedules a re-render once it settles, the same way it already does for any other async
+ * completion (see lookupGenome). */
+let registryIndexSnapshot: Map<string, Map<number, string>> | null = null;
+
+async function buildRegistryIndex(): Promise<void> {
+  const index = new Map<string, Map<number, string>>();
+  for (const r of COLLECTION_ROSTERS) {
+    const elem = r.elements[0];
+    if (elem === undefined || distinctPortLetters(elem) !== 1) continue;
+    const qc = await quickCanonOf(`[${elem}]`);
+    if (!qc.ok) continue;
+    let byOffset = index.get(qc.enc);
+    if (!byOffset) {
+      byOffset = new Map();
+      index.set(qc.enc, byOffset);
+    }
+    if (!byOffset.has(qc.offset)) byOffset.set(qc.offset, r.name);
+  }
+  registryIndexSnapshot = index;
+}
+
+/** Resolves once the registry-name index (above) has finished building. Kicked off eagerly here
+ * (not lazily on first fold) so it's very likely already settled by the time a real genome fold
+ * happens -- WASM round trips have no network latency, and the engine module itself must already be
+ * loaded before any genome computation can run at all. */
+export const registryIndexReady: Promise<void> = buildRegistryIndex();
+
+/** Does `g` itself (whatever position it describes -- see FourGeneGenome.quickEnc) reduce, via
+ * quickCanon, to a registered collection's own target? Returns that collection's name (already
+ * carrying its own "⊕1" offset suffix directly, see COLLECTION_ROSTERS' own naming convention) or
+ * undefined if there's no match (including: the index isn't built yet, or `g` carries no quickEnc at
+ * all -- see FourGeneGenome's own doc comment on both). Exported so collect.ts's own `foldToName` --
+ * the third, independent copy of this fold logic (see [[project_genome_naming_registry_fix]]) --
+ * can apply the identical rule without re-deriving it. */
+export function registryFoldName(g: { quickEnc?: string; quickOffset?: number }): string | undefined {
+  if (!registryIndexSnapshot || g.quickEnc === undefined || g.quickOffset === undefined) return undefined;
+  return registryIndexSnapshot.get(g.quickEnc)?.get(g.quickOffset);
+}
+
 /** Roster name (as authored in stalks/src/collections.cpp -- "S_1", "S_2", "S_3", "S_4", ...) ->
  * the Collect pane's own folder name for the SAME collection, for cases where they differ.
  *
@@ -827,7 +917,7 @@ function foldedPlainText(
   const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}}`;
   if (!isFullGenome(g)) {
     const plain = head + ')';
-    return GENOME_NAMES[plain] ?? bypassOnlyFoldName(g, resolveChild, depth) ?? plain;
+    return GENOME_NAMES[plain] ?? registryFoldName(g) ?? bypassOnlyFoldName(g, resolveChild, depth) ?? plain;
   }
   const seen = new Set<string>();
   const children: string[] = [];
@@ -840,7 +930,7 @@ function foldedPlainText(
   }
   children.sort();
   const plain = `${head},[${children.join(',')}])`;
-  return GENOME_NAMES[plain] ?? bypassOnlyFoldName(g, resolveChild, depth) ?? plain;
+  return GENOME_NAMES[plain] ?? registryFoldName(g) ?? bypassOnlyFoldName(g, resolveChild, depth) ?? plain;
 }
 
 /** `g`'s own exact fold (see foldedPlainText) if it has one, else null. Moved here (2026-09-03)

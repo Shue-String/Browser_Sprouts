@@ -70,6 +70,8 @@ import {
   isFullGenome,
   nameForShorthand,
   parseGenomeQuery,
+  registryFoldName,
+  registryIndexReady,
   resolvedFoldName,
   shiftMembraneLetters,
 } from '../model/collectAlpha';
@@ -179,6 +181,17 @@ function scheduleRender(): void {
     render();
   }, 0);
 }
+
+// One-time hookup (module load, not initCollect -- this fires at most once ever, regardless of how
+// many times the pane is opened/closed): once collectAlpha.ts's registry-name index finishes its own
+// one-time async build, re-render so any genome already on screen picks up a newly-recognized
+// registry fold name (see registryFoldName/foldToName) -- the same "fire once, self-correct on the
+// next render" idiom this file already uses for a pending lookupGenome() completion. Guarded by
+// `wired`: if the index settles before the pane has ever been opened, there's nothing on screen to
+// update yet -- the eventual first initCollect() render naturally sees the already-ready index.
+void registryIndexReady.then(() => {
+  if (wired) scheduleRender();
+});
 
 function saveHistory(): void {
   try {
@@ -313,7 +326,7 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
     // when even byEnc misses, instead of giving up forever -- still synchronous/non-blocking here,
     // same as the old byEnc-only fallback: returns undefined (falls through to quickLabel below)
     // while better data is pending, and a later render picks up the resolved value once it lands.
-    const childGenome = lookupGenome(t.enc, t.genome, depth < MAX_LOOKUP_FETCH_DEPTH);
+    const childGenome = lookupGenome(t.enc, t.genome, depth < MAX_LOOKUP_FETCH_DEPTH, t);
     const child = childGenome
       ? genomeParts(childGenome, depth + 1)
       : { plain: quickLabel(t), html: `<span class="${depthClass(depth + 1)}">${escapeHtml(quickLabel(t))}</span>` };
@@ -356,7 +369,7 @@ function foldToName(
   depth: number,
 ): { plain: string; html: string } {
   if (!quickGenome) return { plain, html };
-  const name = GENOME_NAMES[plain] ?? bypassOnlyFoldName(g, resolveChild, depth);
+  const name = GENOME_NAMES[plain] ?? registryFoldName(g) ?? bypassOnlyFoldName(g, resolveChild, depth);
   if (!name) return { plain, html };
   return { plain: name, html: `<span class="${cls}">${escapeHtml(name)}</span>` };
 }
@@ -400,10 +413,22 @@ function isNamedGenome(genome: AlphaGenome | FourGeneGenome): boolean {
 /** `enc`'s own genome, straight from the offline BY_ENC index (see GenomeDbJson doc comment) --
  * undefined if `enc` isn't one of the positions that data file covers. A pure O(1) lookup, no
  * engine call, and (unlike a T-child's own possibly-truncated `.genome`) always has a full T list
- * when present. */
-function byEncGenome(enc: string): AlphaGenome | undefined {
+ * when present.
+ *
+ * `ByEncHit` itself carries no quickEnc/quickOffset of its own (it's keyed BY the real enc, and
+ * predates registryFoldName -- see [[project_genome_naming_registry_fix]]), so `ref` lets a caller
+ * that already has `enc`'s own PositionRef in hand (every real call site does: a T-child's own list
+ * entry always carries its quickEnc/quickOffset alongside `enc`) attach it to the returned genome,
+ * the same way a freshly-computed genome always carries it (see FourGeneGenome's own doc comment).
+ * Without this, a T-child resolved via this fast path could never be recognized as a member of a
+ * registered Advanced Collection with no genomeDefs.json entry (S_33+) -- registryFoldName would
+ * just silently find nothing, forever, since this path never falls through to a fresh engine call
+ * once it answers. */
+function byEncGenome(enc: string, ref?: { quickEnc: string; quickOffset: number }): AlphaGenome | undefined {
   const hit = BY_ENC[enc];
-  return hit ? { R: hit.R, D: hit.D, L: hit.L, Tprime: hit.Tprime, T: hit.T } : undefined;
+  return hit
+    ? { R: hit.R, D: hit.D, L: hit.L, Tprime: hit.Tprime, T: hit.T, quickEnc: ref?.quickEnc, quickOffset: ref?.quickOffset }
+    : undefined;
 }
 
 const genomeLookupCache = new Map<string, AlphaGenome | FourGeneGenome | null>();
@@ -438,14 +463,21 @@ const genomeLookupPending = new Set<string>();
  * OWN recursive descent (each resolved position potentially handing back more real T-children, each
  * possibly ALSO truncated) can't cascade into an unbounded chain of fresh engine calls. Every other
  * call site (formatGenomeCell, findBypassMatches) checks a single, non-recursive level, where that
- * risk doesn't apply, so they keep the default. */
+ * risk doesn't apply, so they keep the default.
+ *
+ * `ref` is `enc`'s own quick-canon form (quickEnc/quickOffset), when the caller already has it in
+ * hand (every T-child list entry does) -- threaded into byEncGenome so a genome resolved via that
+ * fast path can still be recognized against the Advanced Collections registry (see byEncGenome's
+ * own doc comment); harmless to omit, it just means that specific fast-path result won't carry a
+ * quickEnc for registryFoldName to use. */
 function lookupGenome(
   enc: string,
   known?: AlphaGenome | FourGeneGenome,
   allowFetch = true,
+  ref?: { quickEnc: string; quickOffset: number },
 ): AlphaGenome | FourGeneGenome | undefined {
   if (known && isFullGenome(known)) return known;
-  const direct = byEncGenome(enc);
+  const direct = byEncGenome(enc, ref);
   if (direct) return direct;
   const cached = genomeLookupCache.get(enc);
   if (cached !== undefined) return cached ?? undefined;
@@ -497,7 +529,7 @@ function formatGenomeCell(g: AlphaGenome | FourGeneGenome): string {
   const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}}`;
   if (!isFullGenome(g)) return head + ')';
   const parts = g.T.map(child => {
-    const childKnown = lookupGenome(child.enc, child.genome);
+    const childKnown = lookupGenome(child.enc, child.genome, true, child);
     return (childKnown && resolvedFoldName(childKnown, resolveChild)) || '+';
   });
   return `${head},[${parts.join(', ')}])`;
@@ -508,7 +540,7 @@ function formatGenomeCell(g: AlphaGenome | FourGeneGenome): string {
  * then a fresh engine call (a T-child beyond MAX_NESTED_GENOME_LIVES carries no `.genome` at all --
  * see collectAlpha.ts) -- falling back to its quick-canon label only if that fetch itself fails. */
 async function foldedPlainOfTChild(t: TChild): Promise<string> {
-  const known = t.genome ?? byEncGenome(t.enc);
+  const known = t.genome ?? byEncGenome(t.enc, t);
   if (known) return foldedPlainOf(known, 1);
   const fresh = await computeAlphaGenome(t.enc);
   return fresh ? foldedPlainOf(fresh.genome, 1) : quickLabel(t);
@@ -536,10 +568,10 @@ async function computeRelevancy(rootGenome: AlphaGenome | FourGeneGenome, t: TCh
   const family = familyForCore(rootGenome);
   if (familyRequiresTChildPlain(family, plain)) return { kind: 'name', name: family!.name };
 
-  const tGenome = t.genome ?? byEncGenome(t.enc) ?? (await computeAlphaGenome(t.enc))?.genome;
+  const tGenome = t.genome ?? byEncGenome(t.enc, t) ?? (await computeAlphaGenome(t.enc))?.genome;
   if (tGenome && isFullGenome(tGenome)) {
     for (const g of tGenome.T) {
-      const gGenome = g.genome ?? byEncGenome(g.enc) ?? (await computeAlphaGenome(g.enc))?.genome;
+      const gGenome = g.genome ?? byEncGenome(g.enc, g) ?? (await computeAlphaGenome(g.enc))?.genome;
       if (gGenome && isNamedGenome(gGenome)) return { kind: 'position', ref: g };
     }
   }
@@ -558,7 +590,7 @@ function buildEntry(position: PositionRef, genome: AlphaGenome, lives: number | 
  * see selectEntry. */
 function buildGenomeEntry(hit: GenomeHit, R: number, D: number, L: number[], Tprime: number[]): Entry {
   return { label: quickLabel(hit), position: hit, lives: hit.lives, genomeFresh: false,
-    genome: { R, D, L, Tprime, T: hit.T } };
+    genome: { R, D, L, Tprime, T: hit.T, quickEnc: hit.quickEnc, quickOffset: hit.quickOffset } };
 }
 
 /** Make `label` the active entry and, if its genome is still the GENOME_DB stand-in (see

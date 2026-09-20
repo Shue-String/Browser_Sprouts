@@ -47,6 +47,7 @@ import {
   computeAlphaGenome,
   familyRequiresTChildPlain,
   isFullGenome,
+  registryIndexReady,
   resolvedFoldName,
 } from './collectAlpha';
 import genomeDbJson from '../data/collectAlphaGenomes.json';
@@ -234,6 +235,14 @@ export async function buildTTree(rootEncRaw: string): Promise<TTreeResult> {
   // appears anywhere else in an encoding), so a blanket replace is exact, not a heuristic.
   const typed = rootEncRaw.trim().replace(/\//g, ']');
   if (!typed) return { ok: false, error: 'Enter a position encoding.' };
+
+  // Unlike collect.ts (which re-renders once this settles, since its own folds run synchronously
+  // off whatever data is already on screen -- see collect.ts's own registryIndexReady hookup),
+  // buildTTree is async end to end already, so it's simplest to just await the registry-name index
+  // here, once, before any of this build's own synchronous resolvedFoldName/classifyTChildren calls
+  // run -- guarantees every node's own fold has full S_33+ registry coverage from the start, not
+  // just whatever happened to be ready by the time this particular build reached that node.
+  await registryIndexReady;
 
   // Normalize to the engine's own bracketless canonical form before using it as this node's
   // identity: a typed query may be wrapped in brackets (Collect's search bar accepts that), but

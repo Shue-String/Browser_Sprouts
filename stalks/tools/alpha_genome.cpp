@@ -5,6 +5,7 @@
 #include "encoding.hpp"
 #include "genome_defs.generated.hpp"
 #include "moves.hpp"
+#include "registry_audit_common.hpp"
 #include "tokens.hpp"
 
 #include <algorithm>
@@ -290,13 +291,82 @@ std::string bypassOnlyFoldName(const std::string& coreKey) {
     return family && family->tChildPlains.empty() ? family->name : std::string();
 }
 
+// Every registered element's own reduction target + offset, keyed by the reduced position's own
+// serialized form -- lets genome-naming (foldToName/foldToNameChecked below) recognize a T-child as
+// a member of ANY registered Advanced Collection (currently up to S_221), not just the 32 families
+// hand-authored in src/data/genomeDefs.json (see [[project_genome_naming_registry_fix]]). Built from
+// EVERY ELEMENT of EVERY roster entry (not from CollectionRoster's own .rep/.offset fields): a
+// paired-sibling group's .rep is deliberately left empty (allCollectionRosters()'s own doc comment --
+// "shares its pair-partner's rep instead of having its own"), and reconstructing which physical rep
+// an empty-rep group's elements reduce to from the flattened roster list alone isn't reliable (a
+// multi-region family's paired sibling can be pushed at a completely unrelated point in iteration
+// order -- see allCollectionRosters()'s own S_8⊕1 comment). Running quickCanon on the group's OWN
+// elements sidesteps this entirely: each element is, by registration, exactly a left side quickCanon
+// reduces to that group's target at that group's own offset, so quickCanon's return value gives both
+// facts directly with no bookkeeping needed. Collection names already carry their own "⊕1" suffix
+// directly in the roster (see the 2026-08-29 rename noted in collections.cpp), so the name found here
+// needs no further foldedNameOf()-style wrapping.
+//
+// Double-crit (k=2) elements are skipped for the same reason buildRepCanonSet skips double-crit
+// reps (see that function's own doc comment): a genuine T-child position carries exactly one live
+// special point (alpha), so a two-port left side can never structurally match it. Multi-region (k=1,
+// one port spread across >=2 regions) elements ARE included -- they carry exactly one port too.
+const std::map<std::string, std::map<int, std::string>>& registryNameIndex() {
+    static const std::map<std::string, std::map<int, std::string>> kIndex = [] {
+        std::map<std::string, std::map<int, std::string>> out;
+        for (const CollectionRoster& r : allCollectionRosters()) {
+            for (const std::string& elem : r.elements) {
+                if (distinctPortLetters(elem) != 1) continue;
+                Position parsed;
+                QuickCanonResult qc;
+                std::string err;
+                if (!tryQuickCanonElement(elem, parsed, qc, err)) continue;
+                std::map<int, std::string>& byOffset = out[serialize(qc.rep)];
+                const auto existing = byOffset.find(qc.offset);
+                if (existing == byOffset.end()) {
+                    byOffset.emplace(qc.offset, r.name);
+                } else if (existing->second != r.name) {
+                    std::cerr << "warning: registryNameIndex collision at offset " << qc.offset
+                              << ": \"" << existing->second << "\" vs \"" << r.name
+                              << "\" (element \"" << elem << "\")\n";
+                }
+            }
+        }
+        return out;
+    }();
+    return kIndex;
+}
+
+// Does `p` itself (as a whole position, at whatever depth genomeTextAt is currently folding) reduce,
+// via quickCanon, to a registered collection's own target? Returns that collection's name (already
+// carrying its own offset suffix if non-zero, see registryNameIndex's own doc comment) or empty if
+// no match. Unlike namedGenomes()'s exact full-tuple-TEXT match, this works directly off `p`'s own
+// STRUCTURE via the same quickCanon() engine the Collect pane's Advanced Collections toggle itself
+// uses, so it never needs a hand-authored genomeDefs.json entry to recognize a family. Purely
+// structural (quickCanon needs neither `db` nor `target`), and unconditional regardless of the
+// STALKS_COLLECTIONS toggle -- exactly like namedGenomes() itself, this is a display-fold concern,
+// independent of whether quick-canon structural swapping is active for the position's own identity.
+std::string registryFoldName(const Position& p) {
+    const QuickCanonResult qc = quickCanon(p);
+    const auto& index = registryNameIndex();
+    const auto byRep = index.find(serialize(qc.rep));
+    if (byRep == index.end()) return std::string();
+    const auto byOffset = byRep->second.find(qc.offset);
+    return byOffset != byRep->second.end() ? byOffset->second : std::string();
+}
+
 // Exact-fold match first (namedGenomes(), the finite hand-authored/derived set of full "(R,D,{L},
-// {T'},[T])" strings); failing that, the bypass-only core fallback above -- a finite string table
-// can never enumerate every real T-list a bypass-only family's members can have, which is exactly
-// what broke on [1212a/ (core (0,1,{0},{}), matching S_1) before this fix.
-std::string foldToName(const std::string& plainText) {
+// {T'},[T])" strings); failing that, the registry-based structural match above; failing that, the
+// bypass-only core fallback below -- a finite string table can never enumerate every real T-list a
+// bypass-only family's members can have, which is exactly what broke on [1212a/ (core (0,1,{0},{}),
+// matching S_1) before that fix. Tries namedGenomes() FIRST (not the registry) so a genomeDefs.json
+// entry's hand-verified text always wins over a same-shape registry match -- see
+// [[project_genome_naming_registry_fix]]'s own note on this ordering choice.
+std::string foldToName(const std::string& plainText, const Position& p) {
     const auto it = namedGenomes().find(plainText);
     if (it != namedGenomes().end()) return it->second;
+    const std::string registryName = registryFoldName(p);
+    if (!registryName.empty()) return registryName;
     const auto bracket = plainText.find(",[");
     const std::string coreKey = bracket != std::string::npos ? plainText.substr(0, bracket) + ")" : plainText;
     const std::string fallback = bypassOnlyFoldName(coreKey);
@@ -346,6 +416,8 @@ std::string foldToNameChecked(const std::string& plainText, const Position& p, c
                                Token target) {
     const auto it = namedGenomes().find(plainText);
     if (it != namedGenomes().end()) return it->second;
+    const std::string registryName = registryFoldName(p);
+    if (!registryName.empty()) return registryName;
     const auto bracket = plainText.find(",[");
     const std::string coreKey = bracket != std::string::npos ? plainText.substr(0, bracket) + ")" : plainText;
     const std::string fallback = bypassOnlyFoldNameChecked(p, db, target, coreKey);
@@ -387,7 +459,7 @@ std::string genomeTextAt(const Position& p, const SpecDB& db, int depth, Token t
         "(" + std::to_string(g->R) + "," + std::to_string(g->D) + ",{" + setStrBare(g->L) + "},{" +
         setStrBare(g->Tprime) + "}";
 
-    if (depth >= kMaxFoldDepth) return gGenomeTextCache.emplace(key, foldToName(head + ")")).first->second;
+    if (depth >= kMaxFoldDepth) return gGenomeTextCache.emplace(key, foldToName(head + ")", p)).first->second;
 
     std::set<std::string> tTexts;  // dedup + lexicographic sort, same convention as collect.ts
     for (const Position& child : tChildrenOf(p, target))

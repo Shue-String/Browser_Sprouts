@@ -45,7 +45,7 @@ target_link_libraries(save_spec PRIVATE stalks_core)
 add_executable(verify_spec_count tools/verify_spec_count.cpp)
 target_link_libraries(verify_spec_count PRIVATE stalks_core)
 
-add_executable(collect_alpha_genetics tools/collect_alpha_genetics.cpp tools/alpha_genome.cpp)
+add_executable(collect_alpha_genetics tools/collect_alpha_genetics.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(collect_alpha_genetics PRIVATE stalks_core)
 
 add_executable(dump_collections_roster tools/dump_collections_roster.cpp)
@@ -57,28 +57,34 @@ target_link_libraries(quick_reduction_counts PRIVATE stalks_core)
 add_executable(verify_left_side tools/verify_left_side.cpp)
 target_link_libraries(verify_left_side PRIVATE stalks_core)
 
+add_executable(nimber_vector tools/nimber_vector.cpp)
+target_link_libraries(nimber_vector PRIVATE stalks_core)
+
 add_executable(region_frequency tools/region_frequency.cpp)
 target_link_libraries(region_frequency PRIVATE stalks_core)
 
-add_executable(unregistered_left_sides tools/unregistered_left_sides.cpp tools/alpha_genome.cpp)
+add_executable(unregistered_left_sides tools/unregistered_left_sides.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(unregistered_left_sides PRIVATE stalks_core)
 
-add_executable(yellow_check tools/yellow_check.cpp tools/alpha_genome.cpp)
+add_executable(genome_for_reps tools/genome_for_reps.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+target_link_libraries(genome_for_reps PRIVATE stalks_core)
+
+add_executable(yellow_check tools/yellow_check.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(yellow_check PRIVATE stalks_core)
 
-add_executable(find_yellow_candidates tools/find_yellow_candidates.cpp tools/alpha_genome.cpp)
+add_executable(find_yellow_candidates tools/find_yellow_candidates.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(find_yellow_candidates PRIVATE stalks_core)
 
-add_executable(find_yellow_candidates_structural tools/find_yellow_candidates_structural.cpp tools/alpha_genome.cpp)
+add_executable(find_yellow_candidates_structural tools/find_yellow_candidates_structural.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(find_yellow_candidates_structural PRIVATE stalks_core)
 
-add_executable(double_crit_probe tools/double_crit_probe.cpp tools/alpha_genome.cpp tools/double_crit_genome.cpp)
+add_executable(double_crit_probe tools/double_crit_probe.cpp tools/alpha_genome.cpp tools/double_crit_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(double_crit_probe PRIVATE stalks_core)
 
 add_executable(unregistered_double_crit_regions tools/unregistered_double_crit_regions.cpp)
 target_link_libraries(unregistered_double_crit_regions PRIVATE stalks_core)
 
-add_executable(double_crit_candidates_report tools/double_crit_candidates_report.cpp tools/alpha_genome.cpp tools/double_crit_genome.cpp)
+add_executable(double_crit_candidates_report tools/double_crit_candidates_report.cpp tools/alpha_genome.cpp tools/double_crit_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(double_crit_candidates_report PRIVATE stalks_core)
 
 add_executable(winning_tree tools/winning_tree.cpp)
@@ -87,10 +93,10 @@ target_link_libraries(winning_tree PRIVATE stalks_core)
 add_executable(dump_token_life tools/dump_token_life.cpp)
 target_link_libraries(dump_token_life PRIVATE stalks_core)
 
-add_executable(find_child_parents tools/find_child_parents.cpp tools/alpha_genome.cpp)
+add_executable(find_child_parents tools/find_child_parents.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(find_child_parents PRIVATE stalks_core)
 
-add_executable(audit_registry tools/audit_registry.cpp tools/alpha_genome.cpp)
+add_executable(audit_registry tools/audit_registry.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(audit_registry PRIVATE stalks_core)
 
 add_executable(merge_specs tools/merge_specs.cpp)
@@ -105,7 +111,7 @@ target_link_libraries(probe_dupe_nodes PRIVATE stalks_core)
 add_executable(audit_registry_redundancy tools/audit_registry_redundancy.cpp tools/registry_audit_common.cpp)
 target_link_libraries(audit_registry_redundancy PRIVATE stalks_core)
 
-add_executable(check_candidates tools/check_candidates.cpp tools/alpha_genome.cpp)
+add_executable(check_candidates tools/check_candidates.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(check_candidates PRIVATE stalks_core)
 
 add_executable(verify_registry_shrink tools/verify_registry_shrink.cpp tools/registry_audit_common.cpp)
@@ -119,8 +125,8 @@ target_link_libraries(audit_registry_necessity PRIVATE stalks_core)
 set(STALKS_ALL_TARGETS
     stalks_core stalks_tests dump_master_meta dump_child_nimbers query_position explain_move
     query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics
-    dump_collections_roster quick_reduction_counts verify_left_side region_frequency
-    unregistered_left_sides yellow_check find_yellow_candidates find_yellow_candidates_structural
+    dump_collections_roster quick_reduction_counts verify_left_side nimber_vector region_frequency
+    unregistered_left_sides genome_for_reps yellow_check find_yellow_candidates find_yellow_candidates_structural
     double_crit_probe unregistered_double_crit_regions double_crit_candidates_report winning_tree
     dump_token_life find_child_parents audit_registry merge_specs check_ttree_extras
     probe_dupe_nodes audit_registry_redundancy check_candidates verify_registry_shrink
