@@ -24,12 +24,6 @@ struct GenomeDef {
     std::vector<TChildDef> T;
 };
 
-struct LegacyFoldKey {
-    std::string key;
-    std::string name;
-    std::vector<std::string> tChildPlains;
-};
-
 constexpr int kMaxShift = 3;
 
 // Declaration order matches genomeDefs.json exactly -- required for buildRegistry's
@@ -70,14 +64,6 @@ inline const std::vector<std::pair<std::string, GenomeDef>>& familyDefs() {
     {"S_32", {1, 1, {0}, {0}, {{"S_1", 2}, {"S_23", 0}, {"S_2", 1}, {"S_5", 0}}}},
     };
     return kDefs;
-}
-
-inline const std::vector<LegacyFoldKey>& legacyFoldKeys() {
-    static const std::vector<LegacyFoldKey> kKeys = {
-    {"(0,1,{0},{},[S_1⊕1])", "S_1", {"S_1⊕1"}},
-    {"(0,1,{0},{},[S_3,S_1⊕1])", "S_1", {"S_3", "S_1⊕1"}},
-    };
-    return kKeys;
 }
 
 }  // namespace genome_defs_generated

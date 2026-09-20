@@ -48,13 +48,6 @@ function generateContent(data) {
     .map(([name, def]) => `    {${cppStr(name)}, ${genomeDefLiteral(def)}},`)
     .join('\n');
 
-  const legacyEntries = data.legacyFoldKeys
-    .map(({ key, name, tChildPlains }) => {
-      const plains = '{' + tChildPlains.map(cppStr).join(', ') + '}';
-      return `    {${cppStr(key)}, ${cppStr(name)}, ${plains}},`;
-    })
-    .join('\n');
-
   return `// GENERATED FILE -- do not hand-edit.
 // Produced by scripts/genGenomeDefsHeader.cjs from src/data/genomeDefs.json (the single
 // hand-authored source of these shapes -- see src/model/collectAlpha.ts's GENOME_DEFS doc
@@ -81,12 +74,6 @@ struct GenomeDef {
     std::vector<TChildDef> T;
 };
 
-struct LegacyFoldKey {
-    std::string key;
-    std::string name;
-    std::vector<std::string> tChildPlains;
-};
-
 constexpr int kMaxShift = ${data.maxShift};
 
 // Declaration order matches genomeDefs.json exactly -- required for buildRegistry's
@@ -98,13 +85,6 @@ ${familyEntries}
     return kDefs;
 }
 
-inline const std::vector<LegacyFoldKey>& legacyFoldKeys() {
-    static const std::vector<LegacyFoldKey> kKeys = {
-${legacyEntries}
-    };
-    return kKeys;
-}
-
 }  // namespace genome_defs_generated
 }  // namespace stalks_tools
 `;
@@ -113,7 +93,7 @@ ${legacyEntries}
 function generate() {
   const data = JSON.parse(fs.readFileSync(JSON_PATH, 'utf8'));
   fs.writeFileSync(OUT_PATH, generateContent(data), 'utf8');
-  console.log(`Wrote ${path.relative(REPO_ROOT, OUT_PATH)} (${Object.keys(data.families).length} families, ${data.legacyFoldKeys.length} legacy keys)`);
+  console.log(`Wrote ${path.relative(REPO_ROOT, OUT_PATH)} (${Object.keys(data.families).length} families)`);
 }
 
 module.exports = { JSON_PATH, OUT_PATH, generateContent };

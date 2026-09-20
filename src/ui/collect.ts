@@ -730,7 +730,8 @@ function renderRequiredLine(container: HTMLElement, family: NamedFamily, rows: T
  * required-T-gene summary line (see renderRequiredLine) above the table whenever the search bar's
  * own query resolved to a genome that's itself a recognized named family -- skipped for a plain
  * position search, or a search whose name has no NAMED_FAMILIES entry of its own to draw the
- * required list from (e.g. a bare LEGACY_FOLD_KEYS-only alias). Rows confirmed as unexplained
+ * required list from (e.g. a roster-only collection name like the double-crit Z_1/Z_2, which has
+ * no GENOME_DEFS entry). Rows confirmed as unexplained
  * "extras" (see TChildClassification.isExtra) are pushed to the top (stable otherwise -- see the
  * sort below) and highlighted with a pale red background, so the rows still needing a bypass
  * explanation are the first thing seen rather than buried among satisfied ones. */

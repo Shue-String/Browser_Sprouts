@@ -404,7 +404,6 @@ interface GenomeDef {
 interface GenomeDefsJson {
   maxShift: number;
   families: Record<string, GenomeDef>;
-  legacyFoldKeys: { key: string; name: string; tChildPlains: string[] }[];
 }
 
 const GENOME_DEFS_JSON = genomeDefsData as unknown as GenomeDefsJson;
@@ -470,16 +469,8 @@ export interface NamedFamily {
   tChildPlains: string[];
 }
 
-/** Two legacy fold-target keys that predate GENOME_DEFS and don't fit its model -- S_1 (T=[])
- * reached with a non-empty T-list some other way. Preserved verbatim rather than silently dropped,
- * since their origin isn't understood well enough to be confident they're safe to remove; flagged
- * to the user rather than guessed at. Not derived from resolveGenome. Data lives in
- * genomeDefs.json's "legacyFoldKeys" (same single-source rule as GENOME_DEFS above). */
-const LEGACY_FOLD_KEYS = GENOME_DEFS_JSON.legacyFoldKeys;
-
 /** Old names kept working for backward-compatible search-bar typing (e.g. "S_12" for what's
- * displayed everywhere else as "S_9⊕1") -- distinct from LEGACY_FOLD_KEYS above, which is about
- * unexplained fold targets, not naming history. Values are the CANONICAL (derivable) shorthand
+ * displayed everywhere else as "S_9⊕1"). Values are the CANONICAL (derivable) shorthand
  * text, i.e. what the alias expands to one more step. "S_2" USED to alias to "S_1+1" here, back
  * when "S_2" was only the roster's name for S_1's Pairing-Theorem sibling -- removed 2026-08-28
  * when "S_2" was repurposed as the former "C_3"'s own plain name (see GENOME_DEFS above): "S_2"
@@ -561,21 +552,6 @@ function buildRegistry(): GenomeRegistry {
   for (const family of Object.keys(GENOME_DEFS)) {
     for (let shift = 1; shift <= MAX_SHIFT; shift++) register(family, shift);
   }
-  for (const { key, name } of LEGACY_FOLD_KEYS) named[key] = name;
-  // PUSH, never unshift: this array's own doc comment above establishes "first entry wins" as the
-  // deliberate collision-resolution rule for coreKey/name lookups (familyForGenome, and collect.ts's
-  // NAMED_FAMILIES.find(f => f.name === X)) -- unshifting these legacy entries to the FRONT silently
-  // broke that rule for S_1 specifically: it let a legacy entry (tChildPlains ["S_1⊕1"] or
-  // ["S_3","S_1⊕1"]) shadow the REAL, already-registered S_1 entry from the main loop above (whose
-  // tChildPlains is correctly [] -- GENOME_DEFS's S_1 has an empty T-list by design). That shadowing
-  // is exactly what produced a real bug reported 2026-08-31: the Collect pane's T-gene required-line
-  // showed "S_1⊕1" as a required T-child for a position to count as S_1, when S_1 actually has NO
-  // T-gene requirement at all -- it's the Pairing Theorem's base pair (alongside S_2, likewise empty),
-  // membership is by left-side/core alone, every T-child relationship is a bypass, never a
-  // requirement. Pushed at the end instead, these two legacy entries are now permanently shadowed by
-  // the real S_1 entry for every lookup -- inert, but kept rather than deleted (their own doc comment
-  // still applies: origin not understood well enough to be confident removal is safe).
-  families.push(...LEGACY_FOLD_KEYS.map(({ name, tChildPlains }) => ({ name, coreKey: '(0,1,{0},{})', tChildPlains })));
 
   return { named, genomeTextByName, families, byShorthand, shorthandNames };
 }

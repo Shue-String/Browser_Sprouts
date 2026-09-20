@@ -167,11 +167,6 @@ std::vector<NamedGenomeEntry> buildNamedGenomes() {
     for (const auto& entry : defs) {
         for (int shift = 1; shift <= genome_defs_generated::kMaxShift; shift++) registerOne(entry.first, shift);
     }
-    // Legacy keys are appended last and win their own exact key unconditionally (mirrors the old
-    // `named[legacy.key] = legacy.name` unconditional overwrite -- the final assignment into `m`
-    // below, done in this same order, reproduces that).
-    for (const auto& legacy : genome_defs_generated::legacyFoldKeys())
-        ordered.push_back({legacy.key, legacy.name});
 
     return ordered;
 }
@@ -180,7 +175,7 @@ const std::map<std::string, std::string>& namedGenomes() {
     static const std::vector<NamedGenomeEntry> kOrdered = buildNamedGenomes();
     static const std::map<std::string, std::string> kWithCompact = [] {
         std::map<std::string, std::string> m;
-        for (const auto& e : kOrdered) m[e.key] = e.name;  // exact keys; legacy overwrites last
+        for (const auto& e : kOrdered) m[e.key] = e.name;  // exact keys
         for (const auto& e : kOrdered) {
             const auto bracket = e.key.find(",[");
             if (bracket == std::string::npos) continue;
@@ -193,20 +188,16 @@ const std::map<std::string, std::string>& namedGenomes() {
 }
 
 // Advanced-Collection membership data, in the SAME resolution-priority order as collectAlpha.ts's
-// NAMED_FAMILIES (post-2026-08-31 fix): every family's own shift-0 form first (in genome_defs.
-// generated.hpp's declaration order), then each family's shift 1..kMaxShift forms, THEN the legacy
-// fold keys last -- required because familyForCoreKey below picks the FIRST match, and several
-// distinct (family, shift) pairs collide on their bare (R,D,{L},{T'}) core with different [T]
-// lists (base forms must win those collisions). Legacy entries used to be pushed FIRST (mirroring
-// collectAlpha.ts's own now-fixed `unshift`), which silently shadowed the real S_1 entry (whose
-// tChildPlains is genuinely empty -- S_1/S_2 are the Pairing Theorem's base pair, bypass-only, no
-// T-gene requirement at all) with a legacy one claiming "S_1⊕1" is required. That's what made
-// isYellowCandidate below say "no" for a genuine S_1 element like [1212a/ whose own T-list doesn't
-// happen to be one of the two legacy forms -- same root cause as the bug fixed in collect.ts/
-// collectAlpha.ts this session, just independently reimplemented here in C++ and independently
-// broken. Legacy coreKey is hardcoded to S_1's own bare core, exactly mirroring collectAlpha.ts's
-// own hardcoded '(0,1,{0},{})' (both legacy entries are S_1 fold targets -- see genome_defs.
-// generated.hpp's legacyFoldKeys doc comment).
+// NAMED_FAMILIES: every family's own shift-0 form first (in genome_defs.generated.hpp's
+// declaration order), then each family's shift 1..kMaxShift forms -- required because
+// familyForCoreKey below picks the FIRST match, and several distinct (family, shift) pairs
+// collide on their bare (R,D,{L},{T'}) core with different [T] lists (base forms must win those
+// collisions). A pair of hardcoded "legacy fold key" entries (S_1's own core with a spurious
+// non-empty T-list) used to be appended here too, predating GENOME_DEFS/genome_defs.json and of
+// unclear origin; removed 2026-09-20 once confirmed (both empirically and by this same
+// first-match-wins compact-key fallback) that any genome sharing S_1's bare core already folds to
+// "S_1" regardless of its own T-list, making those two entries provably redundant, not just
+// unused -- see collectAlpha.ts's own (now similarly trimmed) GENOME_DEFS doc comment.
 struct NamedFamily {
     std::string name;
     std::string coreKey;
@@ -228,8 +219,6 @@ const std::vector<NamedFamily>& namedFamilies() {
             for (int shift = 1; shift <= genome_defs_generated::kMaxShift; shift++)
                 pushFamily(entry.first, shift);
         }
-        for (const auto& legacy : genome_defs_generated::legacyFoldKeys())
-            families.push_back({legacy.name, "(0,1,{0},{})", legacy.tChildPlains});
         return families;
     }();
     return kFamilies;
@@ -255,20 +244,19 @@ const NamedFamily* familyForCoreKey(const std::string& coreKey) {
 // checked list AT ALL -- every one of their candidates was silently being tested against a
 // higher-priority sibling instead and rejected there.
 //
-// DEDUPED BY NAME (fixed 2026-09-16): genome_defs.generated.hpp's legacyFoldKeys() can add MULTIPLE
-// NamedFamily entries sharing both the same coreKey AND the same NAME as each other (and as the real,
-// non-legacy entry) -- e.g. S_1's own two legacy fold keys are both literally named "S_1" and both
-// hardcode coreKey "(0,1,{0},{})" (S_1's own bare core). Before this fix, a caller iterating this
+// DEDUPED BY NAME (fixed 2026-09-16, against a since-removed source of duplicates -- the two
+// "legacy fold key" NamedFamily entries that used to be appended here, both literally named "S_1"
+// with coreKey "(0,1,{0},{})"; see namedFamilies()'s own doc comment): a caller iterating this
 // vector's raw entries got "S_1" back once per such duplicate (3 times, for S_1) even though
 // isYellowCandidate(candidate, db, "S_1") always re-resolves the name via familyForName (first
 // match wins) and so gives the SAME verdict every time -- a real bug found via
 // find_yellow_candidates.exe's output: 1,119 distinct S_1 candidates were each written 3x (3,357 rows
 // for 1,119 real hits) in a from-scratch registry-rebuild scan, caught because the raw output looked
-// suspiciously tripled, not because any wrong verdict was produced. Deduping by NAME here (not just
-// pointer identity) is the correct fix: two different NamedFamily objects with the same name are, as
-// far as every caller of this function is concerned, indistinguishable (isYellowCandidate only ever
-// takes the name, never the specific object), so they should never be reported as two "different"
-// families to test.
+// suspiciously tripled, not because any wrong verdict was produced. Kept as a defensive general rule
+// (not re-derived from the now-removed cause): two different NamedFamily objects with the same name
+// are, as far as every caller of this function is concerned, indistinguishable (isYellowCandidate
+// only ever takes the name, never the specific object), so they should never be reported as two
+// "different" families to test.
 std::vector<const NamedFamily*> allFamiliesForCoreKey(const std::string& coreKey) {
     std::vector<const NamedFamily*> out;
     std::set<std::string> seenNames;
