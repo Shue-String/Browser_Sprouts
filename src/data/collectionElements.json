@@ -14378,10 +14378,6 @@
             {
               "encoding": "2Ca|4,2C",
               "minSpots": 5
-            },
-            {
-              "encoding": "2Ca|7C8DE|2,2,DE",
-              "minSpots": null
             }
           ]
         },
@@ -15619,6 +15615,21 @@
           "elements": [
             {
               "encoding": "3A|5,A,a",
+              "minSpots": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rep": "2A2B|7AB8a",
+      "groups": [
+        {
+          "name": "S_92",
+          "offset": 0,
+          "elements": [
+            {
+              "encoding": "7AB8a|2,2,AB",
               "minSpots": null
             }
           ]
