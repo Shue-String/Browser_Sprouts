@@ -60,7 +60,6 @@ import {
   NAMED_FAMILY_GENOME_TEXT,
   NAMED_FAMILY_GROUPS,
   bypassOnlyFoldName,
-  bypassOnlyFoldNameChecked,
   classifyTChildren,
   computeAlphaGenome,
   expandGenomeShorthand,
@@ -341,13 +340,14 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
 /** When the Quick-Genome toggle is on, fold a genome node whose exact plain-text tuple matches a
  * known shorthand (see GENOME_NAMES) down to its name, replacing the full tuple rendering -- or,
  * failing that, whose bare core matches a bypass-only family AND every one of its own T-children is
- * actually accounted for (see bypassOnlyFoldNameChecked) when `g` is a full genome; a depth-capped
- * bare tuple (no T list to check) falls back to the unchecked bypassOnlyFoldName, since there is no
- * better option at that depth. A finite hand-authored GENOME_NAMES table can never enumerate every
- * real T-list such a family's members can have, which is why the bypass-only fallback exists at
- * all -- but the fallback must not fire for a T-child that neither satisfies a required T-gene nor
- * bypasses back to the family (see bypassOnlyFoldNameChecked's own doc comment: root-caused
- * 2026-09-16 via `[1,12,2a/` displaying as "S_1" despite its own T-child having no such bypass). */
+ * actually accounted for when `g` is a full genome (see bypassOnlyFoldName's own doc comment,
+ * which auto-detects this via isFullGenome); a depth-capped bare tuple (no T list to check) falls
+ * back to the same function's unchecked core-only rule, since there is no better option at that
+ * depth. A finite hand-authored GENOME_NAMES table can never enumerate every real T-list such a
+ * family's members can have, which is why the bypass-only fallback exists at all -- but the
+ * fallback must not fire for a T-child that neither satisfies a required T-gene nor bypasses back
+ * to the family (root-caused 2026-09-16 via `[1,12,2a/` displaying as "S_1" despite its own
+ * T-child having no such bypass). */
 function foldToName(
   g: AlphaGenome | FourGeneGenome,
   plain: string,
@@ -356,7 +356,7 @@ function foldToName(
   depth: number,
 ): { plain: string; html: string } {
   if (!quickGenome) return { plain, html };
-  const name = GENOME_NAMES[plain] ?? (isFullGenome(g) ? bypassOnlyFoldNameChecked(g, resolveChild, depth) : bypassOnlyFoldName(g));
+  const name = GENOME_NAMES[plain] ?? bypassOnlyFoldName(g, resolveChild, depth);
   if (!name) return { plain, html };
   return { plain: name, html: `<span class="${cls}">${escapeHtml(name)}</span>` };
 }
@@ -1046,7 +1046,7 @@ async function runExport(): Promise<void> {
  * user's request to see "all of our named collections" at a glance, not just the nonempty ones)
  * for one family name -- shared by the top-level and nested-offset renderers below, since the
  * content logic is identical either way; only the wrapping markup differs. */
-function renderCollectionItems(name: string, members: Entry[]): { itemsHtml: string; count: number } {
+function renderCollectionItems(name: string, members: Entry[]): { itemsHtml: string; count: number; hasContent: boolean } {
   // Known roster members straight from stalks/src/collections.cpp's registries (see
   // KNOWN_COLLECTION_MEMBERS's doc comment) -- schematic left-side shapes, not analyzed Collect
   // entries, so they're listed as plain, non-clickable reference text (no PositionRef behind them
@@ -1073,7 +1073,10 @@ function renderCollectionItems(name: string, members: Entry[]): { itemsHtml: str
   );
   const allItems = [repItem, ...memberItems, ...staticItems].filter(Boolean);
   const itemsHtml = allItems.length === 0 ? '<div class="collect-coll-empty">(none)</div>' : allItems.join('');
-  return { itemsHtml, count: members.length + staticLabels.length + (repItem ? 1 : 0) };
+  // hasContent deliberately excludes the pinned rep -- it's not an ordinary member (see repItem's
+  // own comment above), so an offset with a rep but no real members/static elements still counts
+  // as empty for renderCollectionGroup's "drop an offset with nothing in it" rule.
+  return { itemsHtml, count: members.length + staticLabels.length + (repItem ? 1 : 0), hasContent: members.length + staticLabels.length > 0 };
 }
 
 /** The name/count/genome header row shared by both a top-level group's <summary> and a nested
@@ -1123,7 +1126,7 @@ function renderCollectionGroup(
   const base = renderCollectionItems(name, members);
   const shownOffsets = offsets
     .map(offsetName => ({ name: offsetName, ...renderCollectionItems(offsetName, byFamily.get(offsetName) ?? []) }))
-    .filter(o => o.count > 0);
+    .filter(o => o.hasContent);
   const countText = [base.count, ...shownOffsets.map(o => o.count)].join(' ; ');
   const offsetsHtml = shownOffsets.map(o => renderOffsetBlock(o.name, o.itemsHtml)).join('');
   return `<details class="collect-coll-group">

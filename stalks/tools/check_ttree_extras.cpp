@@ -18,9 +18,11 @@
 // arrow. A candidate is only truly clean if the root AND every required/bypass-witness descendant
 // all come back clean.
 //
-// Self-contained per candidate: builds its own small Exact GameGraph rooted at the candidate (same
-// technique as yellow_check.cpp), so it needs no pre-built .spec corpus -- the graph reachable from
-// a <=8-life left side is tiny.
+// Needs no pre-built .spec corpus: builds its own Exact GameGraph, rooted at each candidate in
+// turn (same technique as yellow_check.cpp) -- but ONE graph shared across every candidate, not a
+// fresh one per candidate, so a T-child/subtree shared by several candidates gets solved once and
+// reused rather than rediscovered from scratch each time (see GameGraph::ensure's own "successive
+// calls accumulate into one shared node set" doc comment).
 //
 // Usage: check_ttree_extras <candidates.tsv> [<out_report.tsv>]
 //   <candidates.tsv>: the TSV find_yellow_candidates.exe writes -- header
@@ -30,6 +32,7 @@
 #include "encoding.hpp"
 #include "graph.hpp"
 #include "position.hpp"
+#include "registry_audit_common.hpp"
 #include "specfile.hpp"
 #include "tokens.hpp"
 
@@ -60,13 +63,11 @@ std::vector<Candidate> readCandidates(const std::string& path) {
     bool first = true;
     while (std::getline(f, line)) {
         if (first) { first = false; continue; }  // header
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.empty()) continue;
-        std::stringstream ss(line);
-        std::string livesStr, family, quickEnc;
-        std::getline(ss, livesStr, '\t');
-        std::getline(ss, family, '\t');
-        std::getline(ss, quickEnc, '\t');
-        out.push_back({std::atoi(livesStr.c_str()), family, quickEnc});
+        const auto cols = splitTsv(line);
+        if (cols.size() < 3) continue;
+        out.push_back({std::atoi(cols[0].c_str()), cols[1], cols[2]});
     }
     return out;
 }
@@ -123,12 +124,19 @@ int main(int argc, char** argv) {
         (*reportFile) << "lives\tfamily\tquickEnc\tnodesChecked\tunclassified\tclean\textraNodes\n";
     }
 
+    // One shared graph across every candidate (GameGraph::ensure's own doc comment: "successive
+    // calls accumulate into one shared node set") rather than a fresh graph per candidate -- many
+    // candidates share T-children/subtrees, and a fresh graph would rediscover and re-solve that
+    // shared structure from scratch each time instead of reusing what an earlier candidate already
+    // built. saveSpecGraph still serializes only what's reachable from THIS candidate's own root
+    // (topoOrderMulti(roots)), so per-candidate correctness is unaffected by the shared graph being
+    // larger than any single candidate's own subtree.
+    GameGraph g;
     int cleanCount = 0, dirtyCount = 0, errorCount = 0;
     for (const Candidate& c : candidates) {
         try {
             const Position root = canonicalize(parsePosition("[" + c.quickEnc + "]"));
 
-            GameGraph g;
             Node* rootNode = g.ensure(root);
             std::vector<const Node*> roots = {rootNode};
             std::stringstream ss;

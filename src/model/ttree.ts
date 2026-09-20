@@ -41,33 +41,30 @@ import {
   type AlphaGenome,
   type FourGeneGenome,
   type NamedFamily,
-  type PositionRef,
   type ResolveChild,
   NAMED_FAMILIES,
   classifyTChildren,
   computeAlphaGenome,
+  familyRequiresTChildPlain,
   isFullGenome,
   resolvedFoldName,
 } from './collectAlpha';
 import genomeDbJson from '../data/collectAlphaGenomes.json';
 import tokenLifeJson from '../data/token_life.generated.json';
 
+// Deliberately just `lives` -- the ONLY field of the snapshot's byEnc entries this module reads
+// (see livesOf). That field is a pure function of a position's own structure, with no dependency
+// on the corpus's move-discovery completeness (unlike a hit's other fields -- R/D/L/Tprime/T --
+// see this file's own doc comment), so it carries none of the staleness risk that made genome data
+// unsafe to trust from here. Typing only what's read keeps that "never trust genome fields from
+// this snapshot" invariant visible in the type itself, not just in this comment.
 interface ByEncHit {
-  R: number;
-  D: number;
-  L: number[];
-  Tprime: number[];
   lives: number;
-  T: (PositionRef & { nimber: number })[];
 }
 interface GenomeDbJson {
   genomes: Record<string, unknown>;
   byEnc: Record<string, ByEncHit>;
 }
-// Only `lives` is read from this snapshot (see livesOf) -- that field is a pure function of a
-// position's own structure, with no dependency on the corpus's move-discovery completeness (unlike
-// T, R, D, L, Tprime -- see this file's own doc comment), so it carries none of the staleness risk
-// that made genome data unsafe to trust from here.
 const BY_ENC = (genomeDbJson as unknown as GenomeDbJson).byEnc;
 
 /** Per-token life value: generated from tokens.hpp's leftSideLives2() (halved -- see that
@@ -117,6 +114,19 @@ async function adjustedLivesOfEnc(enc: string): Promise<number> {
  * -- a position's genome doesn't change between searches). */
 const genomeCache = new Map<string, AlphaGenome | FourGeneGenome | null>();
 
+/** Encodings whose own T-descendant subtree `warmCache` has already recursed into (or is
+ * currently recursing into) -- checked/set BEFORE that recursion starts (not after it finishes),
+ * so a second call reaching the same enc while the first is still in flight also short-circuits.
+ * Without this, a shared descendant reached via more than one path gets its entire subtree
+ * re-walked once per path even though every leaf underneath is already in `genomeCache` -- pure
+ * repeated Promise/microtask fan-out for corpora where cousins/siblings routinely converge on the
+ * same descendant. As a side effect this also gives the recursion a hard backstop against ever
+ * looping forever if the "a real T-move strictly reduces complexity" invariant `warmCache`'s own
+ * doc comment relies on for termination were ever violated by an engine edge case -- a position
+ * that somehow reappeared among its own descendants would find itself already marked and stop,
+ * rather than recursing without end. Persists across buildTTree() calls like `genomeCache` itself. */
+const warmedSubtree = new Set<string>();
+
 async function resolveGenomeAsync(
   enc: string,
   embedded?: AlphaGenome | FourGeneGenome,
@@ -149,13 +159,16 @@ async function resolveGenomeAsync(
  * complexity (fewer lives), so no position can ever be its own descendant, and this recursion
  * bottoms out naturally once a branch reaches positions with no more T-children -- exactly the
  * same recursion `resolvedFoldName`/`classifyTChildren` themselves do once the data exists, so
- * this can never need to touch more than they would anyway. */
+ * this can never need to touch more than they would anyway. See `warmedSubtree` above for how
+ * repeated visits to the same shared descendant are kept cheap despite the missing depth cap. */
 async function warmCache(
   enc: string,
   embedded: AlphaGenome | FourGeneGenome | undefined,
 ): Promise<AlphaGenome | FourGeneGenome | undefined> {
+  const alreadyWarming = warmedSubtree.has(enc);
+  if (!alreadyWarming) warmedSubtree.add(enc);
   const g = await resolveGenomeAsync(enc, embedded);
-  if (g && isFullGenome(g)) {
+  if (!alreadyWarming && g && isFullGenome(g)) {
     await Promise.all(g.T.map(t => warmCache(t.enc, t.genome)));
   }
   return g;
@@ -313,7 +326,7 @@ export async function buildTTree(rootEncRaw: string): Promise<TTreeResult> {
     const rows = classifyTChildren(node.genome.T, family, node.name, cacheResolveChild);
 
     for (const row of rows) {
-      if (row.satisfiesRequired) {
+      if (familyRequiresTChildPlain(family, row.resolvedName)) {
         const childNode = await ensureNode(row.t.enc, row.tGenome ?? row.t.genome);
         if (!childNode) continue;
         addEdge({ from: enc, to: childNode.id, kind: 'required' });

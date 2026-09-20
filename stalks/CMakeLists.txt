@@ -96,7 +96,7 @@ target_link_libraries(audit_registry PRIVATE stalks_core)
 add_executable(merge_specs tools/merge_specs.cpp)
 target_link_libraries(merge_specs PRIVATE stalks_core)
 
-add_executable(check_ttree_extras tools/check_ttree_extras.cpp tools/alpha_genome.cpp)
+add_executable(check_ttree_extras tools/check_ttree_extras.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(check_ttree_extras PRIVATE stalks_core)
 
 add_executable(probe_dupe_nodes tools/probe_dupe_nodes.cpp)

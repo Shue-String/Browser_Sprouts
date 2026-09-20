@@ -82,17 +82,14 @@ int main(int argc, char** argv) {
     const std::set<std::string> repCanon = buildRepCanonSet();
     const auto namesByRep = buildFamilyNamesByRepText();
 
-    // quickEnc -> repText, computed once per unique family rep (same method buildRepCanonSet uses
-    // internally) so a REDUNDANT report can name which family(ies) own the match.
+    // quickEnc -> repText, computed once per unique family rep via the EXACT same steps
+    // buildRepCanonSet() uses internally (same distinctPortLetters guard, same un-canonicalized
+    // parsePosition->quickCanon call -- no canonicalize() in between) so its keys line up with
+    // repCanon's, and a REDUNDANT report can name which family(ies) own the match.
     std::map<std::string, std::string> quickEncToRepText;
     for (const auto& [repText, names] : namesByRep) {
-        try {
-            const Position rp = canonicalize(parsePosition("[" + repText + "]"));
-            quickEncToRepText[serialize(quickCanon(rp).rep)] = repText;
-        } catch (const EncodingError&) {
-            // a k>=2 rep text (double-crit) can't be parsed as a standalone position -- skip,
-            // matches buildRepCanonSet's own distinctPortLetters(rep)!=1 skip.
-        }
+        if (distinctPortLetters(repText) != 1) continue;  // matches buildRepCanonSet's own skip
+        quickEncToRepText[serialize(quickCanon(parsePosition("[" + repText + "]")).rep)] = repText;
     }
 
     int redundant = 0, novel = 0, skipped = 0;

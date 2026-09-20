@@ -791,30 +791,31 @@ export function familyForCore(g: { R: number | null; D: number | null; L: number
  * whose OWN `tChildPlains` is empty, meaning that family asserts no T-gene requirement at all --
  * core match alone is its complete definition (the Pairing Theorem's base pair; every other
  * T-child relationship is a bypass, never a requirement). Moved here (2026-09-03) from collect.ts,
- * shared by resolvedFoldName below and by collect.ts's own foldToName (main genome display). */
-export function bypassOnlyFoldName(g: { R: number | null; D: number | null; L: number[]; Tprime: number[] }): string | null {
-  const family = familyForCore(g);
-  return family && family.tChildPlains.length === 0 ? family.name : null;
-}
-
-/** `bypassOnlyFoldName`, but ALSO verifying -- via the exact same classifyTChildren rule
- * isYellowCandidate and the T-gene table already use -- that every one of `g`'s own T-children is
- * accounted for (a bypass back to this same family, since a bypass-only family has nothing to
- * require). A bare core match alone is NOT sufficient: an unrelated T-child that neither satisfies
- * a required T-gene (impossible here, tChildPlains is empty by definition) nor bypasses back to the
- * family means `g` is not actually a member, even though its own (R,D,{L},{T'}) happens to equal
- * the family's core. Root-caused 2026-09-16: `[1,12,2a/` displayed as "S_1" despite its own T-child
- * `[12,27a8/` having no bypass back to S_1 (and S_1 has no required T-gene to excuse it either) --
- * the swap REGISTRY (collections.cpp/isYellowCandidate) already rejected this position correctly;
- * only this DISPLAY-fold path was still using the looser, core-only rule. Returns null (no fold)
- * while any T-child's own resolution is still pending, matching `foldedPlainText`'s existing
- * "self-corrects on a later call" convention rather than folding prematurely on incomplete data.
- * Only meaningful for a FULL genome (g.T known) -- callers folding a depth-capped bare tuple (no T
- * list to check) should keep using the unchecked `bypassOnlyFoldName` above; there is no better
- * option at that depth. */
-export function bypassOnlyFoldNameChecked(g: AlphaGenome, resolveChild: ResolveChild, depth: number): string | null {
+ * shared by resolvedFoldName below and by collect.ts's own foldToName (main genome display).
+ *
+ * A bare core match alone is NOT sufficient when `g` is a FULL genome (g.T known): every one of
+ * `g`'s own T-children must ALSO be accounted for -- either satisfying a required T-gene
+ * (impossible here, tChildPlains is empty by definition) or bypassing back to this same family --
+ * via the exact same classifyTChildren rule isYellowCandidate and the T-gene table already use.
+ * Root-caused 2026-09-16: `[1,12,2a/` displayed as "S_1" despite its own T-child `[12,27a8/` having
+ * no bypass back to S_1 (and S_1 has no required T-gene to excuse it either) -- the swap REGISTRY
+ * (collections.cpp/isYellowCandidate) already rejected this position correctly; only this
+ * DISPLAY-fold path was still using the looser, core-only rule. Returns null (no fold) while any
+ * T-child's own resolution is still pending, matching `foldedPlainText`'s existing "self-corrects
+ * on a later call" convention rather than folding prematurely on incomplete data.
+ *
+ * For a depth-capped BARE tuple (no T list to check -- isFullGenome(g) false), there is no better
+ * option than the unchecked core-only rule, so this function auto-detects via isFullGenome rather
+ * than exposing that choice to callers as two separate functions (an EARLIER version did exactly
+ * that, as bypassOnlyFoldName/bypassOnlyFoldNameChecked: nothing then stopped a future caller
+ * holding a full genome from picking the unchecked one, silently reintroducing the exact bug
+ * above -- their split was enforced only by doc-comment convention, not the type system, since the
+ * unchecked variant's structural `{R,D,L,Tprime}` parameter type let a full AlphaGenome through
+ * without complaint). `resolveChild`/`depth` are unused (but still required) when `g` isn't full. */
+export function bypassOnlyFoldName(g: AlphaGenome | FourGeneGenome, resolveChild: ResolveChild, depth: number): string | null {
   const family = familyForCore(g);
   if (!family || family.tChildPlains.length !== 0) return null;
+  if (!isFullGenome(g)) return family.name;
   const rows = classifyTChildren(g.T, family, family.name, resolveChild, depth);
   if (rows.some(r => r.pending || r.isExtra)) return null;
   return family.name;
@@ -850,7 +851,7 @@ function foldedPlainText(
   const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}}`;
   if (!isFullGenome(g)) {
     const plain = head + ')';
-    return GENOME_NAMES[plain] ?? bypassOnlyFoldName(g) ?? plain;
+    return GENOME_NAMES[plain] ?? bypassOnlyFoldName(g, resolveChild, depth) ?? plain;
   }
   const seen = new Set<string>();
   const children: string[] = [];
@@ -863,7 +864,7 @@ function foldedPlainText(
   }
   children.sort();
   const plain = `${head},[${children.join(',')}])`;
-  return GENOME_NAMES[plain] ?? bypassOnlyFoldNameChecked(g, resolveChild, depth) ?? plain;
+  return GENOME_NAMES[plain] ?? bypassOnlyFoldName(g, resolveChild, depth) ?? plain;
 }
 
 /** `g`'s own exact fold (see foldedPlainText) if it has one, else null. Moved here (2026-09-03)
@@ -935,15 +936,14 @@ export interface TChildClassification {
   resolvedName: string | null;
   matches: BypassMatch[] | null;
   pending: boolean;
-  satisfiesRequired: boolean;
   isExtra: boolean;
 }
 
 /** Whether `plain` (a T-child's own folded-plain identity, e.g. from resolvedFoldName/
  * foldedPlainOfTChild) is one of `family`'s own required T-children. The single place this test is
- * made, so every caller -- classifyTChildren's own `satisfiesRequired` below, and any other caller
- * checking the same "required" rule against a plain it already has in hand -- stays in sync if the
- * rule itself ever changes. */
+ * made, so every caller -- classifyTChildren's own `isExtra` below, and any other caller checking
+ * the same "required" rule against a resolved name it already has in hand (e.g. ttree.ts's queue
+ * loop, given a row's own `resolvedName`) -- stays in sync if the rule itself ever changes. */
 export function familyRequiresTChildPlain(family: NamedFamily | undefined, plain: string | null): boolean {
   return typeof plain === 'string' && !!family && family.tChildPlains.includes(plain);
 }
@@ -960,10 +960,9 @@ export function classifyTChildren(
     const resolvedName = tGenome ? resolvedFoldName(tGenome, resolveChild, depth + 1) : null;
     const matches = targetName && tGenome ? findBypassMatches(tGenome, targetName, resolveChild, depth + 1) : null;
     const pending = tGenome === undefined || (targetName !== null && matches === null);
-    const satisfiesRequired = familyRequiresTChildPlain(family, resolvedName);
     const hasBypass = !!matches && matches.length > 0;
-    const isExtra = !!family && !pending && !satisfiesRequired && !hasBypass;
-    return { t, tGenome, resolvedName, matches, pending, satisfiesRequired, isExtra };
+    const isExtra = !!family && !pending && !familyRequiresTChildPlain(family, resolvedName) && !hasBypass;
+    return { t, tGenome, resolvedName, matches, pending, isExtra };
   });
 }
 
