@@ -1,108 +1,153 @@
-// Ad-hoc research tool: for a given LIST of quick-canon left-side rep encodings (registered or
-// not), scan an alpha-genome .spec corpus ONCE and, for the first raw structural sample found
-// whose quickCanon() reduction matches each target rep, record its classified genome text
-// (alpha_genome.hpp's fullGenomeText -- the SAME classification unregistered_left_sides.cpp uses,
-// just not restricted to already-unregistered shapes). Genome text is only ever computed on a raw
-// structural sample reachable in the corpus's own move graph, never on the rep text directly (see
-// unregistered_left_sides.cpp's own doc comment on this) -- this tool exists because that other
-// tool explicitly skips anything already registered, so it never produces genome text for an
-// already-registered family's own rep.
+// For a given LIST of quick-canon left-side rep encodings (registered or not), computes the full
+// genome text "(R,D,{L},{T'},[T])" for each -- fills a real gap in alpha_genome.cpp's own tooling:
+// unregistered_left_sides.cpp explicitly skips anything already-registered, so it can never produce
+// genome text for an already-registered family's own rep; this tool does, for an arbitrary target
+// list, registered or not.
 //
-// Usage: genome_for_reps <targets.txt> <spec1.spec> [spec2.spec ...] [out.tsv]
-// targets.txt: one quick-canon rep encoding per line (as serialize()'d, e.g. "2,3,5a" or "3AB|ACD|BCDa").
-// The last argument is treated as the output TSV path if it doesn't end in ".spec".
+// Solves each target rep's OWN left-side encoding directly -- it's already a closed single-alpha
+// position (the crit port IS the literal ascii 'a'/ALPHA token in the stored rep text, same
+// convention buildRepCanonSet relies on) -- against one SHARED GameGraph (Mode::Exact), reused
+// across every target for memoization (see feedback_gamegraph_reuse -- never build a fresh
+// GameGraph per call). The solved subgraph is then serialized in-memory (saveSpecGraph ->
+// stringstream -> loadSpecGraph) into a SpecDB purely so the EXISTING classifyAlphaGenome/
+// fullGenomeText/tChildrenOf machinery (written against SpecDB, not GameGraph, since it was built
+// for corpus audits) can run unchanged -- no disk I/O, no corpus file needed at all.
+//
+// 2026-09-21: replaced an earlier version of this tool that scanned a multi-million-node .spec
+// corpus looking for a raw sample whose quickCanon reduction happened to match each target rep --
+// correct, but took minutes for a couple hundred targets (dominated by the corpus scan, not the
+// actual genome computation). This direct-solve approach takes ~2 seconds for the same workload,
+// since a rep's own left-side text needs no "sample" search at all -- it already IS a valid,
+// directly-parseable position. Flagged by the user as an obvious inefficiency (why scan 2.4M
+// positions when the target position is already known?), confirmed correct via extensive
+// pristine-vs-renamed A/B testing during the S_1-S_32 rename work (project_genome_renaming_tool.md)
+// before replacing the corpus-based version outright.
+//
+// Also avoids a "self-fold" bug (see project_collect_collections_panel.md's "self-fold bug"
+// section): a rep's own quickCanon reduction IS itself, so a plain fullGenomeText(rootPos) call
+// would fold the ENTIRE root straight to its own family name via the registry-fold path (779c86f)
+// instead of showing its real structure. Root's own (R,D,{L},{T'}) head is built directly via
+// classifyAlphaGenome instead; only its real T-CHILDREN are folded via the ordinary fullGenomeText
+// (T-children folding to a name there is correct/desired, unlike at the root).
+//
+// Size safety: gated at the same kMaxLives2=32 (16 lives) cap analyze.cpp's analyzeFullJson uses
+// for its own most-permissive real-time exact solve -- GameGraph::ensure() has no built-in bound of
+// its own, and every rep this tool has ever been used on is tiny (a handful of lives), but a
+// standing tool should not hang/OOM outright if ever pointed at something unexpectedly large.
+//
+// Usage: genome_for_reps <targets.txt> [out.tsv]
+// targets.txt: one raw left-side rep encoding per line (as stored in collectionsRoster.json's own
+// "rep" field, e.g. "2,3,5a" or "3AB|ACD|BCDa" -- crit port already literal ascii 'a').
 #include "alpha_genome.hpp"
 #include "canon.hpp"
 #include "collections.hpp"
 #include "encoding.hpp"
+#include "graph.hpp"
 #include "moves.hpp"
 #include "position.hpp"
 #include "specfile.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <map>
-#include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
 using namespace stalks;
 
+namespace {
+
+constexpr int kMaxLives2 = 32;  // 16 lives -- same gate as analyze.cpp's analyzeFullJson
+
+int maxSubLives2(const Position& p) {
+    int m = 0;
+    for (const auto& comp : p.components) m = std::max(m, comp.lives2());
+    return m;
+}
+
+std::string rootGenomeText(const Position& p, const SpecDB& db) {
+    auto g = stalks_tools::classifyAlphaGenome(p, db);
+    if (!g) return "(UNCLASSIFIABLE)";
+    std::ostringstream out;
+    out << "(" << g->R << "," << g->D << ",{";
+    bool first = true;
+    for (int v : g->L) { if (!first) out << ","; out << v; first = false; }
+    out << "},{";
+    first = true;
+    for (int v : g->Tprime) { if (!first) out << ","; out << v; first = false; }
+    out << "},[";
+    auto children = stalks_tools::tChildrenOf(p);
+    std::vector<std::string> tTexts;
+    for (const auto& child : children) tTexts.push_back(stalks_tools::fullGenomeText(child, db));
+    std::sort(tTexts.begin(), tTexts.end());
+    first = true;
+    for (const auto& t : tTexts) { if (!first) out << ","; out << t; first = false; }
+    out << "])";
+    return out.str();
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
-    if (argc < 3) {
-        std::cerr << "usage: genome_for_reps <targets.txt> <spec1.spec> [spec2.spec ...] [out.tsv]\n";
+    if (argc < 2) {
+        std::cerr << "usage: genome_for_reps <targets.txt> [out.tsv]\n";
         return 1;
     }
-    std::string outPath = "genome_for_reps.tsv";
-    std::vector<std::string> specPaths;
-    for (int i = 2; i < argc; ++i) {
-        const std::string a = argv[i];
-        if (a.size() > 5 && a.substr(a.size() - 5) == ".spec")
-            specPaths.push_back(a);
-        else
-            outPath = a;
-    }
+    std::string outPath = (argc >= 3) ? argv[2] : "genome_for_reps.tsv";
 
-    std::set<std::string> targets;
+    std::vector<std::string> targets;
     {
         std::ifstream in(argv[1]);
         std::string line;
         while (std::getline(in, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
-            if (!line.empty()) targets.insert(line);
+            if (!line.empty()) targets.push_back(line);
         }
     }
     std::cerr << "targets: " << targets.size() << "\n";
 
-    std::map<std::string, std::string> found;  // target rep -> genome text (first sample only)
-    std::set<std::string> seenQuickEnc;
-
-    for (const std::string& path : specPaths) {
-        SpecDB db;
+    GameGraph g(GameGraph::Mode::Exact);
+    std::vector<const Node*> roots;
+    std::map<std::string, Position> targetPos;  // rep -> canonicalized position
+    std::map<std::string, std::string> skipped;  // rep -> reason
+    for (const std::string& rep : targets) {
+        Position p;
         try {
-            db = loadSpecGraphFromFile(path);
-        } catch (const std::exception& e) {
-            std::cerr << "skipping " << path << ": " << e.what() << "\n";
+            p = canonicalize(parsePosition("[" + rep + "]"));
+        } catch (const EncodingError& e) {
+            std::cerr << "skipping unparsable rep \"" << rep << "\": " << e.what() << "\n";
+            skipped[rep] = "(PARSE ERROR)";
             continue;
         }
-        std::cerr << path << ": " << db.size() << " nodes\n";
-
-        std::size_t scanned = 0;
-        for (const SpecNode& node : db.nodes()) {
-            ++scanned;
-            if (scanned % 500000 == 0) {
-                std::cerr << "  ..." << scanned << "/" << db.size() << "  (" << found.size() << "/"
-                           << targets.size() << " targets found)\n";
-                std::cerr.flush();
-            }
-            if (found.size() == targets.size()) break;  // all targets satisfied, stop early
-            if (!stalks_tools::isSingleAlpha(node.enc)) continue;
-
-            Position pBase;
-            try {
-                pBase = canonicalize(parsePosition(node.enc));
-            } catch (const EncodingError&) {
-                continue;
-            }
-            if (!hasSpecialPoint(pBase)) continue;
-
-            const QuickCanonResult qc = quickCanon(pBase);
-            const std::string quickEnc = serialize(qc.rep);
-            if (!seenQuickEnc.insert(quickEnc).second) continue;
-            if (!targets.count(quickEnc) || found.count(quickEnc)) continue;
-
-            found[quickEnc] = stalks_tools::fullGenomeText(pBase, db);
+        if (maxSubLives2(p) > kMaxLives2) {
+            std::cerr << "skipping oversized rep \"" << rep << "\" (maxSubLives2="
+                       << maxSubLives2(p) << " > " << kMaxLives2 << ")\n";
+            skipped[rep] = "(TOO LARGE)";
+            continue;
         }
-        std::cerr << "  scanned " << scanned << "/" << db.size() << ", " << found.size() << "/"
-                   << targets.size() << " targets found so far\n";
-        if (found.size() == targets.size()) break;
+        Node* n = g.ensure(p);
+        roots.push_back(n);
+        targetPos[rep] = p;
     }
+    std::cerr << "solved " << roots.size() << "/" << targets.size() << " target positions\n";
+
+    std::stringstream specStream;
+    saveSpecGraph(g, roots, specStream);
+    SpecDB db = loadSpecGraph(specStream);
+    std::cerr << "in-memory SpecDB: " << db.size() << " nodes\n";
 
     std::ofstream out(outPath);
     out << "rep\tgenome\n";
-    for (const auto& t : targets) {
-        out << t << "\t" << (found.count(t) ? found.at(t) : "(NOT FOUND IN CORPUS)") << "\n";
+    for (const std::string& rep : targets) {
+        auto sk = skipped.find(rep);
+        if (sk != skipped.end()) {
+            out << rep << "\t" << sk->second << "\n";
+            continue;
+        }
+        out << rep << "\t" << rootGenomeText(targetPos.at(rep), db) << "\n";
     }
-    std::cerr << found.size() << "/" << targets.size() << " targets found. wrote " << outPath << "\n";
+    std::cerr << "wrote " << outPath << "\n";
     return 0;
 }
