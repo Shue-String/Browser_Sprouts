@@ -93,7 +93,12 @@ TreeCheck checkWholeTree(const Position& root, const SpecDB& db) {
         ++result.nodesChecked;
 
         const auto name = resolvedGenomeName(node, db);
-        if (!name) { ++result.nodesUnclassified; continue; }
+        // A registry-only fold (S_33+) has no NAMED_FAMILIES entry -- isYellowCandidate can't check
+        // it (no declared required T-children to compare against), so it's unclassifiable here the
+        // same as a node with no resolved name at all. See alpha_genome.hpp's isYellowCandidate doc
+        // comment: found 2026-09-21 when this crashed ~53% of a real 9,890-candidate batch before
+        // this check was added.
+        if (!name || !hasNamedFamilyEntry(*name)) { ++result.nodesUnclassified; continue; }
 
         if (!isYellowCandidate(node, db, *name)) result.extraAt.push_back(key + " (" + *name + ")");
 

@@ -32,19 +32,11 @@
               "minSpots": null
             },
             {
-              "encoding": "0,131a",
-              "minSpots": null
-            },
-            {
               "encoding": "0,15,2a",
               "minSpots": null
             },
             {
               "encoding": "0,15,3a",
-              "minSpots": null
-            },
-            {
-              "encoding": "0,23,17a8",
               "minSpots": null
             },
             {
@@ -74,10 +66,6 @@
             {
               "encoding": "0,3a,1738",
               "minSpots": null
-            },
-            {
-              "encoding": "0,5,17a8",
-              "minSpots": 6
             },
             {
               "encoding": "0,5,5,2a",
@@ -122,10 +110,6 @@
             {
               "encoding": "1,2a",
               "minSpots": 5
-            },
-            {
-              "encoding": "1,2a,113",
-              "minSpots": null
             },
             {
               "encoding": "1,3,a",
@@ -552,10 +536,6 @@
               "minSpots": 6
             },
             {
-              "encoding": "3a,1112",
-              "minSpots": null
-            },
-            {
               "encoding": "3a,222728",
               "minSpots": null
             },
@@ -634,10 +614,6 @@
               "minSpots": 5
             },
             {
-              "encoding": "0,2,2,2,2,a",
-              "minSpots": null
-            },
-            {
               "encoding": "0,2a",
               "minSpots": 4
             },
@@ -655,14 +631,6 @@
             },
             {
               "encoding": "1,11,2a",
-              "minSpots": null
-            },
-            {
-              "encoding": "1,15,2a",
-              "minSpots": null
-            },
-            {
-              "encoding": "1,2a,122",
               "minSpots": null
             },
             {
@@ -1278,12 +1246,7 @@
         {
           "name": "S_38",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3,3,4a",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1293,12 +1256,7 @@
         {
           "name": "S_39",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,3,37a8",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1308,12 +1266,7 @@
         {
           "name": "S_40",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3,34a",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1323,12 +1276,7 @@
         {
           "name": "S_41",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3,25a",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1338,16 +1286,7 @@
         {
           "name": "S_42",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2733a8",
-              "minSpots": null
-            },
-            {
-              "encoding": "3,273a8",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1391,12 +1330,7 @@
         {
           "name": "S_45",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3,237a8",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1406,12 +1340,7 @@
         {
           "name": "S_47",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2233a",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1421,12 +1350,7 @@
         {
           "name": "S_48",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,3,27a8",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1436,16 +1360,7 @@
         {
           "name": "S_49",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,3,5,a",
-              "minSpots": null
-            },
-            {
-              "encoding": "3,a,222",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1459,10 +1374,6 @@
             {
               "encoding": "a,22738",
               "minSpots": null
-            },
-            {
-              "encoding": "2,a,3738",
-              "minSpots": null
             }
           ]
         }
@@ -1474,12 +1385,7 @@
         {
           "name": "S_51",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,a,35",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1535,10 +1441,6 @@
           "offset": 0,
           "elements": [
             {
-              "encoding": "2,2,33a",
-              "minSpots": null
-            },
-            {
               "encoding": "2,2,37a8",
               "minSpots": null
             }
@@ -1567,12 +1469,7 @@
         {
           "name": "S_57",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,a,222",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1582,16 +1479,7 @@
         {
           "name": "S_58",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,2,5,a",
-              "minSpots": null
-            },
-            {
-              "encoding": "2,2,a,23",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1681,12 +1569,7 @@
         {
           "name": "S_71",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,a,2728",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1711,12 +1594,7 @@
         {
           "name": "S_73",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,a,223",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1726,12 +1604,7 @@
         {
           "name": "S_74",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,a,2738",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1805,12 +1678,7 @@
         {
           "name": "S_87",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,233a",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1820,12 +1688,7 @@
         {
           "name": "S_88",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,3,4,a",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1854,16 +1717,7 @@
         {
           "name": "S_91",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "23,5a",
-              "minSpots": null
-            },
-            {
-              "encoding": "23,37a8",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1883,12 +1737,7 @@
         {
           "name": "S_113",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,a,224",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1898,12 +1747,7 @@
         {
           "name": "S_191",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "4,233a",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1913,12 +1757,7 @@
         {
           "name": "S_203",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,2,2,5,a",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -1978,12 +1817,7 @@
         {
           "name": "S_215",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3,a,224",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -2130,10 +1964,6 @@
             {
               "encoding": "0,ABCD|2a,ABCD",
               "minSpots": 6
-            },
-            {
-              "encoding": "0,ABCD|3a,ABCD",
-              "minSpots": null
             },
             {
               "encoding": "1,1A|1A,2a",
@@ -8434,14 +8264,6 @@
               "minSpots": null
             },
             {
-              "encoding": "1AB|22CD|ACDBa",
-              "minSpots": null
-            },
-            {
-              "encoding": "1AB|22CD|CABDa",
-              "minSpots": null
-            },
-            {
               "encoding": "1AB|22CD|CD,ABa",
               "minSpots": null
             },
@@ -8754,10 +8576,6 @@
               "minSpots": null
             },
             {
-              "encoding": "1AB|CDEFa|AB,CDEF",
-              "minSpots": 6
-            },
-            {
               "encoding": "1AB|CDEFa|ABCDEF",
               "minSpots": null
             },
@@ -8772,10 +8590,6 @@
             {
               "encoding": "1AB|CDE|CDF|AB,EFa",
               "minSpots": null
-            },
-            {
-              "encoding": "1AB|a,CDEF|AB,CDEF",
-              "minSpots": 6
             },
             {
               "encoding": "1Aa|2BC|1ABC",
@@ -11774,10 +11588,6 @@
               "minSpots": null
             },
             {
-              "encoding": "4A|2,BCDE|Aa,BCDE",
-              "minSpots": null
-            },
-            {
               "encoding": "4A|22AB|77B88a",
               "minSpots": null
             },
@@ -12334,14 +12144,6 @@
               "minSpots": null
             },
             {
-              "encoding": "4A|ABCDa|1,BCD",
-              "minSpots": null
-            },
-            {
-              "encoding": "4A|ABCDa|5,BCD",
-              "minSpots": null
-            },
-            {
               "encoding": "4A|ABC|7BC8a",
               "minSpots": 6
             },
@@ -12406,10 +12208,6 @@
               "minSpots": null
             },
             {
-              "encoding": "4A|BCDEa|2A,BCDE",
-              "minSpots": null
-            },
-            {
               "encoding": "4A|BCD|2a,2BACD",
               "minSpots": null
             },
@@ -12460,10 +12258,6 @@
             {
               "encoding": "4A|a,5A",
               "minSpots": 6
-            },
-            {
-              "encoding": "4A|a,BCDE|2A,BCDE",
-              "minSpots": null
             },
             {
               "encoding": "5,3AB|1a,AB",
@@ -13366,10 +13160,6 @@
               "minSpots": null
             },
             {
-              "encoding": "ABC|ADE|1,2a,BCDE",
-              "minSpots": null
-            },
-            {
               "encoding": "ABC|ADE|BCDFE|2F,2a",
               "minSpots": null
             },
@@ -13783,10 +13573,6 @@
             },
             {
               "encoding": "AB|2a,2ACB|1,2,C",
-              "minSpots": null
-            },
-            {
-              "encoding": "AB|2a,4A|1,2,B",
               "minSpots": null
             },
             {
@@ -15128,12 +14914,7 @@
         {
           "name": "S_46",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3AB|3,a,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15188,12 +14969,7 @@
         {
           "name": "S_59",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3A|3B|ABa",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15263,12 +15039,7 @@
         {
           "name": "S_68",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "ABa|2,3,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15348,10 +15119,6 @@
           "offset": 0,
           "elements": [
             {
-              "encoding": "3A|3,2Aa",
-              "minSpots": null
-            },
-            {
               "encoding": "3A|37Aa8",
               "minSpots": null
             },
@@ -15418,12 +15185,7 @@
         {
           "name": "S_85",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3A|2,2Aa",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15436,10 +15198,6 @@
           "elements": [
             {
               "encoding": "3A|2,A,2a",
-              "minSpots": null
-            },
-            {
-              "encoding": "3A|2,A,3a",
               "minSpots": null
             }
           ]
@@ -15505,16 +15263,7 @@
         {
           "name": "S_94",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3ABC|3ACBa",
-              "minSpots": null
-            },
-            {
-              "encoding": "3ABC|3BACa",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15527,10 +15276,6 @@
           "elements": [
             {
               "encoding": "3ABC|2,ACBa",
-              "minSpots": null
-            },
-            {
-              "encoding": "2,ABCa|3,ABC",
               "minSpots": null
             }
           ]
@@ -15566,16 +15311,7 @@
         {
           "name": "S_97",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3ABC|a,2ACB",
-              "minSpots": null
-            },
-            {
-              "encoding": "3,ABC|a,2ABC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15585,12 +15321,7 @@
         {
           "name": "S_98",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3,ABC|2,a,ABC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15664,12 +15395,7 @@
         {
           "name": "S_103",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2AB|AB,22a",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15740,16 +15466,7 @@
         {
           "name": "S_107",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2ABa|3,2AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2ABa|2,3,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15797,12 +15514,7 @@
         {
           "name": "S_110",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "ABa|AB,2728",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15812,12 +15524,7 @@
         {
           "name": "S_111",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3AB|CDa|AB,CD",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15827,12 +15534,7 @@
         {
           "name": "S_112",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "ABCa|3B3AC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15909,10 +15611,6 @@
               "minSpots": null
             },
             {
-              "encoding": "3AB|3Ca|ABC",
-              "minSpots": null
-            },
-            {
               "encoding": "3A|ABC|3a,BC",
               "minSpots": null
             }
@@ -15926,12 +15624,7 @@
         {
           "name": "S_118",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3A|A,BCD|a,BCD",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15941,12 +15634,7 @@
         {
           "name": "S_119",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "4,AB|a,3AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15956,12 +15644,7 @@
         {
           "name": "S_120",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3ABa|4,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15971,20 +15654,7 @@
         {
           "name": "S_121",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3,ABa|4,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "4AB|3,a,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "4,AB|3,a,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -15996,15 +15666,7 @@
           "offset": 0,
           "elements": [
             {
-              "encoding": "Aa|4BC|ABC",
-              "minSpots": null
-            },
-            {
               "encoding": "2AB|CDa|ABCD",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|CDa|AB,CD",
               "minSpots": null
             }
           ]
@@ -16017,12 +15679,7 @@
         {
           "name": "S_123",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2AB|3,2ABa",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16051,10 +15708,6 @@
             {
               "encoding": "4A|2,7A8a",
               "minSpots": null
-            },
-            {
-              "encoding": "AB|AC|2BD|2,CDa",
-              "minSpots": null
             }
           ]
         }
@@ -16066,12 +15719,7 @@
         {
           "name": "S_126",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3A|ABC|2,BCa",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16081,16 +15729,7 @@
         {
           "name": "S_127",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,ABa|3,2AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2,ABa|2,3,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16101,10 +15740,6 @@
           "name": "S_128",
           "offset": 0,
           "elements": [
-            {
-              "encoding": "23AB|2,ABa",
-              "minSpots": null
-            },
             {
               "encoding": "27AB8|2,ABa",
               "minSpots": null
@@ -16122,10 +15757,6 @@
           "elements": [
             {
               "encoding": "AB|2AC|3CBa",
-              "minSpots": null
-            },
-            {
-              "encoding": "AB|2AC|3,BCa",
               "minSpots": null
             }
           ]
@@ -16180,10 +15811,6 @@
             {
               "encoding": "ABCa|2,3ACB",
               "minSpots": null
-            },
-            {
-              "encoding": "2,3ABC|a,ABC",
-              "minSpots": null
             }
           ]
         }
@@ -16195,12 +15822,7 @@
         {
           "name": "S_133",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3A|ABC|a,2BC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16225,12 +15847,7 @@
         {
           "name": "S_135",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2ABC|a,3ACB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16240,12 +15857,7 @@
         {
           "name": "S_136",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2AB|a,37AB8",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16255,12 +15867,7 @@
         {
           "name": "S_137",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,ABC|3,a,ABC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16289,16 +15896,7 @@
         {
           "name": "S_139",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3,2AB|a,2AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "a,2AB|2,3,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16311,10 +15909,6 @@
           "elements": [
             {
               "encoding": "4A|a,27A8",
-              "minSpots": null
-            },
-            {
-              "encoding": "AB|AC|2BD|a,2CD",
               "minSpots": null
             }
           ]
@@ -16346,12 +15940,7 @@
         {
           "name": "S_142",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "ABC|ADE|a,BCDE",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16376,16 +15965,7 @@
         {
           "name": "S_144",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3ABC|3ACaB",
-              "minSpots": null
-            },
-            {
-              "encoding": "3ABC|3BAaC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16395,12 +15975,7 @@
         {
           "name": "S_145",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2AB|2,3ABa",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16410,12 +15985,7 @@
         {
           "name": "S_146",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "AB|ACD|2,CBDa",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16440,20 +16010,7 @@
         {
           "name": "S_148",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2ABC|2ACaB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2ABC|2BAaC",
-              "minSpots": null
-            },
-            {
-              "encoding": "2ABaC|2,ABC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16467,14 +16024,6 @@
             {
               "encoding": "2AB|23AaB",
               "minSpots": null
-            },
-            {
-              "encoding": "2AB|2A3aB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|3,2AaB",
-              "minSpots": null
             }
           ]
         }
@@ -16486,16 +16035,7 @@
         {
           "name": "S_150",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "ABCa|2B2AC",
-              "minSpots": null
-            },
-            {
-              "encoding": "2A2BC|a,ABC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16509,18 +16049,6 @@
             {
               "encoding": "2A2B|3ABa",
               "minSpots": null
-            },
-            {
-              "encoding": "2A2B|3,ABa",
-              "minSpots": null
-            },
-            {
-              "encoding": "2A2B|a,3AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2A2B|3,a,AB",
-              "minSpots": null
             }
           ]
         }
@@ -16532,16 +16060,7 @@
         {
           "name": "S_152",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2ABC|a,2ACB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2,ABC|a,2ABC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16551,16 +16070,7 @@
         {
           "name": "S_153",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2ABC|2,ACBa",
-              "minSpots": null
-            },
-            {
-              "encoding": "2,ABC|2,ABCa",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16604,16 +16114,7 @@
         {
           "name": "S_156",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2ABC|2,a,ABC",
-              "minSpots": null
-            },
-            {
-              "encoding": "2,ABC|2,a,ABC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16631,10 +16132,6 @@
             {
               "encoding": "ABCa|2B3AC",
               "minSpots": null
-            },
-            {
-              "encoding": "2A3BC|a,ABC",
-              "minSpots": null
             }
           ]
         }
@@ -16646,12 +16143,7 @@
         {
           "name": "S_158",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3A|ABC|2,a,BC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16688,12 +16180,7 @@
         {
           "name": "S_160",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,3AB|2,a,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16703,28 +16190,7 @@
         {
           "name": "S_161",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2AaB|3,2AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2A3B|2,a,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AaB|2,3,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "3,2AB|2,a,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2,3,AB|2,a,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16749,16 +16215,7 @@
         {
           "name": "S_163",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2AB|1,a,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|a,23,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16782,23 +16239,11 @@
               "minSpots": null
             },
             {
-              "encoding": "23AB|2,a,AB",
-              "minSpots": null
-            },
-            {
               "encoding": "27AB8|2,a,AB",
               "minSpots": null
             },
             {
-              "encoding": "AB|3AC|2,a,BC",
-              "minSpots": null
-            },
-            {
               "encoding": "ABC|ABD|2,a,CD",
-              "minSpots": null
-            },
-            {
-              "encoding": "AB|AC|BD|CE|2,a,DE",
               "minSpots": null
             }
           ]
@@ -16811,12 +16256,7 @@
         {
           "name": "S_165",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,ABC|3,ABCa",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16826,12 +16266,7 @@
         {
           "name": "S_166",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "a,ABC|2,2,ABC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16856,16 +16291,7 @@
         {
           "name": "S_168",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "ABCa|2,2ACB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2,2ABC|a,ABC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16890,16 +16316,7 @@
         {
           "name": "S_170",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3AB|5a,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "3AB|AB,37a8",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16909,12 +16326,7 @@
         {
           "name": "S_171",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "ABa|3,37AB8",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16928,10 +16340,6 @@
             {
               "encoding": "Aa|1A,23",
               "minSpots": null
-            },
-            {
-              "encoding": "Aa|2BC|1,ABC",
-              "minSpots": null
             }
           ]
         }
@@ -16943,12 +16351,7 @@
         {
           "name": "S_173",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "ABa|3738AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16958,20 +16361,7 @@
         {
           "name": "S_174",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "ABa|25,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "ABa|AB,2738",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AB|CDa|CD,2AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16981,12 +16371,7 @@
         {
           "name": "S_175",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "ABCa|3,3ACB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -16996,12 +16381,7 @@
         {
           "name": "S_176",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "ABCa|33ACB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17061,12 +16441,7 @@
         {
           "name": "S_179",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3a,AB|2,3,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17149,12 +16524,7 @@
         {
           "name": "S_183",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "a,ABC|23,ABC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17252,20 +16622,7 @@
         {
           "name": "S_188",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3A|25,Aa",
-              "minSpots": null
-            },
-            {
-              "encoding": "3A|Aa,2738",
-              "minSpots": null
-            },
-            {
-              "encoding": "3A|2BC|Aa,2BC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17279,18 +16636,6 @@
             {
               "encoding": "3ABa|2,2AB",
               "minSpots": null
-            },
-            {
-              "encoding": "2,2AB|3,ABa",
-              "minSpots": null
-            },
-            {
-              "encoding": "2,2AB|a,3AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2,2AB|3,a,AB",
-              "minSpots": null
             }
           ]
         }
@@ -17302,12 +16647,7 @@
         {
           "name": "S_190",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "a,ABC|2,3,ABC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17340,12 +16680,7 @@
         {
           "name": "S_193",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3ABC|3,ACBa",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17356,14 +16691,6 @@
           "name": "S_194",
           "offset": 0,
           "elements": [
-            {
-              "encoding": "2A2B|2,a,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2AaB|2,2,AB",
-              "minSpots": null
-            },
             {
               "encoding": "2,2,AB|2,a,AB",
               "minSpots": null
@@ -17401,12 +16728,7 @@
         {
           "name": "S_196",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,ABa|2,2,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17437,15 +16759,7 @@
               "minSpots": null
             },
             {
-              "encoding": "3,ABa|2,2,AB",
-              "minSpots": null
-            },
-            {
               "encoding": "a,3AB|2,2,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "2,2,AB|3,a,AB",
               "minSpots": null
             }
           ]
@@ -17458,12 +16772,7 @@
         {
           "name": "S_199",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "a,2AB|2,2,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17583,16 +16892,7 @@
         {
           "name": "S_207",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2,2AB|2,a,AB",
-              "minSpots": null
-            },
-            {
-              "encoding": "AB|2AC|2,a,BC",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17617,12 +16917,7 @@
         {
           "name": "S_209",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3A|2,2A2a",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17632,12 +16927,7 @@
         {
           "name": "S_210",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "3A|2,22Aa",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17647,12 +16937,7 @@
         {
           "name": "S_211",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "AB|3,2A2Ba",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17722,12 +17007,7 @@
         {
           "name": "S_217",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "AB|2A5aB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17767,12 +17047,7 @@
         {
           "name": "S_220",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "ABa|37A3B8",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     },
@@ -17786,10 +17061,6 @@
             {
               "encoding": "ABCa|3,2ACB",
               "minSpots": null
-            },
-            {
-              "encoding": "3,2ABC|a,ABC",
-              "minSpots": null
             }
           ]
         }
@@ -17801,12 +17072,7 @@
         {
           "name": "S_203",
           "offset": 0,
-          "elements": [
-            {
-              "encoding": "2AB|2,2,2,a,AB",
-              "minSpots": null
-            }
-          ]
+          "elements": []
         }
       ]
     }

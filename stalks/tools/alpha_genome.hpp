@@ -90,9 +90,28 @@ std::optional<std::string> resolvedGenomeName(const stalks::Position& p, const s
 // either itself satisfying that requirement, or carrying a direct one-level "bypass" (one of ITS OWN
 // T-children, i.e. a grandchild of `candidate`, whose exact fold equals `searchedFamilyName` itself,
 // not any AC-recursion -- see collect.ts's findBypassMatches). Throws if `searchedFamilyName` isn't
-// a NAMED_FAMILIES entry.
+// a NAMED_FAMILIES entry -- ONLY the 32 hand-authored S_1-S_32 (+shifts) families have one; a
+// registry-only fold (S_33+, the vast majority of the registry as of 2026-09-20) has no
+// tChildPlains to check against at all. A caller that resolves `searchedFamilyName` itself (e.g. by
+// walking resolvedGenomeName over an arbitrary descendant node, not a known top-level search target)
+// MUST check hasNamedFamilyEntry first and treat a miss as unclassifiable, not call this blindly --
+// see check_ttree_extras.cpp's checkWholeTree for the pattern (found the hard way 2026-09-21: it
+// crashed on ~53% of a real batch before this check was added).
 bool isYellowCandidate(const stalks::Position& candidate, const stalks::SpecDB& db,
                         const std::string& searchedFamilyName);
+
+// True iff `name` has a hand-authored NAMED_FAMILIES entry (one of the 32 S_1-S_32 families, at any
+// shift) -- i.e. whether isYellowCandidate can actually be called with `name` as the
+// searchedFamilyName without throwing. A registry-only fold (S_33+) returns false: those families
+// are defined by live quickCanon() registry membership, not a static genome tuple with declared
+// required T-children, so there is nothing for isYellowCandidate to check.
+bool hasNamedFamilyEntry(const std::string& name);
+
+// Testing-only: forces the internal registry-name index's one-time lazy build to happen now, with
+// no collections.hpp setExcludedRegistryKey exclusion active. Call this BEFORE ever setting an
+// exclusion in a leave-one-out test -- otherwise the index's first build runs UNDER that exclusion
+// and gets poisoned (see this function's own definition for the full story).
+void warmRegistryNameIndex();
 
 // The NAMED_FAMILIES entry (by name) whose bare (R,D,{L},{T'}) core equals `coreKey` exactly (e.g.
 // `genomeKey(*classifyAlphaGenome(p, db))`), or nullopt if no family has that core. Same

@@ -60,7 +60,6 @@ import {
   NAMED_FAMILIES,
   NAMED_FAMILY_GENOME_TEXT,
   NAMED_FAMILY_GROUPS,
-  bypassOnlyFoldName,
   classifyTChildren,
   computeAlphaGenome,
   expandGenomeShorthand,
@@ -75,6 +74,8 @@ import {
   registryIndexReady,
   resolvedFoldName,
   shiftMembraneLetters,
+  shiftedFamilyFoldName,
+  sumDecompositionFoldName,
 } from '../model/collectAlpha';
 import genomeDbJson from '../data/collectAlphaGenomes.json';
 
@@ -401,7 +402,7 @@ function foldToName(
   depth: number,
 ): { plain: string; html: string } {
   if (!quickGenome) return { plain, html };
-  const name = GENOME_NAMES[plain] ?? registryFoldName(g) ?? bypassOnlyFoldName(g, resolveChild, depth);
+  const name = GENOME_NAMES[plain] ?? registryFoldName(g) ?? sumDecompositionFoldName(g) ?? shiftedFamilyFoldName(g, resolveChild, depth);
   if (!name) return { plain, html };
   return { plain: name, html: `<span class="${cls}">${escapeHtml(name)}</span>` };
 }

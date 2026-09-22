@@ -92,6 +92,21 @@ export interface FourGeneGenome {
    * other "not resolved yet" case this file already tolerates). */
   quickEnc?: string;
   quickOffset?: number;
+  /** The quick-canon form of the alpha-bearing component ALONE, with any away component(s)' own
+   * combined exact nimber already XORed into the offset -- lets sumDecompositionFoldName recognize
+   * a split/sum position (only its alpha component matches a registered rep; the away component(s)
+   * don't structurally match anything, but their nimber still shifts the offset) as a member of that
+   * SAME family at the combined offset, which quickEnc/quickOffset alone cannot do: those are the
+   * quick-canon of the WHOLE (possibly multi-component) position, which for a split position is a
+   * compound rep ("<alphaRep>+<awayQuickCanonForm>") that will never match a registry index built
+   * from single-component registered elements. Root-caused 2026-09-21 (native side first, then
+   * ported here) via two false "extra" T-tree nodes that were genuine bypass witnesses by hand --
+   * see stalks/tools/alpha_genome.cpp's sumDecompositionFoldName for the full derivation (nimber
+   * additivity over disjoint sum makes this unconditionally sound, no Pairing-Theorem-specific proof
+   * needed). Equal to quickEnc/quickOffset whenever there's no away component at all. Absent when
+   * the alpha-only quickCanon call failed. */
+  quickAlphaEnc?: string;
+  quickAlphaOffset?: number;
 }
 
 /** A single movetype-5 ("T") T-child: the position it reaches, its nimber, its own lives
@@ -208,10 +223,14 @@ async function computeAlphaGenomeAtCached(
   depth: number,
 ): Promise<{ position: PositionRef; genome: AlphaGenome | FourGeneGenome } | null> {
   const split = quickAlphaSplitOf(enc);
-  const [position, res, awayResults] = await Promise.all([
+  const [position, res, awayResults, alphaOnlyQc] = await Promise.all([
     quickRef(enc),
     analyze(split.realAlphaEnc),
     Promise.all(split.awayEncs.map(e => analyze(e))),
+    // Only needed for a genuine split (see FourGeneGenome.quickAlphaEnc's own doc comment) -- when
+    // there's no away component, split.realAlphaEnc === enc, so position's own quickEnc/quickOffset
+    // (already fetched above) already ARE the alpha-only quick-canon form, no second call needed.
+    split.awayEncs.length ? quickCanonOf(split.realAlphaEnc) : Promise.resolve(null),
   ]);
   if (!res.ok) return null;
   if (!isSingleAlpha(res.canon)) return null;
@@ -222,6 +241,17 @@ async function computeAlphaGenomeAtCached(
     if (r.ok) { awayNimberXor ^= r.nimber; awayLivesSum += r.lives ?? 0; }
   }
   const awayPrefix = split.awayEncs.length ? split.awayEncs.join('+') + '+' : '';
+
+  // See FourGeneGenome.quickAlphaEnc/quickAlphaOffset's own doc comment: the alpha component's own
+  // quick-canon form with the away component(s)' combined exact nimber already folded into the
+  // offset, so sumDecompositionFoldName can recognize a split position's family at the correct
+  // combined offset even when the WHOLE position's own quickEnc (a compound rep) matches nothing.
+  const quickAlphaEnc = split.awayEncs.length
+    ? (alphaOnlyQc?.ok ? alphaOnlyQc.enc : undefined)
+    : position.quickEnc;
+  const quickAlphaOffset = split.awayEncs.length
+    ? (alphaOnlyQc?.ok ? alphaOnlyQc.offset ^ awayNimberXor : undefined)
+    : position.quickOffset;
 
   let R: number | null = null;
   let D: number | null = null;
@@ -273,6 +303,7 @@ async function computeAlphaGenomeAtCached(
       genome: {
         R, D, L: sortedDedup(L), Tprime: sortedDedup(Tprime), Rc, Dc, Lc, TprimeC,
         quickEnc: position.quickEnc, quickOffset: position.quickOffset,
+        quickAlphaEnc, quickAlphaOffset,
       },
     };
   }
@@ -293,6 +324,7 @@ async function computeAlphaGenomeAtCached(
     genome: {
       R, D, L: sortedDedup(L), Tprime: sortedDedup(Tprime), Rc, Dc, Lc, TprimeC, T,
       quickEnc: position.quickEnc, quickOffset: position.quickOffset,
+      quickAlphaEnc, quickAlphaOffset,
     },
   };
 }
@@ -491,6 +523,9 @@ export interface NamedFamily {
   name: string;
   coreKey: string;
   tChildPlains: string[];
+  /** e.g. "S_1" for both "S_1" and "S_1⊕2" -- see sameBaseOtherShift's own doc comment. */
+  base: string;
+  shift: number;
 }
 
 /** Old names kept working for backward-compatible search-bar typing (e.g. "S_12" for what's
@@ -566,7 +601,7 @@ function buildRegistry(): GenomeRegistry {
     }
     named[key] = name;
     genomeTextByName[name] = key;
-    families.push({ name, coreKey: fourGeneKeyOf(g), tChildPlains: [...g.T].sort() });
+    families.push({ name, coreKey: fourGeneKeyOf(g), tChildPlains: [...g.T].sort(), base: family, shift });
     const shorthand = name.replace(/⊕/g, '+');
     byShorthand[shorthand] = g;
     shorthandNames[shorthand] = name;
@@ -691,6 +726,24 @@ export const registryIndexReady: Promise<void> = buildRegistryIndex();
 export function registryFoldName(g: { quickEnc?: string; quickOffset?: number }): string | undefined {
   if (!registryIndexSnapshot || g.quickEnc === undefined || g.quickOffset === undefined) return undefined;
   return registryIndexSnapshot.get(g.quickEnc)?.get(g.quickOffset);
+}
+
+/** Handles what registryFoldName alone cannot: a split/sum position whose alpha-bearing component
+ * ALONE already reduces to a registered rep, but whose away component(s) don't structurally match
+ * anything -- so the WHOLE position's own quickEnc (a compound rep, e.g. "2a+3,6") never matches the
+ * registry index, even though the away component(s)' own nimber genuinely just shifts the offset.
+ * Since nimber is additive (XOR) over disjoint sum -- the same axiom the whole quick-canon offset
+ * system already rests on (nimber(Q) = quickNimber(rep) ^ offset) -- "known rep P summed with ANY
+ * companion of nimber k" is unconditionally nimber-equivalent to "P at offset k": no Pairing-
+ * Theorem-specific verification needed, only ordinary Sprague-Grundy sum additivity. Ported from the
+ * native fix in stalks/tools/alpha_genome.cpp's sumDecompositionFoldName (see that function's own
+ * doc comment for the full derivation and the two concrete false-positive cases that surfaced it,
+ * 2026-09-21) -- quickAlphaEnc/quickAlphaOffset are precomputed in computeAlphaGenomeAtCached (the
+ * XOR there needs the away component(s)' real exact nimber, an async engine call this function, kept
+ * synchronous like registryFoldName, can't make itself). */
+export function sumDecompositionFoldName(g: { quickAlphaEnc?: string; quickAlphaOffset?: number }): string | undefined {
+  if (!registryIndexSnapshot || g.quickAlphaEnc === undefined || g.quickAlphaOffset === undefined) return undefined;
+  return registryIndexSnapshot.get(g.quickAlphaEnc)?.get(g.quickAlphaOffset);
 }
 
 /** Roster name (as authored in stalks/src/collections.cpp -- "S_1", "S_2", "S_3", "S_4", ...) ->
@@ -861,38 +914,78 @@ export function familyForCore(g: { R: number | null; D: number | null; L: number
   return NAMED_FAMILIES.find(f => f.coreKey === coreKeyOf(g));
 }
 
-/** A genome's name via the bypass-only fallback rule: NAMED_FAMILIES has an entry (S_1/S_2 today)
- * whose OWN `tChildPlains` is empty, meaning that family asserts no T-gene requirement at all --
- * core match alone is its complete definition (the Pairing Theorem's base pair; every other
- * T-child relationship is a bypass, never a requirement). Moved here (2026-09-03) from collect.ts,
- * shared by resolvedFoldName below and by collect.ts's own foldToName (main genome display).
+/** EVERY named family whose (R,D,{L},{T'}) core matches `g`, not just the first (priority-order)
+ * match familyForCore returns -- several distinct (family, shift) pairs legitimately share a bare
+ * core and differ only in required T-genes (mirrors the native side's allFamiliesForCoreKey; see
+ * that function's own doc comment). Used by shiftedFamilyFoldName so a lower-priority sibling
+ * sharing a base family's core isn't invisible to folding just because a higher-priority one
+ * happens to come first and doesn't fit. */
+export function familiesForCore(g: { R: number | null; D: number | null; L: number[]; Tprime: number[] }): NamedFamily[] {
+  const key = coreKeyOf(g);
+  return NAMED_FAMILIES.filter(f => f.coreKey === key);
+}
+
+/** True iff `resolvedName` names the SAME base family as `family` (e.g. "S_1" for both "S_1" and
+ * "S_1⊕2") at a DIFFERENT shift. A component of nimber q, by the mex property that defines its own
+ * nimber, can never itself have a child of nimber exactly q (if it did, q would not be the mex) --
+ * so an away component paired with a family at shift q can legitimately produce a T-child at ANY
+ * OTHER shift r != q, not just the mandatory 0..q-1 range (mex only guarantees 0..q-1 are covered;
+ * nothing rules out an away component ALSO having moves reaching shifts above q). Root-caused
+ * 2026-09-22 (a T-child whose own genome text was literally the shifted family's defining tuple,
+ * e.g. "(1,0,{1},{},[S_1,S_1⊕2])" for S_1⊕1 -- S_1⊕1 requires only S_1 at shift 0, but a real
+ * member can ALSO have an S_1⊕2 T-gene without that making it any less a genuine S_1⊕1 member).
+ * Ported from the native fix (stalks/tools/alpha_genome.cpp's sameBaseOtherShift). */
+function sameBaseOtherShift(family: NamedFamily, resolvedName: string | null): boolean {
+  if (resolvedName === null) return false;
+  const t = NAMED_FAMILIES.find(f => f.name === resolvedName);
+  return !!t && t.base === family.base && t.shift !== family.shift;
+}
+
+/** A genome's name via EVERY named family sharing its bare (R,D,{L},{T'}) core (not just the first
+ * -- see familiesForCore's own doc comment: several distinct families/shifts can collide on a bare
+ * core). For each candidate family, every one of `g`'s own T-children must be accounted for --
+ * satisfying a required T-gene, bypassing back to this same family, OR (see sameBaseOtherShift)
+ * resolving to the SAME base family at a different shift -- via the exact same classifyTChildren
+ * rule isYellowCandidate and the T-gene table already use, PLUS every one of the family's own
+ * required tChildPlains must actually be present. Moved here (2026-09-03) from collect.ts, shared
+ * by resolvedFoldName below and by collect.ts's own foldToName (main genome display).
  *
- * A bare core match alone is NOT sufficient when `g` is a FULL genome (g.T known): every one of
- * `g`'s own T-children must ALSO be accounted for -- either satisfying a required T-gene
- * (impossible here, tChildPlains is empty by definition) or bypassing back to this same family --
- * via the exact same classifyTChildren rule isYellowCandidate and the T-gene table already use.
- * Root-caused 2026-09-16: `[1,12,2a/` displayed as "S_1" despite its own T-child `[12,27a8/` having
- * no bypass back to S_1 (and S_1 has no required T-gene to excuse it either) -- the swap REGISTRY
- * (collections.cpp/isYellowCandidate) already rejected this position correctly; only this
- * DISPLAY-fold path was still using the looser, core-only rule. Returns null (no fold) while any
- * T-child's own resolution is still pending, matching `foldedPlainText`'s existing "self-corrects
- * on a later call" convention rather than folding prematurely on incomplete data.
+ * Generalizes the older, narrower `bypassOnlyFoldName` (2026-09-03 through 2026-09-21), which only
+ * ever tried the ONE family exactly matching the core AND restricted to tChildPlains-EMPTY families
+ * (S_1/S_2) -- root-caused 2026-09-16: `[1,12,2a/` displayed as "S_1" despite its own T-child
+ * `[12,27a8/` having no bypass back to S_1 (the swap REGISTRY, collections.cpp/isYellowCandidate,
+ * already rejected this position correctly; only this DISPLAY-fold path was still using the looser,
+ * core-only rule) -- and root-caused again 2026-09-22 via a real member whose own T-list was
+ * "[S_1,S_1⊕2]" (S_1⊕1's required S_1 PLUS a legitimate extra S_1⊕2 T-gene, which neither the old
+ * rule nor a plain namedGenomes()-style exact-text match could recognize as still being S_1⊕1).
+ * Returns null (no fold) while any T-child's own resolution is still pending for the family CURRENTLY
+ * being tried, matching `foldedPlainText`'s existing "self-corrects on a later call" convention --
+ * stops at the first pending family rather than skipping ahead to a lower-priority one, so priority
+ * order (families tried in NAMED_FAMILIES' own registration order) can never be violated by racing
+ * resolution timing.
  *
  * For a depth-capped BARE tuple (no T list to check -- isFullGenome(g) false), there is no better
- * option than the unchecked core-only rule, so this function auto-detects via isFullGenome rather
- * than exposing that choice to callers as two separate functions (an EARLIER version did exactly
- * that, as bypassOnlyFoldName/bypassOnlyFoldNameChecked: nothing then stopped a future caller
- * holding a full genome from picking the unchecked one, silently reintroducing the exact bug
- * above -- their split was enforced only by doc-comment convention, not the type system, since the
- * unchecked variant's structural `{R,D,L,Tprime}` parameter type let a full AlphaGenome through
- * without complaint). `resolveChild`/`depth` are unused (but still required) when `g` isn't full. */
-export function bypassOnlyFoldName(g: AlphaGenome | FourGeneGenome, resolveChild: ResolveChild, depth: number): string | null {
-  const family = familyForCore(g);
-  if (!family || family.tChildPlains.length !== 0) return null;
-  if (!isFullGenome(g)) return family.name;
-  const rows = classifyTChildren(g.T, family, family.name, resolveChild, depth);
-  if (rows.some(r => r.pending || r.isExtra)) return null;
-  return family.name;
+ * option than the unchecked core-only rule (and only a tChildPlains-empty family can be trusted on
+ * core alone), so this function auto-detects via isFullGenome rather than exposing that choice to
+ * callers as two separate functions (an EARLIER version did exactly that, as bypassOnlyFoldName/
+ * bypassOnlyFoldNameChecked: nothing then stopped a future caller holding a full genome from picking
+ * the unchecked one, silently reintroducing the exact 2026-09-16 bug above -- their split was
+ * enforced only by doc-comment convention, not the type system, since the unchecked variant's
+ * structural `{R,D,L,Tprime}` parameter type let a full AlphaGenome through without complaint).
+ * `resolveChild`/`depth` are unused (but still required) when `g` isn't full. */
+export function shiftedFamilyFoldName(g: AlphaGenome | FourGeneGenome, resolveChild: ResolveChild, depth: number): string | null {
+  if (!isFullGenome(g)) {
+    const family = familyForCore(g);
+    return family && family.tChildPlains.length === 0 ? family.name : null;
+  }
+  for (const family of familiesForCore(g)) {
+    const rows = classifyTChildren(g.T, family, family.name, resolveChild, depth);
+    if (rows.some(r => r.pending)) return null;
+    if (rows.some(r => r.isExtra)) continue;
+    const presentNames = new Set(rows.map(r => r.resolvedName).filter((n): n is string => n !== null));
+    if (family.tChildPlains.every(want => presentNames.has(want))) return family.name;
+  }
+  return null;
 }
 
 /** Resolves a T-child's own genome given its encoding and (if already loaded) an embedded genome
@@ -925,7 +1018,7 @@ function foldedPlainText(
   const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}}`;
   if (!isFullGenome(g)) {
     const plain = head + ')';
-    return GENOME_NAMES[plain] ?? registryFoldName(g) ?? bypassOnlyFoldName(g, resolveChild, depth) ?? plain;
+    return GENOME_NAMES[plain] ?? registryFoldName(g) ?? sumDecompositionFoldName(g) ?? shiftedFamilyFoldName(g, resolveChild, depth) ?? plain;
   }
   const seen = new Set<string>();
   const children: string[] = [];
@@ -938,7 +1031,7 @@ function foldedPlainText(
   }
   children.sort();
   const plain = `${head},[${children.join(',')}])`;
-  return GENOME_NAMES[plain] ?? registryFoldName(g) ?? bypassOnlyFoldName(g, resolveChild, depth) ?? plain;
+  return GENOME_NAMES[plain] ?? registryFoldName(g) ?? sumDecompositionFoldName(g) ?? shiftedFamilyFoldName(g, resolveChild, depth) ?? plain;
 }
 
 /** `g`'s own exact fold (see foldedPlainText) if it has one, else null. Moved here (2026-09-03)
@@ -1035,7 +1128,8 @@ export function classifyTChildren(
     const matches = targetName && tGenome ? findBypassMatches(tGenome, targetName, resolveChild, depth + 1) : null;
     const pending = tGenome === undefined || (targetName !== null && matches === null);
     const hasBypass = !!matches && matches.length > 0;
-    const isExtra = !!family && !pending && !familyRequiresTChildPlain(family, resolvedName) && !hasBypass;
+    const isSameBaseOtherShift = !!family && sameBaseOtherShift(family, resolvedName);
+    const isExtra = !!family && !pending && !familyRequiresTChildPlain(family, resolvedName) && !hasBypass && !isSameBaseOtherShift;
     return { t, tGenome, resolvedName, matches, pending, isExtra };
   });
 }

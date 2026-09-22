@@ -4,6 +4,7 @@
 #include "collections.hpp"
 #include "encoding.hpp"
 #include "genome_defs.generated.hpp"
+#include "graph.hpp"
 #include "moves.hpp"
 #include "registry_audit_common.hpp"
 #include "tokens.hpp"
@@ -203,6 +204,9 @@ struct NamedFamily {
     std::string name;
     std::string coreKey;
     std::vector<std::string> tChildPlains;  // sorted, matches collectAlpha.ts's [...g.T].sort()
+    std::string base;  // e.g. "S_1" for both "S_1" and "S_1⊕2" -- see isYellowCandidate's own
+                        // "same base, any other shift" acceptance rule.
+    int shift = 0;
 };
 
 const std::vector<NamedFamily>& namedFamilies() {
@@ -212,7 +216,7 @@ const std::vector<NamedFamily>& namedFamilies() {
         auto pushFamily = [&](const std::string& familyName, int shift) {
             const ResolvedGenome& g = resolveGenome(familyName, shift);
             families.push_back({foldedNameOf(familyName, shift), fourGeneKeyOf(g),
-                                 std::vector<std::string>(g.T.begin(), g.T.end())});
+                                 std::vector<std::string>(g.T.begin(), g.T.end()), familyName, shift});
         };
         const auto& defs = genome_defs_generated::familyDefs();
         for (const auto& entry : defs) pushFamily(entry.first, 0);
@@ -355,6 +359,83 @@ std::string registryFoldName(const Position& p) {
     return byOffset != byRep->second.end() ? byOffset->second : std::string();
 }
 
+// A dedicated, lazily-built, process-lifetime Exact GameGraph used ONLY to compute the nimber of a
+// "leftover" non-alpha component when folding a sum position -- see sumDecompositionFoldName's own
+// doc comment for why this is needed. Deliberately separate from any SpecDB a caller passes in
+// (find_yellow_candidates/check_ttree_extras's own db is scoped to reachability from THEIR OWN
+// root and may not contain an arbitrary detached sub-component); a component's own nimber is
+// context-independent, so solving it fresh here is always correct, just requires its own graph.
+// Memoized (both by the graph's own node cache and this file's usual cacheKey convention) so
+// repeated folds of the same leftover shape across many candidates in one run are cheap.
+GameGraph& sumDecompositionGraph() {
+    static GameGraph g(GameGraph::Mode::Exact);
+    return g;
+}
+
+std::map<std::string, int> gComponentNimberCache;
+
+int exactComponentNimber(const Position& p) {
+    const std::string key = serialize(p);
+    const auto cached = gComponentNimberCache.find(key);
+    if (cached != gComponentNimberCache.end()) return cached->second;
+    const int n = sumDecompositionGraph().ensure(p)->nimber;
+    gComponentNimberCache.emplace(key, n);
+    return n;
+}
+
+// Handles the case registryFoldName alone cannot: a position that's a disjoint SUM of (a) the
+// single component actually carrying the alpha/crit token, which by itself already reduces to a
+// registered single-crit rep, and (b) one or more OTHER components with no crit/port at all, whose
+// own combined value doesn't happen to match any further registry pattern as text but nonetheless
+// has a well-defined exact nimber. Since nimber is additive (XOR) over disjoint sum -- the same
+// axiom the whole quick-canon offset system is already built on (nimber(Q) = quickNimber(rep) ^
+// offset, see collections.hpp) -- "known rep P summed with ANY companion of nimber k" is ALWAYS
+// nimber-equivalent to "P at offset k", regardless of what the companion structurally is: no
+// Pairing-Theorem-specific verification is needed for this step, only ordinary Sprague-Grundy sum
+// additivity. Root-caused 2026-09-21 via two T-tree "extra" false positives (1Aa|2AB|6,B's own
+// grandchildren "2a+2A|6,A" and "22+2A|1Aa", both real bypass witnesses per the user's own by-hand
+// derivation, neither recognized because quickCanon's own registry-swap steps only ever match a
+// registered rep against a WHOLE component, never a sum of "matched rep" + "separately-valued
+// leftover") -- this is the same class of gap already flagged, independently, as the S_2⊕2 "subpart
+// recursion" open item (see [[project_advanced_collections]]). Deliberately implemented HERE, in
+// the display/classification-fold layer, rather than inside collections.cpp's core quickCanon() --
+// quickCanon is a pure structural transform with no access to nimber values at all (computing one
+// requires a real exact solve, which would need a graph.hpp dependency quickCanon doesn't have and
+// arguably shouldn't gain, since graph.cpp already depends on collections.hpp for Quick mode -- a
+// reverse dependency would be circular). This function only affects genome NAMING/classification
+// (Collect/T-Tree/discovery-tool display), never move generation or a position's own core identity.
+std::string sumDecompositionFoldName(const Position& p) {
+    if (p.components.size() < 2) return std::string();
+
+    int alphaIdx = -1;
+    for (std::size_t i = 0; i < p.components.size(); ++i) {
+        Position solo;
+        solo.components = {p.components[i]};
+        if (hasSpecialPoint(solo)) {
+            if (alphaIdx >= 0) return std::string();  // more than one alpha-bearing component --
+                                                        // not the single-alpha case this handles.
+            alphaIdx = static_cast<int>(i);
+        }
+    }
+    if (alphaIdx < 0) return std::string();  // no alpha component at all -- not our case.
+
+    Position aloneP;
+    aloneP.components = {p.components[static_cast<std::size_t>(alphaIdx)]};
+    const QuickCanonResult qc = quickCanon(aloneP);
+    const auto& index = registryNameIndex();
+    const auto byRep = index.find(serialize(qc.rep));
+    if (byRep == index.end()) return std::string();  // alpha component alone isn't a registered
+                                                        // family either -- nothing to fold to.
+
+    Position restP;
+    for (std::size_t i = 0; i < p.components.size(); ++i)
+        if (static_cast<int>(i) != alphaIdx) restP.components.push_back(p.components[i]);
+    const int restNimber = exactComponentNimber(restP);
+
+    const auto byOffset = byRep->second.find(qc.offset ^ restNimber);
+    return byOffset != byRep->second.end() ? byOffset->second : std::string();
+}
+
 // Exact-fold match first (namedGenomes(), the finite hand-authored/derived set of full "(R,D,{L},
 // {T'},[T])" strings); failing that, the registry-based structural match above; failing that, the
 // bypass-only core fallback below -- a finite string table can never enumerate every real T-list a
@@ -367,6 +448,8 @@ std::string foldToName(const std::string& plainText, const Position& p) {
     if (it != namedGenomes().end()) return it->second;
     const std::string registryName = registryFoldName(p);
     if (!registryName.empty()) return registryName;
+    const std::string sumName = sumDecompositionFoldName(p);
+    if (!sumName.empty()) return sumName;
     const auto bracket = plainText.find(",[");
     const std::string coreKey = bracket != std::string::npos ? plainText.substr(0, bracket) + ")" : plainText;
     const std::string fallback = bypassOnlyFoldName(coreKey);
@@ -374,42 +457,67 @@ std::string foldToName(const std::string& plainText, const Position& p) {
 }
 
 // Forward-declared: genomeTextAt is defined further down (it's the function that calls
-// foldToNameChecked below), but bypassOnlyFoldNameChecked needs to call it too (to fold a
-// grandchild for the bypass check) -- no hoisting in C++, so a prototype is required here.
+// foldToNameChecked below), but shiftedFamilyFoldNameChecked needs to call it too (to fold a
+// grandchild/T-child for the bypass/same-shift check) -- no hoisting in C++, so a prototype is
+// required here.
 std::string genomeTextAt(const Position& p, const SpecDB& db, int depth, Token target);
 
-// `bypassOnlyFoldName`, but ALSO verifying that every one of `p`'s own T-children is accounted for
-// -- a bypass back to this same family, since a bypass-only family has nothing to require. Mirrors
-// collectAlpha.ts's `bypassOnlyFoldNameChecked` (see that function's own doc comment for the full
-// rationale: root-caused 2026-09-16 via `[1,12,2a/` folding to "S_1" despite its own T-child
-// `[12,27a8/` having no bypass back to S_1 -- the swap REGISTRY, collections.cpp/isYellowCandidate,
-// already rejected this position correctly; only this DISPLAY-fold path was still using the looser,
-// core-only rule).
+// For EVERY named family sharing `p`'s bare core (a core can collide across several
+// families/shifts -- see allFamiliesForCoreKey's own doc comment), checks whether `p`'s own
+// T-children are all accounted for under that family, and returns the first one that fully
+// qualifies. A T-child is accounted for if it (a) satisfies one of the family's own required
+// tChildPlains, (b) carries a bypass -- one of ITS OWN children folds back to the family's exact
+// name, or (c) resolves to the SAME base family at a DIFFERENT shift (see sameBaseOtherShift's own
+// doc comment on isYellowCandidate for the full mex-based derivation: a component of nimber q can
+// never itself produce a child of nimber q, so a T-gene at any other shift is always legitimate,
+// not just the mandatory 0..shift-1 range). Supersedes the older, narrower `bypassOnlyFoldName`-
+// Checked (2026-09-16 through 2026-09-21), which only ever handled bypass-only (tChildPlains-empty)
+// families like S_1/S_2 and required an explicit bypass for every T-child with no same-shift
+// allowance -- root-caused 2026-09-22 via a real member whose own T-list was
+// "[S_1,S_1⊕2]" (S_1⊕1's required S_1 PLUS a legitimate extra S_1⊕2 T-gene), which neither the old
+// rule nor a plain namedGenomes() exact-text match could recognize as still being S_1⊕1.
 //
 // Deliberately does NOT reuse `isYellowCandidate` directly: that function (and
 // `resolvedGenomeName`, which it calls) is hardcoded to ALPHA, while `genomeTextAt`/`foldToName`
 // here are genuinely generic over `target` (double_crit_genome.cpp calls this same pipeline with a
 // different crit token) -- reusing the ALPHA-only helper would silently check the WRONG token's
-// T-children whenever `target != ALPHA`. This re-derives the identical per-child rule
-// (isYellowCandidate's own `hasBypass` loop, with `family.tChildPlains` empty so
-// `satisfiesRequired` is always false) using the already-`target`-parametrized `tChildrenOf`/
-// `genomeTextAt` this file already has, so the two implementations can't drift on WHAT the rule is,
-// only (necessarily) on being target-generic where isYellowCandidate is ALPHA-only by design.
-std::string bypassOnlyFoldNameChecked(const Position& p, const SpecDB& db, Token target,
-                                       const std::string& coreKey) {
-    const NamedFamily* family = familyForCoreKey(coreKey);
-    if (!family || !family->tChildPlains.empty()) return std::string();
-    for (const Position& t : tChildrenOf(p, target)) {
-        bool hasBypass = false;
-        for (const Position& gc : tChildrenOf(t, target)) {
-            if (genomeTextAt(gc, db, 0, target) == family->name) {
-                hasBypass = true;
-                break;
+// T-children whenever `target != ALPHA`. This re-derives the identical per-child rule using the
+// already-`target`-parametrized `tChildrenOf`/`genomeTextAt` this file already has, so the two
+// implementations can't drift on WHAT the rule is, only (necessarily) on being target-generic where
+// isYellowCandidate is ALPHA-only by design.
+std::string shiftedFamilyFoldNameChecked(const Position& p, const SpecDB& db, Token target,
+                                          const std::string& coreKey) {
+    for (const NamedFamily* family : allFamiliesForCoreKey(coreKey)) {
+        std::set<std::string> presentNames;
+        bool allAccounted = true;
+        for (const Position& t : tChildrenOf(p, target)) {
+            const std::string resolvedText = genomeTextAt(t, db, 0, target);
+            const bool isName = !resolvedText.empty() && resolvedText[0] != '(';
+
+            bool hasBypass = false;
+            for (const Position& gc : tChildrenOf(t, target)) {
+                if (genomeTextAt(gc, db, 0, target) == family->name) { hasBypass = true; break; }
             }
+
+            const bool satisfiesRequired = isName && tChildPlainsContain(*family, resolvedText);
+            bool isSameBaseOtherShift = false;
+            if (isName) {
+                const NamedFamily* tFamily = familyForName(resolvedText);
+                isSameBaseOtherShift =
+                    tFamily && tFamily->base == family->base && tFamily->shift != family->shift;
+            }
+            if (!satisfiesRequired && !hasBypass && !isSameBaseOtherShift) { allAccounted = false; break; }
+            if (isName) presentNames.insert(resolvedText);
         }
-        if (!hasBypass) return std::string();
+        if (!allAccounted) continue;
+
+        bool requiredSatisfied = true;
+        for (const std::string& want : family->tChildPlains) {
+            if (presentNames.find(want) == presentNames.end()) { requiredSatisfied = false; break; }
+        }
+        if (requiredSatisfied) return family->name;
     }
-    return family->name;
+    return std::string();
 }
 
 std::string foldToNameChecked(const std::string& plainText, const Position& p, const SpecDB& db,
@@ -418,9 +526,11 @@ std::string foldToNameChecked(const std::string& plainText, const Position& p, c
     if (it != namedGenomes().end()) return it->second;
     const std::string registryName = registryFoldName(p);
     if (!registryName.empty()) return registryName;
+    const std::string sumName = sumDecompositionFoldName(p);
+    if (!sumName.empty()) return sumName;
     const auto bracket = plainText.find(",[");
     const std::string coreKey = bracket != std::string::npos ? plainText.substr(0, bracket) + ")" : plainText;
-    const std::string fallback = bypassOnlyFoldNameChecked(p, db, target, coreKey);
+    const std::string fallback = shiftedFamilyFoldNameChecked(p, db, target, coreKey);
     return fallback.empty() ? plainText : fallback;
 }
 
@@ -585,6 +695,39 @@ std::vector<std::string> allFamilyNamesForCoreKey(const std::string& coreKey) {
     return out;
 }
 
+bool hasNamedFamilyEntry(const std::string& name) {
+    return familyForName(name) != nullptr;
+}
+
+// Testing-only: forces registryNameIndex()'s one-time lazy `static` build to happen NOW, unexcluded.
+// See collections.hpp's setExcludedRegistryKey doc comment for the general leave-one-out mechanism
+// this protects against: registryNameIndex() is built from every registered element's OWN quickCanon
+// reduction, and since it's a `static` computed once on first use, a caller that sets an exclusion
+// BEFORE ever triggering that first build would poison the whole index -- the excluded element's own
+// entry gets keyed by its UNREDUCED literal text instead of its real target, and every OTHER
+// registered element gets solved under that same (wrong) exclusion too. Caught 2026-09-22 debugging
+// a leave-one-out test that kept "reconfirming" an element even after excluding it, purely because
+// the index had never been warmed up first.
+void warmRegistryNameIndex() {
+    (void)registryNameIndex();
+}
+
+// True iff `resolvedName` names the SAME base family as `q` (e.g. "S_1" for both "S_1" and
+// "S_1⊕2") at a DIFFERENT shift than `q`'s own. A component of nimber q, by the mex property that
+// defines its own nimber, can never itself have a child of nimber exactly q (if it did, q would not
+// be the mex) -- so an away component paired with a family at shift q can legitimately produce a
+// T-child at ANY OTHER shift r != q, not just the mandatory 0..q-1 range (mex only guarantees
+// 0..q-1 are covered; nothing rules out an away component ALSO having moves reaching shifts above
+// q). Root-caused 2026-09-22 (a T-tree "extra" false positive on a T-child whose own genome text
+// was literally the shifted family's defining tuple, e.g. "(1,0,{1},{},[S_1,S_1⊕2])" for S_1⊕1 --
+// S_1⊕1 requires only S_1 (shift 0), but a real member can ALSO have an S_1⊕2 T-gene without that
+// making it any less a genuine S_1⊕1 member). Distinct from `hasBypass` below (a GRANDCHILD folding
+// back to `searchedFamilyName` itself) -- this checks the T-CHILD's own name directly.
+bool sameBaseOtherShift(const NamedFamily& q, const std::string& resolvedName) {
+    const NamedFamily* t = familyForName(resolvedName);
+    return t && t->base == q.base && t->shift != q.shift;
+}
+
 bool isYellowCandidate(const Position& candidate, const SpecDB& db, const std::string& searchedFamilyName) {
     const NamedFamily* family = familyForName(searchedFamilyName);
     if (!family) throw std::runtime_error("isYellowCandidate: no NAMED_FAMILIES entry named \"" + searchedFamilyName + "\"");
@@ -600,7 +743,8 @@ bool isYellowCandidate(const Position& candidate, const SpecDB& db, const std::s
         }
 
         const bool satisfiesRequired = resolvedName.has_value() && tChildPlainsContain(*family, *resolvedName);
-        const bool isExtra = !satisfiesRequired && !hasBypass;
+        const bool isSameBaseOtherShift = resolvedName.has_value() && sameBaseOtherShift(*family, *resolvedName);
+        const bool isExtra = !satisfiesRequired && !hasBypass && !isSameBaseOtherShift;
         if (isExtra) noExtras = false;
         if (resolvedName) presentNames.insert(*resolvedName);
     }

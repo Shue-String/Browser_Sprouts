@@ -1,3 +1,9 @@
+// DEPRECATED as the go-to verification step (2026-09-21) -- superseded by check_ttree_extras.cpp,
+// which re-runs the full T-gene/isYellowCandidate check at EVERY node of a candidate's whole T-tree
+// (not just a handful of sampled hosts) and shares one GameGraph across the entire batch. Prefer
+// that tool first; keep this one only as a cheap backstop for ruling out outright-false candidates
+// before the more expensive whole-tree pass. Do not delete -- still useful as a fast pre-filter.
+//
 // Ad-hoc research tool: vet a candidate left-side encoding for a collection family by DIRECT
 // exact-nimber comparison against the family's rep, across several varied right-side hosts. This
 // is the same method that caught the unsound `277a88` CSV row and tested (then correctly flagged

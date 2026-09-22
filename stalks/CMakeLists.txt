@@ -78,6 +78,18 @@ target_link_libraries(find_yellow_candidates PRIVATE stalks_core)
 add_executable(find_yellow_candidates_structural tools/find_yellow_candidates_structural.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(find_yellow_candidates_structural PRIVATE stalks_core)
 
+add_executable(dump_registry_for_ttree_check tools/dump_registry_for_ttree_check.cpp)
+target_link_libraries(dump_registry_for_ttree_check PRIVATE stalks_core)
+
+add_executable(debug_bypass_trace tools/debug_bypass_trace.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+target_link_libraries(debug_bypass_trace PRIVATE stalks_core)
+
+add_executable(debug_exclude_and_recheck tools/debug_exclude_and_recheck.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+target_link_libraries(debug_exclude_and_recheck PRIVATE stalks_core)
+
+add_executable(audit_registry_unjustified tools/audit_registry_unjustified.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+target_link_libraries(audit_registry_unjustified PRIVATE stalks_core)
+
 add_executable(double_crit_probe tools/double_crit_probe.cpp tools/alpha_genome.cpp tools/double_crit_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(double_crit_probe PRIVATE stalks_core)
 
