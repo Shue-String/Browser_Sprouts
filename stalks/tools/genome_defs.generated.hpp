@@ -25,6 +25,7 @@ struct GenomeDef {
 };
 
 constexpr int kMaxShift = 3;
+constexpr int kMaxFoldDepth = 2;
 
 // Declaration order matches genomeDefs.json exactly -- required for buildRegistry's
 // collision-resolution priority (base forms before shifted forms, in this order).

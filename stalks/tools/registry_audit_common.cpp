@@ -37,4 +37,11 @@ bool tryQuickCanonElement(const std::string& element, stalks::Position& outP,
     }
 }
 
+const std::string kYellowRowTsvHeader = "lives\tfamily\tquickEnc\tgenome\n";
+
+std::string yellowRowTsvLine(int lives, const std::string& family, const std::string& quickEnc,
+                              const std::string& genome) {
+    return std::to_string(lives) + "\t" + family + "\t" + quickEnc + "\t" + genome + "\n";
+}
+
 }  // namespace stalks_tools

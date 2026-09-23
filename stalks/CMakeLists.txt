@@ -54,9 +54,6 @@ target_link_libraries(dump_collections_roster PRIVATE stalks_core)
 add_executable(quick_reduction_counts tools/quick_reduction_counts.cpp)
 target_link_libraries(quick_reduction_counts PRIVATE stalks_core)
 
-add_executable(verify_left_side tools/verify_left_side.cpp)
-target_link_libraries(verify_left_side PRIVATE stalks_core)
-
 add_executable(nimber_vector tools/nimber_vector.cpp)
 target_link_libraries(nimber_vector PRIVATE stalks_core)
 
@@ -75,17 +72,8 @@ target_link_libraries(yellow_check PRIVATE stalks_core)
 add_executable(find_yellow_candidates tools/find_yellow_candidates.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(find_yellow_candidates PRIVATE stalks_core)
 
-add_executable(find_yellow_candidates_structural tools/find_yellow_candidates_structural.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
-target_link_libraries(find_yellow_candidates_structural PRIVATE stalks_core)
-
-add_executable(dump_registry_for_ttree_check tools/dump_registry_for_ttree_check.cpp)
+add_executable(dump_registry_for_ttree_check tools/dump_registry_for_ttree_check.cpp tools/registry_audit_common.cpp)
 target_link_libraries(dump_registry_for_ttree_check PRIVATE stalks_core)
-
-add_executable(debug_bypass_trace tools/debug_bypass_trace.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
-target_link_libraries(debug_bypass_trace PRIVATE stalks_core)
-
-add_executable(debug_exclude_and_recheck tools/debug_exclude_and_recheck.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
-target_link_libraries(debug_exclude_and_recheck PRIVATE stalks_core)
 
 add_executable(audit_registry_unjustified tools/audit_registry_unjustified.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(audit_registry_unjustified PRIVATE stalks_core)
@@ -137,12 +125,12 @@ target_link_libraries(audit_registry_necessity PRIVATE stalks_core)
 set(STALKS_ALL_TARGETS
     stalks_core stalks_tests dump_master_meta dump_child_nimbers query_position explain_move
     query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics
-    dump_collections_roster quick_reduction_counts verify_left_side nimber_vector region_frequency
-    unregistered_left_sides genome_for_reps yellow_check find_yellow_candidates find_yellow_candidates_structural
+    dump_collections_roster quick_reduction_counts nimber_vector region_frequency
+    unregistered_left_sides genome_for_reps yellow_check find_yellow_candidates
     double_crit_probe unregistered_double_crit_regions double_crit_candidates_report winning_tree
     dump_token_life find_child_parents audit_registry merge_specs check_ttree_extras
     probe_dupe_nodes audit_registry_redundancy check_candidates verify_registry_shrink
-    audit_registry_necessity
+    audit_registry_necessity dump_registry_for_ttree_check audit_registry_unjustified
 )
 
 if(MSVC)

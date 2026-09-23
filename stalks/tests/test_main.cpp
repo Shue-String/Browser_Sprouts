@@ -1652,8 +1652,8 @@ void testSpecialPointCollections() {
 // so applyMultiCritSwap must emit N new regions (matching the rep's own region count) instead of
 // always collapsing a match down to one -- and wire the rep's own internal membrane (S_11/S_11⊕1's
 // A, S_16's C/D) fresh across those new regions. Exercises both crit kinds: a real membrane host
-// pairing (queried against GameGraph::Exact by hand -- see verify_left_side.cpp/query_position
-// --graph-ensure-only for the ad-hoc method) and a special point (ALPHA, checked directly here the
+// pairing (queried against GameGraph::Exact by hand -- see query_position --graph-ensure-only
+// for the ad-hoc method) and a special point (ALPHA, checked directly here the
 // same way testSpecialPointCollections does). Nimbers below were cross-checked against
 // GameGraph::Exact via `query_position --graph-ensure-only` before being hard-coded.
 void testMultiRegionRepTarget() {

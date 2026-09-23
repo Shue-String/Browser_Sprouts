@@ -25,6 +25,7 @@
 #include "encoding.hpp"
 #include "moves.hpp"
 #include "position.hpp"
+#include "registry_audit_common.hpp"
 #include "specfile.hpp"
 #include "tokens.hpp"
 
@@ -55,7 +56,7 @@ int main(int argc, char** argv) {
     // waiting for the whole (possibly hours-long) run to finish and write outPath once at the end.
     const std::string livePath = outPath + ".live";
     std::ofstream liveOut(livePath, std::ios::binary);
-    liveOut << "lives\tfamily\tquickEnc\tgenome\n";
+    liveOut << kYellowRowTsvHeader;
     liveOut.flush();
 
     std::set<std::string> seenQuickEnc;
@@ -125,7 +126,7 @@ int main(int argc, char** argv) {
                     const std::string genome = fullGenomeText(pBase, db);
                     yellowRows.push_back({lives, quickEnc, family, genome});
                     ++yellowByFamily[family];
-                    liveOut << lives << "\t" << family << "\t" << quickEnc << "\t" << genome << "\n";
+                    liveOut << yellowRowTsvLine(lives, family, quickEnc, genome);
                     liveOut.flush();
                 }
             }
@@ -153,9 +154,9 @@ int main(int argc, char** argv) {
         std::cerr << "cannot open output file: " << outPath << "\n";
         return 1;
     }
-    f << "lives\tfamily\tquickEnc\tgenome\n";
+    f << kYellowRowTsvHeader;
     for (const Row& r : yellowRows)
-        f << r.lives << "\t" << r.family << "\t" << r.quickEnc << "\t" << r.genome << "\n";
+        f << yellowRowTsvLine(r.lives, r.family, r.quickEnc, r.genome);
     std::cerr << "wrote " << yellowRows.size() << " yellow candidates to " << outPath << "\n";
 
     return 0;

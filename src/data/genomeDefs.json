@@ -1,5 +1,6 @@
 {
   "maxShift": 3,
+  "maxFoldDepth": 2,
   "families": {
     "S_1": { "R": 0, "D": 1, "L": [0], "Tprime": [], "T": [] },
     "S_2": { "R": 1, "D": 1, "L": [0], "Tprime": [0], "T": [] },

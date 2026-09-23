@@ -15,6 +15,7 @@
 #include "collections.hpp"
 #include "encoding.hpp"
 #include "position.hpp"
+#include "registry_audit_common.hpp"
 
 #include <cstdlib>
 #include <fstream>
@@ -37,7 +38,7 @@ int main(int argc, char** argv) {
         std::cerr << "cannot open output file: " << outPath << "\n";
         return 1;
     }
-    f << "lives\tfamily\tquickEnc\tgenome\n";
+    f << stalks_tools::kYellowRowTsvHeader;
 
     int written = 0, skipped = 0;
     for (const CollectionRoster& r : allCollectionRosters()) {
@@ -47,7 +48,7 @@ int main(int argc, char** argv) {
                 const QuickCanonResult qc = quickCanon(p);
                 const int lives = qc.rep.leftSideLives2() / 2;
                 if (lives > maxLives) continue;
-                f << lives << "\t" << r.name << "\t" << serialize(qc.rep) << "\t-\n";
+                f << stalks_tools::yellowRowTsvLine(lives, r.name, serialize(qc.rep), "-");
                 ++written;
             } catch (const std::exception& e) {
                 std::cerr << "skipping " << r.name << " \"" << enc << "\": " << e.what() << "\n";

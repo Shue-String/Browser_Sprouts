@@ -691,7 +691,6 @@ TSV parse/write plumbing for the three `audit_registry_*`/`verify_registry_shrin
 | Tool | Purpose |
 |---|---|
 | `find_yellow_candidates.cpp` | Scan `.spec` corpus files for single-alpha left sides whose genome matches a named family and aren't yet registered ("go yellow") |
-| `find_yellow_candidates_structural.cpp` | Same, but enumerates candidates directly from the real structural game tree's own crit-finder instead of a pre-built `.spec` corpus (supersedes the corpus approach for reaching beyond ~4 real spots) |
 | `unregistered_left_sides.cpp` | Report every quick-canon single-alpha left side (grouped by life count) not recognized by any registered collection |
 | `unregistered_double_crit_regions.cpp` | Double-crit analogue of the above: candidate two-membrane regions not in `doubleCritRegistry()` |
 | `double_crit_candidates_report.cpp` | For unregistered double-crit candidates, compute + group by genome text to spot shared families |
@@ -708,7 +707,6 @@ TSV parse/write plumbing for the three `audit_registry_*`/`verify_registry_shrin
 | `check_ttree_extras.cpp` | Whole-T-Tree cross-check of `isYellowCandidate` — verifies every required/bypass-witness descendant is clean, not just the root |
 | `find_child_parents.cpp` | Given a target T-child, report which candidate parents actually reach it as a real T-child (traces a specific data-integrity issue back to its source) |
 | `probe_dupe_nodes.cpp` | Check a `.spec` file for duplicate-encoding nodes (should be zero after `merge_specs.cpp`) |
-| `verify_left_side.cpp` | Vet a candidate against a family rep by direct exact-nimber comparison across several hosts — necessary but not sufficient; a T-gene check is the authoritative test |
 | `nimber_vector.cpp` | Compute exact nimbers for a batch of left sides across several fixed hosts (e.g. to test for an offset-sibling relationship without knowing the offset in advance) |
 
 ## Genome computation

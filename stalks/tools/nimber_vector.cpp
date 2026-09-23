@@ -2,7 +2,7 @@
 // (structural, registry-independent) nimber of that left side embedded against several fixed
 // hosts, sharing one GameGraph across the whole run for memoization. Used to test whether two
 // registered families' reps are offset-siblings of each other (constant XOR difference across
-// every host) without knowing the offset in advance -- verify_left_side.exe requires a known
+// every host) without knowing the offset in advance -- an offset-first tool would require a known
 // expectedOffset per call, which doesn't scale to an unguided N-vs-M sweep across many reps.
 //
 // Usage: nimber_vector <encodings.txt> [out.tsv]
@@ -42,7 +42,7 @@ int exactNimber(GameGraph& g, const std::string& posText) {
 
 const std::vector<std::string> kDefaultHosts = {"0,Z", "0,0,Z", "1Z", "1,1Z", "22,Z", "0Z", "2Z", "3,Z"};
 
-// Semicolon-separated, same convention as verify_left_side.cpp's STALKS_VERIFY_HOSTS.
+// Semicolon-separated list of hosts, read from the STALKS_VERIFY_HOSTS env var.
 std::vector<std::string> hostsFromEnv() {
     const char* v = std::getenv("STALKS_VERIFY_HOSTS");
     if (!v || !v[0])

@@ -62,20 +62,19 @@ import {
   NAMED_FAMILY_GROUPS,
   classifyTChildren,
   computeAlphaGenome,
+  distinctPortLetters,
   expandGenomeShorthand,
   familyForCore,
   familyRequiresTChildPlain,
   fmtNimber,
+  foldChain,
   genomeKey,
   isFullGenome,
   nameForShorthand,
   parseGenomeQuery,
-  registryFoldName,
   registryIndexReady,
   resolvedFoldName,
   shiftMembraneLetters,
-  shiftedFamilyFoldName,
-  sumDecompositionFoldName,
 } from '../model/collectAlpha';
 import genomeDbJson from '../data/collectAlphaGenomes.json';
 
@@ -402,7 +401,7 @@ function foldToName(
   depth: number,
 ): { plain: string; html: string } {
   if (!quickGenome) return { plain, html };
-  const name = GENOME_NAMES[plain] ?? registryFoldName(g) ?? sumDecompositionFoldName(g) ?? shiftedFamilyFoldName(g, resolveChild, depth);
+  const name = foldChain(g, plain, resolveChild, depth);
   if (!name) return { plain, html };
   return { plain: name, html: `<span class="${cls}">${escapeHtml(name)}</span>` };
 }
@@ -1189,16 +1188,6 @@ function renderCollectionItems(name: string, members: Entry[]): { itemsHtml: str
   // own comment above), so an offset with a rep but no real members/static elements still counts
   // as empty for renderCollectionGroup's "drop an offset with nothing in it" rule.
   return { itemsHtml, count: members.length + staticLabels.length + (repItem ? 1 : 0), hasContent: members.length + staticLabels.length > 0 };
-}
-
-// Distinct lowercase crit-port letters ('a'-'z') in a roster-authored left-side/rep text --
-// mirrors collectAlpha.ts's own (private) distinctPortLetters and stalks/tools/alpha_genome.cpp's.
-// A double-crit rep (Z_1's "2ba", 2 distinct letters -- both LITERAL alpha/beta here, not a
-// schematic single-crit placeholder) is exactly what this whole feature (collectAlpha.ts's own
-// module doc comment) is NOT scoped to handle -- guarded the same way registryNameIndex/
-// buildRepCanonSet already guard against it elsewhere.
-function distinctPortLetters(s: string): number {
-  return new Set([...s].filter(ch => ch >= 'a' && ch <= 'z')).size;
 }
 
 /** RAW genome for a registry-only collection's own rep (S_33+ -- no genomeDefs.json entry, so

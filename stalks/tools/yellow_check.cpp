@@ -6,7 +6,7 @@
 //
 // Each candidate is given as roster left-side text (e.g. "17a8", "1a") -- same syntax as
 // collections.cpp's own registry strings, with lowercase 'a' as the ALPHA special-point token --
-// wrapped in "[...]" to form a one-region position, matching verify_left_side.cpp's own convention.
+// wrapped in "[...]" to form a one-region position.
 //
 // Builds its own small Exact GameGraph rooted at each candidate (no pre-built .spec file needed) and
 // prints: the candidate's own classified genome, its top-level T-children with each one's resolved

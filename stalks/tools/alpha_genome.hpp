@@ -13,6 +13,14 @@
 
 namespace stalks_tools {
 
+// Maximum recursion depth for nested [T] genomes -- depth 0 is the position itself, 1 its
+// T-children's own full genomes, kMaxFoldDepth the last level with a full [T] expansion (one level
+// beyond that truncates to the bare 4-gene tuple). Single-sourced in src/data/genomeDefs.json's
+// "maxFoldDepth" (mirrors collectAlpha.ts's own MAX_GENOME_DEPTH) via genome_defs.generated.hpp;
+// re-exported here so a caller of this header (e.g. double_crit_genome.cpp) doesn't need its own
+// #include of the generated header just for this one constant.
+extern const int kMaxFoldDepth;
+
 // The (R, D, {L}, {T'}) genome of a single-alpha position, per the engine's own movetype
 // classification (moves.hpp's specialPointMovetypes; movetype 1->R, 2->D, 3->L, 4->T', 5->T --
 // see collect_alpha_genetics.cpp's top-of-file doc comment for the full mapping). T itself is not

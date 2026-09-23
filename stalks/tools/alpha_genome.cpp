@@ -20,6 +20,11 @@ using namespace stalks;
 
 namespace stalks_tools {
 
+// Single-sourced from genomeDefs.json's "maxFoldDepth" via genome_defs.generated.hpp (see
+// genGenomeDefsHeader.cjs); declared (extern) in alpha_genome.hpp so double_crit_genome.cpp can
+// share this same definition instead of hand-typing its own copy of the constant.
+const int kMaxFoldDepth = genome_defs_generated::kMaxFoldDepth;
+
 namespace {
 
 std::string setStrBare(const std::set<int>& s) {
@@ -537,7 +542,8 @@ std::string foldToNameChecked(const std::string& plainText, const Position& p, c
 // depth 0 = the position itself, 1 = its T-children (full, with their own [T]), 2 = T-of-T
 // (truncated to the bare 4-gene tuple, no further [T]) -- matches collectAlpha.ts's
 // MAX_GENOME_DEPTH; none of the named genomes above need deeper nesting to be recognized.
-constexpr int kMaxFoldDepth = 2;
+// kMaxFoldDepth itself is declared in alpha_genome.hpp and defined below, outside this anonymous
+// namespace (needs external linkage so double_crit_genome.cpp can link against it too).
 
 // classifyAlphaGenome/tChildrenOf/genomeTextAt are pure functions of (p, target[, depth]):
 // classifyAlphaGenome's own doc comment guarantees any valid `db` "containing p" gives the same

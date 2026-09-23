@@ -75,7 +75,6 @@ std::vector<DoubleCritChild> classifyDoubleCritChildren(const Position& p, const
 
 DoubleCritGenome classifyDoubleCritGenome(const Position& p, const SpecDB& db, Token tok1, Token tok2,
                                            int depth) {
-    constexpr int kMaxFoldDepth = 2;  // matches alpha_genome.cpp's own single-crit constant
     const std::string posText = serialize(p);
     DoubleCritGenome g;
 
@@ -133,7 +132,6 @@ DoubleCritGenome classifyDoubleCritGenome(const Position& p, const SpecDB& db, T
 }
 
 std::string doubleCritGenomeText(const Position& p, const SpecDB& db, Token tok1, Token tok2, int depth) {
-    constexpr int kMaxFoldDepth = 2;
     const DoubleCritGenome g = classifyDoubleCritGenome(p, db, tok1, tok2, depth);
 
     auto scalarText = [](const std::optional<int>& v) { return v.has_value() ? std::to_string(*v) : "?"; };

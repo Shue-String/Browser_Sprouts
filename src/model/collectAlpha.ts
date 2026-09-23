@@ -37,8 +37,11 @@ export interface PositionRef {
 /** Maximum recursion depth for nested [T] genomes: 0 = the searched-for position itself, 1 = its
  * T-children' own (complete) genomes, 2 = the T-children of THOSE genomes -- truncated to just
  * the 4-value (R,D,{L},{T'}) tuple, no further [T] expansion, per the user's "third layer in, only
- * the first four genes" rule. */
-const MAX_GENOME_DEPTH = 2;
+ * the first four genes" rule. Single-sourced in genomeDefs.json's "maxFoldDepth" (read directly
+ * here, via its own inline cast, rather than the later GENOME_DEFS_JSON/GenomeDefsJson -- those
+ * aren't declared yet at this point in module evaluation order) -- also threaded to the native side
+ * as genome_defs.generated.hpp's kMaxFoldDepth (alpha_genome.cpp, double_crit_genome.cpp). */
+const MAX_GENOME_DEPTH: number = (genomeDefsData as { maxFoldDepth: number }).maxFoldDepth;
 
 /** Above this many lives, a position's own T-children don't get a nested genome computed at all
  * (they still appear in [T] as plain position/nimber/lives T-children, just without `.genome`) --
@@ -664,8 +667,10 @@ const COLLECTION_ROSTERS = (collectionsRosterJson as unknown as CollectionsRoste
 
 /** Distinct lowercase crit-port letters ('a'-'z') in a roster's authored left-side text -- mirrors
  * stalks/tools/alpha_genome.cpp's own `distinctPortLetters`. Only ever 1 (single-crit or
- * multi-region, both k=1) or 2 (double-crit, "Z_1"/"Z_2") for anything currently in the roster. */
-function distinctPortLetters(s: string): number {
+ * multi-region, both k=1) or 2 (double-crit, "Z_1"/"Z_2") for anything currently in the roster.
+ * Exported so collect.ts shares this exact definition instead of keeping its own private copy
+ * (found via code review -- TS-to-TS duplication, unlike the TS/C++ split, which is intentional). */
+export function distinctPortLetters(s: string): number {
   return new Set([...s].filter(ch => ch >= 'a' && ch <= 'z')).size;
 }
 
@@ -972,20 +977,51 @@ function sameBaseOtherShift(family: NamedFamily, resolvedName: string | null): b
  * the unchecked one, silently reintroducing the exact 2026-09-16 bug above -- their split was
  * enforced only by doc-comment convention, not the type system, since the unchecked variant's
  * structural `{R,D,L,Tprime}` parameter type let a full AlphaGenome through without complaint).
- * `resolveChild`/`depth` are unused (but still required) when `g` isn't full. */
+ * `resolveChild`/`depth` are unused (but still required) when `g` isn't full.
+ *
+ * Cached by (`g` object identity, `depth`) -- this is the expensive step in the whole fold chain
+ * (a `familiesForCore(g)` loop, each iteration re-walking `g`'s entire T-child list via
+ * classifyTChildren, each of THOSE recursing into resolvedFoldName/findBypassMatches per T-child),
+ * and every genomeParts/foldToName render call (collect.ts) as well as ttree.ts's own ensureNode
+ * called it fresh with no memoization -- found via code review (2026-09-2x). Never caches a result
+ * derived while some T-child was still pending (the `pending` local below): matching the function's
+ * pre-existing "self-corrects on a later call" contract, a pending-derived null must stay
+ * recomputable until the underlying fetch actually lands, not get stuck in the cache forever. Safe
+ * to key purely on `g`'s identity (no invalidation needed) for the same reason collect.ts's
+ * isNamedGenomeCache already relies on: a genome object is only ever replaced wholesale, never
+ * mutated in place. */
+const shiftedFoldCache = new WeakMap<AlphaGenome | FourGeneGenome, Map<number, string | null>>();
 export function shiftedFamilyFoldName(g: AlphaGenome | FourGeneGenome, resolveChild: ResolveChild, depth: number): string | null {
+  const cached = shiftedFoldCache.get(g)?.get(depth);
+  if (cached !== undefined) return cached;
+
+  let name: string | null = null;
+  let pending = false;
   if (!isFullGenome(g)) {
     const family = familyForCore(g);
-    return family && family.tChildPlains.length === 0 ? family.name : null;
+    name = family && family.tChildPlains.length === 0 ? family.name : null;
+  } else {
+    for (const family of familiesForCore(g)) {
+      const rows = classifyTChildren(g.T, family, family.name, resolveChild, depth);
+      if (rows.some(r => r.pending)) {
+        pending = true;
+        break;
+      }
+      if (rows.some(r => r.isExtra)) continue;
+      const presentNames = new Set(rows.map(r => r.resolvedName).filter((n): n is string => n !== null));
+      if (family.tChildPlains.every(want => presentNames.has(want))) {
+        name = family.name;
+        break;
+      }
+    }
   }
-  for (const family of familiesForCore(g)) {
-    const rows = classifyTChildren(g.T, family, family.name, resolveChild, depth);
-    if (rows.some(r => r.pending)) return null;
-    if (rows.some(r => r.isExtra)) continue;
-    const presentNames = new Set(rows.map(r => r.resolvedName).filter((n): n is string => n !== null));
-    if (family.tChildPlains.every(want => presentNames.has(want))) return family.name;
+
+  if (!pending) {
+    const byDepth = shiftedFoldCache.get(g) ?? new Map<number, string | null>();
+    byDepth.set(depth, name);
+    shiftedFoldCache.set(g, byDepth);
   }
-  return null;
+  return name;
 }
 
 /** Resolves a T-child's own genome given its encoding and (if already loaded) an embedded genome
@@ -1001,6 +1037,19 @@ export type ResolveChild = (
   embedded: AlphaGenome | FourGeneGenome | undefined,
   depth: number,
 ) => AlphaGenome | FourGeneGenome | undefined;
+
+/** The shared 4-step fold-fallback chain, in priority order: an exact GENOME_NAMES[plain] match, an
+ * S_33+ registryFoldName structural match, a disjoint-sum fold, or (last) the generalized
+ * shiftedFamilyFoldName check -- null if none of them match. Was hand-typed identically at 3 call
+ * sites (foldedPlainText's two branches below, plus collect.ts's own foldToName) -- found via code
+ * review (2026-09-2x), unified here. `plain` stays a caller-supplied parameter rather than being
+ * re-derived here, since two different callers legitimately build it two different ways:
+ * foldedPlainText's own recursive build below, vs. collect.ts's genomeParts, which builds plain+HTML
+ * together using its OWN gated resolveChild for the display tree (see MAX_LOOKUP_FETCH_DEPTH) --
+ * `g` alone (not `plain`) drives every step past the first, so this is safe either way. */
+export function foldChain(g: AlphaGenome | FourGeneGenome, plain: string, resolveChild: ResolveChild, depth: number): string | null {
+  return GENOME_NAMES[plain] ?? registryFoldName(g) ?? sumDecompositionFoldName(g) ?? shiftedFamilyFoldName(g, resolveChild, depth);
+}
 
 /** The recursive fold-to-name algorithm (plain text only, no HTML/depth-coloring/toggle-awareness
  * -- collect.ts's own `genomeParts` still owns that display concern locally). Moved here
@@ -1018,7 +1067,7 @@ function foldedPlainText(
   const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}}`;
   if (!isFullGenome(g)) {
     const plain = head + ')';
-    return GENOME_NAMES[plain] ?? registryFoldName(g) ?? sumDecompositionFoldName(g) ?? shiftedFamilyFoldName(g, resolveChild, depth) ?? plain;
+    return foldChain(g, plain, resolveChild, depth) ?? plain;
   }
   const seen = new Set<string>();
   const children: string[] = [];
@@ -1031,7 +1080,7 @@ function foldedPlainText(
   }
   children.sort();
   const plain = `${head},[${children.join(',')}])`;
-  return GENOME_NAMES[plain] ?? registryFoldName(g) ?? sumDecompositionFoldName(g) ?? shiftedFamilyFoldName(g, resolveChild, depth) ?? plain;
+  return foldChain(g, plain, resolveChild, depth) ?? plain;
 }
 
 /** `g`'s own exact fold (see foldedPlainText) if it has one, else null. Moved here (2026-09-03)
@@ -1115,6 +1164,16 @@ export function familyRequiresTChildPlain(family: NamedFamily | undefined, plain
   return typeof plain === 'string' && !!family && family.tChildPlains.includes(plain);
 }
 
+/** Cached by (`list` object identity, `family`+`targetName`+`depth`) -- fixes a real duplicate-
+ * computation bug (found via code review, 2026-09-2x): ttree.ts's `ensureNode` resolves a node's
+ * name via `resolvedFoldName`, which (through `shiftedFamilyFoldName`) already computes-and-discards
+ * this exact classification for the winning family; the tree-build loop then calls this function
+ * AGAIN directly, on the identical `(node.genome.T, family, node.name, depth=0)`, to get the
+ * required/bypass/extra breakdown for building edges. `list` (always some genome's own `.T`, never
+ * mutated in place once built) is a stable, safe WeakMap key for the same reason genome objects are
+ * (see shiftedFoldCache above). Never caches a result containing a pending row, for the same
+ * self-correcting-on-a-later-call reason. */
+const classifyCache = new WeakMap<TChild[], Map<string, TChildClassification[]>>();
 export function classifyTChildren(
   list: TChild[],
   family: NamedFamily | undefined,
@@ -1122,7 +1181,11 @@ export function classifyTChildren(
   resolveChild: ResolveChild,
   depth = 0,
 ): TChildClassification[] {
-  return list.map(t => {
+  const cacheKey = `${family?.name ?? ''}|${targetName ?? ''}|${depth}`;
+  const cached = classifyCache.get(list)?.get(cacheKey);
+  if (cached) return cached;
+
+  const rows = list.map(t => {
     const tGenome = resolveChild(t.enc, t.genome, depth + 1);
     const resolvedName = tGenome ? resolvedFoldName(tGenome, resolveChild, depth + 1) : null;
     const matches = targetName && tGenome ? findBypassMatches(tGenome, targetName, resolveChild, depth + 1) : null;
@@ -1132,6 +1195,13 @@ export function classifyTChildren(
     const isExtra = !!family && !pending && !familyRequiresTChildPlain(family, resolvedName) && !hasBypass && !isSameBaseOtherShift;
     return { t, tGenome, resolvedName, matches, pending, isExtra };
   });
+
+  if (!rows.some(r => r.pending)) {
+    const byKey = classifyCache.get(list) ?? new Map<string, TChildClassification[]>();
+    byKey.set(cacheKey, rows);
+    classifyCache.set(list, byKey);
+  }
+  return rows;
 }
 
 /** Parse a typed genome query "(R,D,{L},{T'})" into its normalized key + parts, or null if it

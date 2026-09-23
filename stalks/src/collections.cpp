@@ -347,7 +347,7 @@ std::vector<DoubleCritCandidate> enumerateDoubleCrits(const Component& c) {
 // Bumped 4->6 / 12->20 2026-09-02: a fresh discovery scan (see [[project_advanced_collections]])
 // re-found 12 already-registered S_1/S_1⊕1/S_2 multi-region elements (5-6 regions, 13-17 tokens)
 // as "new" candidates -- direct testing (query_position --quick-canon-only, properly embedded via
-// a real host per verify_left_side's own Z-port convention) proved they'd been silently DEAD ever
+// a real host with lowercase ports mapped to 'Z', per convention) proved they'd been silently DEAD ever
 // since registration: extractChunk's size guard rejected them before any key was even computed, so
 // they could never have matched regardless of the registry entry being correct -- same root cause
 // as the 2026-08-29 bump, just not caught at the time. Real A/B timing (STALKS_DUMP_MULTI_REJECT_HIST
@@ -554,7 +554,7 @@ std::optional<ChunkExtraction> extractChunk(const Component& c,
 // this reproduced it: a real membrane occurring after the special point in the same boundary kept
 // its pre-conversion `.occ`, so multiChunkKey silently built the WRONG canonical key (observed as
 // "2CD|C2Da" -- an existing, already-verified S_6 element -- computing the same key as S_5's
-// "2CD|2CDa" once alpha replaced its real-membrane crit; caught via verify_left_side, not by eye).
+// "2CD|2CDa" once alpha replaced its real-membrane crit; caught via an exact-nimber comparison across several hosts, not by eye).
 void convertSpecialToAgnostic(std::vector<std::vector<Bnd>>& regions,
                                std::vector<std::pair<MRef, MRef>>& pairings) {
     for (std::uint32_t r = 0; r < regions.size(); ++r)
