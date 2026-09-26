@@ -36,9 +36,9 @@ function tChildLiteral(t) {
 
 function genomeDefLiteral(def) {
   const L = intArrayLiteral(def.L);
-  const Tprime = intArrayLiteral(def.Tprime);
+  const Z = intArrayLiteral(def.Z);
   const T = '{' + def.T.map(tChildLiteral).join(', ') + '}';
-  return `{${def.R}, ${def.D}, ${L}, ${Tprime}, ${T}}`;
+  return `{${def.R}, ${def.D}, ${L}, ${Z}, ${T}}`;
 }
 
 // Pure: JSON data in, generated file text out -- no disk I/O, so scripts/checkGeneratedHeaders.cjs
@@ -70,7 +70,7 @@ struct GenomeDef {
     int R;
     int D;
     std::vector<int> L;
-    std::vector<int> Tprime;
+    std::vector<int> Z;
     std::vector<TChildDef> T;
 };
 

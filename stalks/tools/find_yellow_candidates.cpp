@@ -1,9 +1,9 @@
 // Offline discovery tool: of every single-subposition (minimal), single-alpha left side reachable
-// from the given .spec file(s) whose (R,D,{L},{T'}) core matches ANY currently-named family exactly
+// from the given .spec file(s) whose (R,D,{L},{Z}) core matches ANY currently-named family exactly
 // (via familyNameForCoreKey) and whose left-side lives (leftSideLives2()/2) is <= the given maxLives
 // cap (a plain CLI argument -- was a hardcoded "== 7" until 2026-09-15's registry-rebuild-from-
 // scratch experiment needed to try several caps without a rebuild each time), and which is NOT
-// already registered under any Advanced Collection (same repCanon check as
+// already registered under any Collection (same repCanon check as
 // unregistered_left_sides.cpp) -- report which ones "go yellow" per isYellowCandidate (see
 // alpha_genome.hpp), i.e. are genuine new members of THEIR OWN matching family by the same rule
 // collect.ts's renderRequiredLine uses. Originally scoped to S_1/S_1⊕1 only (see

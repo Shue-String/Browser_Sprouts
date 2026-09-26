@@ -1,6 +1,6 @@
 // Fails (nonzero exit) if either committed .generated.hpp is stale relative to its hand-authored
 // JSON source -- i.e. if re-running the generator right now would produce different bytes than
-// what's on disk. Catches both failure modes the JSON->hpp step of the Advanced Collections /
+// what's on disk. Catches both failure modes the JSON->hpp step of the Collections /
 // genome-defs data pipeline is otherwise silent about: editing the JSON and forgetting to re-run
 // the generator, and hand-editing the "do not hand-edit" .generated.hpp directly.
 //

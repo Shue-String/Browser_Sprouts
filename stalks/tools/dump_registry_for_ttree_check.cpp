@@ -1,4 +1,4 @@
-// Ad-hoc tool: dump every currently-REGISTERED Advanced Collection element as a
+// Ad-hoc tool: dump every currently-REGISTERED Collection element as a
 // "lives\tfamily\tquickEnc\tgenome" row -- the same TSV shape find_yellow_candidates.exe writes,
 // which check_ttree_extras.exe already knows how to consume. This lets check_ttree_extras's
 // whole-T-tree isYellowCandidate audit be run against ALREADY-REGISTERED elements, not just

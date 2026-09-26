@@ -1,5 +1,5 @@
 #pragma once
-// Shared plumbing for the Advanced Collections registry audit tools. audit_registry_necessity.cpp,
+// Shared plumbing for the Collections registry audit tools. audit_registry_necessity.cpp,
 // audit_registry_redundancy.cpp, and verify_registry_shrink.cpp all read/write the same
 // tab-separated baseline format and all parse+quickCanon a raw registry element's literal text the
 // same way; find_yellow_candidates.cpp, dump_registry_for_ttree_check.cpp, and check_ttree_extras.cpp

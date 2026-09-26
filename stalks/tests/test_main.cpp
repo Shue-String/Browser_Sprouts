@@ -1411,7 +1411,7 @@ void testCanon() {
     }
 }
 
-// Advanced Collections / quick-canon, step 1: the left-side authoring parser and the
+// Collections / quick-canon, step 1: the left-side authoring parser and the
 // marked-graph canonicalizer (leftSideKey). Exercised standalone -- no crit-finder yet.
 void testCollections() {
     using namespace stalks;
@@ -1602,7 +1602,7 @@ void testCollections() {
 // A 5-spot pass builds two full 5-spot graphs (~30s each) plus a quickCanon per minimal node, so it
 // is gated: by default the check runs to 4 spots (sub-second). Set STALKS_QUICKNIMBER_MAX=5 (or 6,
 // with patience) for the deep pass.
-// Special points participating in Advanced Collections crit-matching (Phase 4): a special point
+// Special points participating in Collections crit-matching (Phase 4): a special point
 // is treated as a crit exactly like a real membrane, except it has no host to repoint (it already
 // stands for "connects to somewhere outside this position"). Four worked examples confirmed with
 // the user (2026-07-29), each checked against the real quickCanon() output rather than hand-
@@ -1626,7 +1626,7 @@ void testSpecialPointCollections() {
         checkEqInt(r.offset, 1, "special-point S4 with a real crit: offset 1");
     }
     // [2A|0,Aa]: region0 "2A" is the ordinary [2a/ shape (1 real crit, 0 special) -- plain
-    // structural DisaPoint compression (no Advanced Collections needed) folds it into a bare
+    // structural DisaPoint compression (no Collections needed) folds it into a bare
     // DISA at region1's host slot first, giving [0,3a]. THEN region1 (0 real + 1 special crit,
     // matches S2 "0,3a") reduces to [SCAB,a]. Overall offset is S2's alone (the first step is
     // plain struct canon, offset 0).

@@ -1,6 +1,6 @@
 // GENERATED FILE -- do not hand-edit.
 // Produced by scripts/genCollectionElementsHeader.cjs from src/data/collectionElements.json (the
-// single hand-authored source of every registered Advanced Collection element -- see that file's
+// single hand-authored source of every registered Collection element -- see that file's
 // "notes" fields for provenance commentary not reproduced here). Re-run that script after editing
 // the JSON, then rebuild any target that includes this header (it's #included directly inside
 // collections.cpp's anonymous namespace, right after the RosterGroup/CritFamily definitions).

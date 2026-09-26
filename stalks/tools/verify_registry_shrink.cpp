@@ -1,4 +1,4 @@
-// Regression check for an Advanced Collections registry edit (e.g. removing provably-redundant
+// Regression check for an Collections registry edit (e.g. removing provably-redundant
 // elements per audit_registry_redundancy.cpp's report): for EVERY row of a baseline TSV -- produced
 // by running audit_registry_redundancy against the PRE-EDIT build -- re-run quickCanon() on that
 // row's own literal element text against the CURRENTLY COMPILED (post-edit) registry, and confirm

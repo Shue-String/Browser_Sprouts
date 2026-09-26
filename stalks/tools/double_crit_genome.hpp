@@ -32,13 +32,13 @@ std::vector<DoubleCritChild> classifyDoubleCritChildren(const stalks::Position& 
 
 // The double-crit genome's 16 direct/recursive slots for `p` (a position with exactly `tok1` and
 // `tok2` as its two live crits), per the (mt1,mt2) bucket mapping:
-//   (1,1)->RR (2,2)->DD (3,3)->LL (4,4)->T'T' (1,2)->RaDb (2,1)->RbDa (3,4)->LaT'b (4,3)->LbT'a
+//   (1,1)->RR (2,2)->DD (3,3)->LL (4,4)->ZZ (1,2)->RaDb (2,1)->RbDa (3,4)->LaZb (4,3)->LbZa
 //     -- direct SpecValue nimbers (scalars warn on conflicting values, matching classifyAlphaGenome's
-//        own R/D-conflict warning; LL/T'T'/LaT'b/LbT'a collect as sets).
-//   (1,5)->Ra (5,1)->Rb (2,5)->Da (5,2)->Db (3,5)->La (5,3)->Lb (4,5)->T'a (5,4)->T'b
+//        own R/D-conflict warning; LL/ZZ/LaZb/LbZa collect as sets).
+//   (1,5)->Ra (5,1)->Rb (2,5)->Da (5,2)->Db (3,5)->La (5,3)->Lb (4,5)->Za (5,4)->Zb
 //     -- recursive SINGLE-crit genome text (fullGenomeText with `target` = whichever of tok1/tok2
 //        stayed at movetype 5/untouched), since exactly one crit was resolved away and the other
-//        remains live; Ra/Rb/Da/Db are single values, La/Lb/T'a/T'b sets (mirrors the direct-value
+//        remains live; Ra/Rb/Da/Db are single values, La/Lb/Za/Zb sets (mirrors the direct-value
 //        genes' own scalar-vs-set split one level up).
 //   (5,5)->T(p) member -- recursive FULL double-crit genome text (both crits still live), depth-
 //        capped like alpha_genome.cpp's own kMaxFoldDepth: `depth` 0 computes members fully (their
@@ -48,16 +48,16 @@ std::vector<DoubleCritChild> classifyDoubleCritChildren(const stalks::Position& 
 // classifyDoubleCritChildren, so an unmapped combination is visible, not silently lost.
 struct DoubleCritGenome {
     std::optional<int> RR, DD, RaDb, RbDa;
-    std::set<int> LL, TprimeTprime, LaTprimeB, LbTprimeA;
+    std::set<int> LL, ZZ, LaZb, LbZa;
     std::optional<std::string> gRa, gRb, gDa, gDb;
-    std::set<std::string> gLa, gLb, gTprimeA, gTprimeB;
+    std::set<std::string> gLa, gLb, gZa, gZb;
     std::set<std::string> Tp;
 };
 
 DoubleCritGenome classifyDoubleCritGenome(const stalks::Position& p, const stalks::SpecDB& db,
                                            stalks::Token tok1, stalks::Token tok2, int depth = 0);
 
-// "(RR,DD,{LL},{T'T'},RaDb,RbDa,{LaT'b},{LbT'a},gRa,gRb,gDa,gDb,{gLa},{gLb},{gT'a},{gT'b},[T(p)])" --
+// "(RR,DD,{LL},{ZZ},RaDb,RbDa,{LaZb},{LbZa},gRa,gRb,gDa,gDb,{gLa},{gLb},{gZa},{gZb},[T(p)])" --
 // a missing scalar slot (no child ever hit that bucket) prints as "?", matching no existing
 // convention exactly since single-crit R/D are never actually absent in practice; kept explicit
 // here rather than defaulting to 0, which would be indistinguishable from a genuine nimber-0.

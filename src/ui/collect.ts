@@ -1,8 +1,8 @@
 /**
  * Collect: type a position encoding containing exactly one alpha ('a') token to see its genome --
- * (R, D, {L}, {T'}, [T]) -- computed directly from the engine's own movetype classification (see
+ * (R, D, {L}, {Z}, [T]) -- computed directly from the engine's own movetype classification (see
  * src/model/collectAlpha.ts). R and D are single nimbers (the "vanish"/"become a scab" moves,
- * movetypes 1/2); {L} and {T'} are deduped nimber sets (moves that connect within the position, or
+ * movetypes 1/2); {L} and {Z} are deduped nimber sets (moves that connect within the position, or
  * isolate-and-decay it, movetypes 3/4); [T] is the list of positions reached by every move that
  * leaves alpha untouched (movetype 5), each shown in canon (bracket/⊕) form and clickable to open
  * as its own entry.
@@ -23,13 +23,13 @@
  * S_1⊕2, only one folding to S_1⊕2 itself is.
  *
  * Every displayed position (the active entry itself, and each T-child) is shown in its
- * quick-canon (Advanced Collections) form -- more compact than the raw structural encoding, same
+ * quick-canon (Collections) form -- more compact than the raw structural encoding, same
  * convention Position Browser's own Quick-Canon toggle uses (⊕1 suffix when the nimber offset is
  * 1). The quick-canon rep is display-only, never the identity used to re-derive a genome (clicking
  * a T row re-analyzes its real encoding, not its quick-canon stand-in) -- see collectAlpha.ts's
  * PositionRef doc comment for why.
  *
- * Typing a genome instead of a position -- "(R,D,{L},{T'})", e.g. "(0,1,{0},{})", OR the newer
+ * Typing a genome instead of a position -- "(R,D,{L},{Z})", e.g. "(0,1,{0},{})", OR the newer
  * 5-value form with an explicit (but unparsed/ignored -- see collectAlpha.ts's GENOME_QUERY_RE)
  * [T] portion, e.g. "(0,1,{0},{},[])" -- looks it up in GENOME_DB (see
  * src/data/collectAlphaGenomes.json, built by stalks/tools/collect_alpha_genetics.cpp from the
@@ -83,7 +83,7 @@ interface GenomeHit extends PositionRef {
   T: (PositionRef & { nimber: number })[];
 }
 
-/** A single-alpha position's own (R,D,{L},{T'},[T]) as computed offline by
+/** A single-alpha position's own (R,D,{L},{Z},[T]) as computed offline by
  * stalks/tools/collect_alpha_genetics.cpp -- one entry per position, keyed by its real (non-quick-
  * canon) encoding. Used purely as a fast local lookup (see collect.ts's byEncGenome) so
  * resolvedGenomeName/foldedPlainOfTChild never need a fresh engine call for any position already
@@ -93,6 +93,11 @@ interface ByEncHit {
   R: number;
   D: number;
   L: number[];
+  /** Named `Tprime` (not `Z`) deliberately: this matches the literal on-disk key in the committed
+   * collectAlphaGenomes.json snapshot, which predates the paper's T'->Z rename and hasn't been
+   * regenerated (regenerating it changes which positions are covered -- the exact original
+   * generation inputs/flags aren't reliably known, so this file is left as a frozen snapshot rather
+   * than guessed at). byEncGenome below maps this raw field into the live `Z` name on read. */
   Tprime: number[];
   lives: number;
   T: (PositionRef & { nimber: number })[];
@@ -100,7 +105,7 @@ interface ByEncHit {
 
 /** Offline-computed genome data (see stalks/tools/collect_alpha_genetics.cpp) for single-alpha
  * positions reachable from the game's early boards. `genomes` buckets positions by their (R,D,{L},
- * {T'}) tuple -- what typing a genome/shorthand into the search bar looks up (see loadGenome).
+ * {Z}) tuple -- what typing a genome/shorthand into the search bar looks up (see loadGenome).
  * `byEnc` is the SAME underlying position set, flat-indexed by real encoding instead -- a pure
  * local-lookup fast path for resolvedGenomeName/foldedPlainOfTChild so a position's own genome
  * (and its T-children') doesn't need a fresh engine call whenever it's already covered by this
@@ -108,10 +113,13 @@ interface ByEncHit {
  * own genome data recursively INLINE inside `genomes` instead of as a separate flat section --
  * with heavy fan-in among common low-order T-children that blew the file up ~1000x, since the same
  * T-child's data got duplicated everywhere it was referenced; `byEnc` avoids that by storing each
- * position's data exactly once.) Both sections cover the SAME position set (the C++ tool's own
- * `_1spot`/`_2spot` .spec inputs -- deliberately NOT the full multi-hundred-MB `.spec` file, which
- * would blow the position count from ~1000 to ~264000 and the file size well past what's
- * reasonable to bundle); a T-child outside that set falls back to computeAlphaGenome as before. */
+ * position's data exactly once.) Both sections cover the SAME position set -- deliberately NOT the
+ * full multi-hundred-MB `.spec` file, which would blow the position count and file size well past
+ * what's reasonable to bundle (the committed snapshot covers 15,891 positions/617 genome buckets;
+ * the exact spec-file combination and flags used to produce that scope aren't reliably known from
+ * this comment alone -- re-derive before regenerating, don't assume `_1spot`/`_2spot` alone
+ * reproduces it, that combination alone yields only ~1000); a T-child outside that set falls back
+ * to computeAlphaGenome as before. */
 interface GenomeDbJson {
   genomes: Record<string, GenomeHit[]>;
   byEnc: Record<string, ByEncHit>;
@@ -157,7 +165,7 @@ let searchedGenomeName: string | null = null;
 let quickGenome = true;
 
 // v2->v3 2026-08-27: computeAlphaGenomeAt reworked (away-component moves now enumerated as real
-// T-children, oplus folded directly into R/D/L/T' instead of a display suffix) -- old cached
+// T-children, oplus folded directly into R/D/L/Z instead of a display suffix) -- old cached
 // genomes for any split T-child are stale/wrong-shaped.
 const HISTORY_STORAGE_KEY = 'sprouts-collect-alpha-v3';
 
@@ -210,7 +218,7 @@ function isEntry(x: unknown): x is Entry {
   const p = o.position as Record<string, unknown> | undefined;
   if (!p || typeof p.enc !== 'string' || typeof p.quickEnc !== 'string') return false;
   const g = o.genome as Record<string, unknown> | undefined;
-  return !!g && Array.isArray(g.L) && Array.isArray(g.Tprime) && Array.isArray(g.T);
+  return !!g && Array.isArray(g.L) && Array.isArray(g.Z) && Array.isArray(g.T);
 }
 
 function loadHistory(): void {
@@ -282,7 +290,7 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-/** CSS class for a genome-string segment at nesting `depth` -- 0 (the position's own R/D/L/T') is
+/** CSS class for a genome-string segment at nesting `depth` -- 0 (the position's own R/D/L/Z) is
  * left uncolored (black), 1 (one step down, inside [T]) is blue, 2+ (two steps down and beyond,
  * though truncation means nothing goes past 2 -- see collectAlpha.ts's MAX_GENOME_DEPTH) is red,
  * per the user's request to tell nesting depth apart at a glance. */
@@ -302,13 +310,13 @@ function depthClass(depth: number): string {
  * cascading fetches over a large position's whole reachable subtree. */
 const MAX_LOOKUP_FETCH_DEPTH = 4;
 
-/** Plain-text and colored-HTML renderings of a genome string "(R,D,{L},{T'},[T])", built together
+/** Plain-text and colored-HTML renderings of a genome string "(R,D,{L},{Z},[T])", built together
  * so [T] can be deduped by its PLAIN-text representation (two T-children whose genomes print
  * identically are the same gene, even if they're different positions) while still producing
  * depth-colored HTML for display. A T-child with no computed nested genome (over the lives cap --
  * see classifyByMovetype) falls back to its own quick-canon label instead of a tuple. */
 function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: string; html: string } {
-  const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}}`;
+  const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Z.join(',')}}`;
   const cls = depthClass(depth);
   if (!isFullGenome(g)) {
     const plain = head + ')';
@@ -351,7 +359,7 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
   return foldToName(g, plain, html, cls, depth);
 }
 
-/** `g`'s own full "(R,D,{L},{T'},[T])" genome text -- T-children folded to names exactly like
+/** `g`'s own full "(R,D,{L},{Z},[T])" genome text -- T-children folded to names exactly like
  * `genomeParts` (delegates to it, at depth 1, via the same `lookupGenome` fetch path the T-gene
  * table already uses), but the OUTER tuple itself is NEVER folded to a name -- unlike every
  * genomeParts call, which wants folding at every level. Folding the outer level here would be
@@ -367,7 +375,7 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
  * pending the first few times this runs self-corrects on a later render the same way every other
  * genome display in this file already does, once lookupGenome resolves it. */
 function registryGenomeTupleText(g: AlphaGenome | FourGeneGenome): string {
-  const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}}`;
+  const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Z.join(',')}}`;
   if (!isFullGenome(g)) return head + ')';
   const seen = new Set<string>();
   const childPlains: string[] = [];
@@ -453,13 +461,13 @@ function isNamedGenome(genome: AlphaGenome | FourGeneGenome): boolean {
  * entry always carries its quickEnc/quickOffset alongside `enc`) attach it to the returned genome,
  * the same way a freshly-computed genome always carries it (see FourGeneGenome's own doc comment).
  * Without this, a T-child resolved via this fast path could never be recognized as a member of a
- * registered Advanced Collection with no genomeDefs.json entry (S_33+) -- registryFoldName would
+ * registered Collection with no genomeDefs.json entry (S_33+) -- registryFoldName would
  * just silently find nothing, forever, since this path never falls through to a fresh engine call
  * once it answers. */
 function byEncGenome(enc: string, ref?: { quickEnc: string; quickOffset: number }): AlphaGenome | undefined {
   const hit = BY_ENC[enc];
   return hit
-    ? { R: hit.R, D: hit.D, L: hit.L, Tprime: hit.Tprime, T: hit.T, quickEnc: ref?.quickEnc, quickOffset: ref?.quickOffset }
+    ? { R: hit.R, D: hit.D, L: hit.L, Z: hit.Tprime, T: hit.T, quickEnc: ref?.quickEnc, quickOffset: ref?.quickOffset }
     : undefined;
 }
 
@@ -477,7 +485,7 @@ const genomeLookupPending = new Set<string>();
  * MAX_NESTED_GENOME_LIVES caps recursion, see collectAlpha.ts) is deliberately treated the SAME as
  * "not known yet", falling through to byEncGenome/a fresh call instead of being handed back as-is.
  * Reason (found 2026-09-02 via a live false-positive bug report): several distinct named families
- * share the EXACT SAME bare (R,D,{L},{T'}) core and differ only in their required T-gene list --
+ * share the EXACT SAME bare (R,D,{L},{Z}) core and differ only in their required T-gene list --
  * e.g. S_12 and S_25 both key to (0,3,{0,2},{}) (also S_1/S_15, S_6/S_8/S_17/S_20, S_7/S_10,
  * S_14/S_26, S_21/S_24, at every shift). A bare, T-less truncated genome can't tell which family in
  * a collision group it really is, so `foldedPlainOf`'s own compact-key fallback just guesses
@@ -499,7 +507,7 @@ const genomeLookupPending = new Set<string>();
  *
  * `ref` is `enc`'s own quick-canon form (quickEnc/quickOffset), when the caller already has it in
  * hand (every T-child list entry does) -- threaded into byEncGenome so a genome resolved via that
- * fast path can still be recognized against the Advanced Collections registry (see byEncGenome's
+ * fast path can still be recognized against the Collections registry (see byEncGenome's
  * own doc comment); harmless to omit, it just means that specific fast-path result won't carry a
  * quickEnc for registryFoldName to use. */
 function lookupGenome(
@@ -539,8 +547,8 @@ const resolveChild: ResolveChild = (enc, known) => lookupGenome(enc, known);
  * real T-list, since a finite hand-authored GENOME_NAMES table can never enumerate every T-list
  * such a family's members can actually have (added 2026-08-31 after the user reported [1212a/,
  * core (0,1,{0},{}), failing to register as S_1). This is NOT a reintroduction of the old
- * Advanced-Collection fallback removed 2026-08-30 (matching on bare core + "every extra T-child is
- * itself in SOME Advanced Collection", which let unrelated named genomes excuse an extra T-child
+ * Collection fallback removed 2026-08-30 (matching on bare core + "every extra T-child is
+ * itself in SOME Collection", which let unrelated named genomes excuse an extra T-child
  * regardless of relevance to the family actually being searched -- the exact gap the Yellow-Line's
  * own family-scoped satisfiesRequired/hasBypass logic, computeRowInfos/findBypassMatches, is built
  * to avoid): the rule here never excuses anything via an unrelated genome, and only ever fires for
@@ -558,7 +566,7 @@ const resolveChild: ResolveChild = (enc, known) => lookupGenome(enc, known);
 function formatGenomeCell(g: AlphaGenome | FourGeneGenome): string {
   const resolved = resolvedFoldName(g, resolveChild);
   if (resolved !== null) return resolved;
-  const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}}`;
+  const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Z.join(',')}}`;
   if (!isFullGenome(g)) return head + ')';
   const parts = g.T.map(child => {
     const childKnown = lookupGenome(child.enc, child.genome, true, child);
@@ -587,7 +595,7 @@ async function foldedPlainOfTChild(t: TChild): Promise<string> {
  * only -- a Grandparent Bypass check, not open recursion) contain one that itself folds entirely to
  * a name (cited by ITS OWN position, not by name again, matching the paper's own convention), or
  * (3) `none` -- no such one-level bypass was found (this is a shallow, paper-matching check only,
- * not a claim about Advanced-Collection membership more broadly). Used only by buildExportLatex now
+ * not a claim about Collection membership more broadly). Used only by buildExportLatex now
  * (for the shifted-letter LaTeX form's own
  * Relevancy column, matching the paper's table format) -- the in-app T-gene table shows a plain
  * Genome column instead (see formatGenomeCell), a different, non-paper-matching view. */
@@ -620,9 +628,9 @@ function buildEntry(position: PositionRef, genome: AlphaGenome, lives: number | 
  * handling (see collectAlpha.ts's quickAlphaSplitOf) and nested [T] genomes, so this is a stand-in,
  * upgraded to a real computeAlphaGenome() result the first time this entry is actually selected --
  * see selectEntry. */
-function buildGenomeEntry(hit: GenomeHit, R: number, D: number, L: number[], Tprime: number[]): Entry {
+function buildGenomeEntry(hit: GenomeHit, R: number, D: number, L: number[], Z: number[]): Entry {
   return { label: quickLabel(hit), position: hit, lives: hit.lives, genomeFresh: false,
-    genome: { R, D, L, Tprime, T: hit.T, quickEnc: hit.quickEnc, quickOffset: hit.quickOffset } };
+    genome: { R, D, L, Z, T: hit.T, quickEnc: hit.quickEnc, quickOffset: hit.quickOffset } };
 }
 
 /** Make `label` the active entry and, if its genome is still the GENOME_DB stand-in (see
@@ -691,7 +699,7 @@ async function loadGenome(raw: string, explicitName?: string): Promise<void> {
 
   // `explicitName` -- the exact family a shorthand search (e.g. "S_1+2") named -- always wins over
   // re-deriving a name from the bare four-gene tuple: several different named families can share
-  // the exact same (R,D,{L},{T'}) core with different T-lists (e.g. S_1⊕2 and S_15 both key to
+  // the exact same (R,D,{L},{Z}) core with different T-lists (e.g. S_1⊕2 and S_15 both key to
   // "(2,3,{2},{})"), so GENOME_NAMES' compact-key lookup would otherwise silently pick whichever
   // family happened to register first, not the one actually typed (see nameForShorthand's own doc
   // comment). Only a raw typed-in tuple (no name attached at all) falls back to that lookup, which
@@ -712,7 +720,7 @@ async function loadGenome(raw: string, explicitName?: string): Promise<void> {
   // exact genome (anything looked at afterward re-appends normally).
   history = [];
   for (let i = hits.length - 1; i >= 0; i--) {
-    addToHistory(buildGenomeEntry(hits[i], parsed.R, parsed.D, parsed.L, parsed.Tprime), false);
+    addToHistory(buildGenomeEntry(hits[i], parsed.R, parsed.D, parsed.L, parsed.Z), false);
   }
   saveHistory();
   // history[0] is the most recently added, which is hits[0] (lowest lives) -- open that one.
@@ -880,7 +888,7 @@ function renderPreview(t: TChild | null): void {
   // Just the genome STRING (same one-line, depth-colored format as the main header), not the fully
   // expanded nested table -- a hover preview is for a quick glance, not for exploring every nested
   // T-child (that's what clicking the row, or hovering ITS own T rows once opened, is for). Colored
-  // starting fresh at depth 0 (this T-child's own R/D/L/T' in black), same convention as the active
+  // starting fresh at depth 0 (this T-child's own R/D/L/Z in black), same convention as the active
   // entry's own header.
   const gs = t.genome ? genomeParts(t.genome, 0) : null;
   previewEl.innerHTML = `
@@ -894,11 +902,11 @@ function renderPreview(t: TChild | null): void {
 
 const PRETTY_INDENT = '  ';
 
-/** Reformats a flat genome-query string "(R,D,{L},{T'},[T1,T2,...])" into an indented,
+/** Reformats a flat genome-query string "(R,D,{L},{Z},[T1,T2,...])" into an indented,
  * pseudo-JSON-ish multi-line form for the clipboard -- each "[...]" (a T-list -- the part that
  * actually nests and gets unreadable) breaks onto its own lines, one entry per line, with an extra
  * indent level for as long as it stays open, un-indenting again at its closing "]". "(...)" and
- * "{...}" (the R/D/L/T' tuple/sets, which stay short and flat even when nested) are left inline,
+ * "{...}" (the R/D/L/Z tuple/sets, which stay short and flat even when nested) are left inline,
  * as is an empty "[]" -- only non-empty arrays are worth breaking up. Purely a text transform on
  * the already-balanced plain text genomeParts produces; doesn't re-parse or validate the genome. */
 function prettyPrintGenome(plain: string): string {
@@ -960,7 +968,7 @@ function renderDetail(): void {
       <tr><td>R</td><td class="collect-t-cell"><div class="nimset">${fmtNimber(genome.R)}</div></td></tr>
       <tr><td>D</td><td class="collect-t-cell"><div class="nimset">${fmtNimber(genome.D)}</div></td></tr>
       <tr><td>L</td><td class="collect-t-cell"><div class="nimset">${fmtSet(genome.L)}</div></td></tr>
-      <tr><td>T'</td><td class="collect-t-cell"><div class="nimset">${fmtSet(genome.Tprime)}</div></td></tr>
+      <tr><td>Z</td><td class="collect-t-cell"><div class="nimset">${fmtSet(genome.Z)}</div></td></tr>
       <tr><td>T</td><td class="collect-t-cell" id="collect-t-cell"></td></tr>
     </table>
     <div id="collect-preview"></div>
@@ -1031,12 +1039,12 @@ function formatRelevancyExport(v: RelevancyVerdict): string {
 const EXPORT_PAD = '\\multicolumn{1}{m{.75cm}|}{} & \\multicolumn{1}{m{.75cm}|}{}';
 
 /** Builds the full \begin{tabular}...\end{tabular} block for `entry`, matching the paper's genome
- * sequencing table template (see the module header): left three columns are every raw R/D/L/T'
+ * sequencing table template (see the module header): left three columns are every raw R/D/L/Z
  * child (one row each, undeduped -- see MoveChildRef's doc comment), right two columns are every T
  * move's child + its Relevancy verdict (see computeRelevancy), and the two sides are padded to the
  * same row count with the template's own empty-cell placeholder. Always recomputes the genome fresh
  * (regardless of entry.genomeFresh) since only a live computeAlphaGenomeAt call populates the raw
- * Rc/Dc/Lc/TprimeC child data this needs -- GENOME_DB-loaded entries predate that field. */
+ * Rc/Dc/Lc/Zc child data this needs -- GENOME_DB-loaded entries predate that field. */
 async function buildExportLatex(entry: Entry): Promise<string> {
   const fresh = await computeAlphaGenome(entry.position.enc);
   if (!fresh) throw new Error("couldn't re-analyze this position for export");
@@ -1044,7 +1052,7 @@ async function buildExportLatex(entry: Entry): Promise<string> {
 
   // Unnamed positions (no GENOME_NAMES/bypass-only match, see foldToName) leave the header label
   // blank -- foldedTop itself (the raw genome tuple) still appears in the closing summary row
-  // below regardless, so there's no need to also repeat it here. The Advanced-Collection fallback
+  // below regardless, so there's no need to also repeat it here. The Collection fallback
   // label this used to have (position isn't itself exactly named, but still qualifies for a
   // family) was removed along with isInAdvancedCollection, and re-deriving that membership check
   // is a much bigger, still-open question than this export label warrants.
@@ -1055,7 +1063,7 @@ async function buildExportLatex(entry: Entry): Promise<string> {
   if (genome.Rc) leftRows.push({ mt: 'R', enc: genome.Rc.enc, nimber: genome.Rc.nimber });
   if (genome.Dc) leftRows.push({ mt: 'D', enc: genome.Dc.enc, nimber: genome.Dc.nimber });
   for (const c of genome.Lc ?? []) leftRows.push({ mt: 'L', enc: c.enc, nimber: c.nimber });
-  for (const c of genome.TprimeC ?? []) leftRows.push({ mt: "T'", enc: c.enc, nimber: c.nimber });
+  for (const c of genome.Zc ?? []) leftRows.push({ mt: "Z", enc: c.enc, nimber: c.nimber });
 
   const rightRows: { child: string; relevancy: string }[] = [];
   for (const t of genome.T) {

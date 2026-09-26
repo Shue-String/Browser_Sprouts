@@ -96,9 +96,9 @@ DoubleCritGenome classifyDoubleCritGenome(const Position& p, const SpecDB& db, T
                 continue;
             }
             if (pair(3, 3)) g.LL.insert(c.value.nimber);
-            else if (pair(4, 4)) g.TprimeTprime.insert(c.value.nimber);
-            else if (pair(3, 4)) g.LaTprimeB.insert(c.value.nimber);
-            else g.LbTprimeA.insert(c.value.nimber);
+            else if (pair(4, 4)) g.ZZ.insert(c.value.nimber);
+            else if (pair(3, 4)) g.LaZb.insert(c.value.nimber);
+            else g.LbZa.insert(c.value.nimber);
         } else if (pair(1, 5)) {
             accumulateGenomeScalar(g.gRa, fullGenomeText(c.child, db, tok2), "Ra", posText);
         } else if (pair(5, 1)) {
@@ -112,9 +112,9 @@ DoubleCritGenome classifyDoubleCritGenome(const Position& p, const SpecDB& db, T
         } else if (pair(5, 3)) {
             g.gLb.insert(fullGenomeText(c.child, db, tok1));
         } else if (pair(4, 5)) {
-            g.gTprimeA.insert(fullGenomeText(c.child, db, tok2));
+            g.gZa.insert(fullGenomeText(c.child, db, tok2));
         } else if (pair(5, 4)) {
-            g.gTprimeB.insert(fullGenomeText(c.child, db, tok1));
+            g.gZb.insert(fullGenomeText(c.child, db, tok1));
         } else if (pair(5, 5)) {
             // Only recurse while still below the fold cap -- at/past it, doubleCritGenomeText
             // won't print a [T(p)] list at this depth anyway (see its own depth check below), so
@@ -138,12 +138,12 @@ std::string doubleCritGenomeText(const Position& p, const SpecDB& db, Token tok1
     auto genomeScalarText = [](const std::optional<std::string>& v) { return v.has_value() ? *v : "?"; };
 
     std::string head = "(" + scalarText(g.RR) + "," + scalarText(g.DD) + ",{" + intSetText(g.LL) + "},{" +
-                        intSetText(g.TprimeTprime) + "}," + scalarText(g.RaDb) + "," + scalarText(g.RbDa) +
-                        ",{" + intSetText(g.LaTprimeB) + "},{" + intSetText(g.LbTprimeA) + "}," +
+                        intSetText(g.ZZ) + "}," + scalarText(g.RaDb) + "," + scalarText(g.RbDa) +
+                        ",{" + intSetText(g.LaZb) + "},{" + intSetText(g.LbZa) + "}," +
                         genomeScalarText(g.gRa) + "," + genomeScalarText(g.gRb) + "," +
                         genomeScalarText(g.gDa) + "," + genomeScalarText(g.gDb) + ",{" +
-                        strSetText(g.gLa) + "},{" + strSetText(g.gLb) + "},{" + strSetText(g.gTprimeA) +
-                        "},{" + strSetText(g.gTprimeB) + "}";
+                        strSetText(g.gLa) + "},{" + strSetText(g.gLb) + "},{" + strSetText(g.gZa) +
+                        "},{" + strSetText(g.gZb) + "}";
 
     if (depth >= kMaxFoldDepth) return head + ")";
     return head + ",[" + strSetText(g.Tp) + "])";

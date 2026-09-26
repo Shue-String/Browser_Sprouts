@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-// Advanced Collections / quick-canon. See notes/advanced_collections_plan.md for the full
+// Collections / quick-canon. See notes/advanced_collections_plan.md for the full
 // design. In short: a toggleable canonicalization that swaps a region-chunk (a single-crit
 // "left side") for its collection's canonical representative when the two are known to share a
 // nimber for every compatible right side. A swap can flip the Grundy value by one, so the
@@ -37,7 +37,7 @@ struct QuickCanonResult {
 // (S1 -> 0, S2 -> 1; later S3 -> 0, S4 -> 1). Matching a left side to a collection yields the
 // rep to swap in and the offset to accumulate.
 
-// Whether Advanced Collections is enabled. Honors the STALKS_COLLECTIONS environment variable
+// Whether Collections is enabled. Honors the STALKS_COLLECTIONS environment variable
 // (any non-empty, non-"0" value enables); an explicit argument overrides where a caller passes
 // one. Exact structural canon remains the default.
 bool collectionsEnabled();
@@ -104,7 +104,7 @@ std::vector<std::string> detachableMultiCritLeftSideKeys(const Position& p);
 // internal CritMatch type.
 std::set<std::string> registeredDoubleCritKeys();
 
-// One authored Advanced-Collection roster, exposed for UI/tooling sync -- see
+// One authored Collection roster, exposed for UI/tooling sync -- see
 // tools/dump_collections_roster.cpp, which writes this out for the Collect pane's Collections
 // panel (src/data/collectionsRoster.json) so a change here is reflected there automatically,
 // with no hand-copied duplicate list to drift out of sync.
@@ -115,7 +115,7 @@ struct CollectionRoster {
     std::string rep;                   // this collection's own shared reduction target (same left-side encoding convention, e.g. "2a"); empty when it shares its pair-partner's rep instead of having its own (S_1's offset-1 sibling shares S_1's; S_4 shares S_3's)
 };
 
-// Every currently-registered Advanced Collection, in the SAME authored (pre-canonicalization)
+// Every currently-registered Collection, in the SAME authored (pre-canonicalization)
 // form used to build the internal matching registries in collections.cpp -- single source of
 // truth, so this can never drift from what quickCanon() actually matches.
 std::vector<CollectionRoster> allCollectionRosters();

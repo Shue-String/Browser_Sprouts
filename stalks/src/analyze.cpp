@@ -56,7 +56,7 @@ void writeQuickCanon(std::string& out, const QuickCanonResult& qc) {
 // per-child quickCanon tags (unvaluedChildren/sizeError), which stay unvalued by design. These are
 // NOT real game-length bounds (the quick-canon tree isn't a game tree -- see the doc comment on
 // QuickAnalysisOk in stalks.ts): they count moves that still require active calculation/choice
-// under optimal play, once Advanced-Collections-equivalent positions are treated as interchangeable.
+// under optimal play, once Collections-equivalent positions are treated as interchangeable.
 void writeQuickCanonRoot(std::string& out, const std::string& enc, int offset, int minMoves,
                           int maxMoves) {
     out += "{\"enc\":";
@@ -333,7 +333,7 @@ std::string fullAnalysis(const Position& p, const std::string& canon) {
     }
     out += "]";
 
-    // Quick-canon (Advanced Collections) view of the whole position, including the quick-canon
+    // Quick-canon (Collections) view of the whole position, including the quick-canon
     // GameGraph node's own minMoves/maxMoves (see writeQuickCanonRoot's doc comment for what these
     // mean -- not real game-length bounds).
     out += ",\"quickCanon\":";

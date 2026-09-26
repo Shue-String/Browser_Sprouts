@@ -1,11 +1,11 @@
 // Diagnostic tool for the paper's new "Double-crit Genomes" section: for a position with exactly
 // two special-point crits, dumps every child's RAW (movetype_tok1, movetype_tok2) classification
-// pair -- per moves.hpp's specialPointMovetypes, which returns one movetype (1=R,2=D,3=L,4=T',
+// pair -- per moves.hpp's specialPointMovetypes, which returns one movetype (1=R,2=D,3=L,4=Z,
 // 5=T/untouched) for EVERY special-point token present in the parent, on EVERY move.
 //
 // This exists to get real engine numbers before committing to the exact bucketing rule for the
-// double-crit genome tuple g(p) = (RR,DD,{LL},{T'T'}, RaDb,RbDa,{LaT'b},{LbT'a},
-// g(Ra),g(Rb),g(Da),g(Db), {g(La)},{g(Lb)},{g(T'a)},{g(T'b)}, [T(p)]) -- rather than hand-deriving
+// double-crit genome tuple g(p) = (RR,DD,{LL},{ZZ}, RaDb,RbDa,{LaZb},{LbZa},
+// g(Ra),g(Rb),g(Da),g(Db), {g(La)},{g(Lb)},{g(Za)},{g(Zb)}, [T(p)]) -- rather than hand-deriving
 // which of the 25 possible (mt1,mt2) combinations map to which of the formula's 16 slots. The
 // mapping below is this tool's own best-guess label for each combination the formula names
 // explicitly; anything else prints as UNMAPPED so a real occurrence is visible, not silently
@@ -41,7 +41,7 @@ char movetypeChar(int mt) {
         case 1: return 'R';
         case 2: return 'D';
         case 3: return 'L';
-        case 4: return 'P';  // T' ("prime")
+        case 4: return 'Z';  // decay-right (was T'/"prime" pre-rename)
         case 5: return 'T';
         default: return '?';
     }
@@ -55,19 +55,19 @@ std::string bucketLabel(int mt1, int mt2, char c1, char c2) {
     if (pair(1, 1)) return "RR (direct nimber)";
     if (pair(2, 2)) return "DD (direct nimber)";
     if (pair(3, 3)) return "LL (direct nimber, set)";
-    if (pair(4, 4)) return "T'T' (direct nimber, set)";
+    if (pair(4, 4)) return "ZZ (direct nimber, set)";
     if (pair(1, 2)) return std::string("R") + c1 + "D" + c2 + " (direct nimber)";
     if (pair(2, 1)) return std::string("R") + c2 + "D" + c1 + " (direct nimber)";
-    if (pair(3, 4)) return std::string("L") + c1 + "T'" + c2 + " (direct nimber, set)";
-    if (pair(4, 3)) return std::string("L") + c2 + "T'" + c1 + " (direct nimber, set)";
+    if (pair(3, 4)) return std::string("L") + c1 + "Z" + c2 + " (direct nimber, set)";
+    if (pair(4, 3)) return std::string("L") + c2 + "Z" + c1 + " (direct nimber, set)";
     if (pair(1, 5)) return std::string("R") + c1 + "(p)  [recurse g(), " + c2 + " remains single-crit]";
     if (pair(5, 1)) return std::string("R") + c2 + "(p)  [recurse g(), " + c1 + " remains single-crit]";
     if (pair(2, 5)) return std::string("D") + c1 + "(p)  [recurse g(), " + c2 + " remains single-crit]";
     if (pair(5, 2)) return std::string("D") + c2 + "(p)  [recurse g(), " + c1 + " remains single-crit]";
     if (pair(3, 5)) return std::string("L") + c1 + "(p) set [recurse g(), " + c2 + " remains single-crit]";
     if (pair(5, 3)) return std::string("L") + c2 + "(p) set [recurse g(), " + c1 + " remains single-crit]";
-    if (pair(4, 5)) return std::string("T'") + c1 + "(p) set [recurse g(), " + c2 + " remains single-crit]";
-    if (pair(5, 4)) return std::string("T'") + c2 + "(p) set [recurse g(), " + c1 + " remains single-crit]";
+    if (pair(4, 5)) return std::string("Z") + c1 + "(p) set [recurse g(), " + c2 + " remains single-crit]";
+    if (pair(5, 4)) return std::string("Z") + c2 + "(p) set [recurse g(), " + c1 + " remains single-crit]";
     if (pair(5, 5)) return "T(p) member [recurse full g(), both crits remain]";
     return "UNMAPPED -- not named in the formula as given";
 }

@@ -55,7 +55,7 @@ import tokenLifeJson from '../data/token_life.generated.json';
 
 // Deliberately just `lives` -- the ONLY field of the snapshot's byEnc entries this module reads
 // (see livesOf). That field is a pure function of a position's own structure, with no dependency
-// on the corpus's move-discovery completeness (unlike a hit's other fields -- R/D/L/Tprime/T --
+// on the corpus's move-discovery completeness (unlike a hit's other fields -- R/D/L/Z/T --
 // see this file's own doc comment), so it carries none of the staleness risk that made genome data
 // unsafe to trust from here. Typing only what's read keeps that "never trust genome fields from
 // this snapshot" invariant visible in the type itself, not just in this comment.

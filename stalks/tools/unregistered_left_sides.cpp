@@ -2,7 +2,7 @@
 // from the given .spec file(s) -- the same population collect_alpha_genetics.cpp scans -- report
 // which QUICK-CANON left sides, grouped by LEFT-SIDE lives count (leftSideLives2()/2, see
 // tokens.hpp, computed on the quick-canon rep itself), are NOT recognized by any registered
-// Advanced Collection (collections.cpp's singleCritFamilies/doubleCritFamilies/multiCritFamilies,
+// Collection (collections.cpp's singleCritFamilies/doubleCritFamilies/multiCritFamilies,
 // exposed via allCollectionRosters()).
 //
 // Identity is the quick-canon rep, NOT the raw structural encoding: every candidate is run through
@@ -64,7 +64,7 @@ namespace {
 
 // Index of the character matching the bracket/paren opened at `open` (one of '(','['), tracking
 // combined depth across both delimiter kinds (well-nested by construction, so simple aggregate
-// depth is sufficient -- see fullGenomeText's own doc comment on the "(R,D,{L},{T'},[T])" shape).
+// depth is sufficient -- see fullGenomeText's own doc comment on the "(R,D,{L},{Z},[T])" shape).
 std::size_t matchingClose(const std::string& s, std::size_t open) {
     int depth = 0;
     for (std::size_t i = open; i < s.size(); ++i) {
@@ -82,10 +82,10 @@ std::size_t matchingClose(const std::string& s, std::size_t open) {
 // A genome text's own top-level [T] entries -- e.g. "(0,3,{0},{},[C_3,C_4,S_1\xe2\x8a\x951])" ->
 // {"C_3","C_4","S_1\xe2\x8a\x951"} -- each either a folded name (alpha_genome.cpp's namedGenomes())
 // or, when unrecognized, a full nested "(...)" tuple in its own right. The outer '[' is always the
-// FIRST '[' in the text (fullGenomeText's shape puts {L}/{T'} -- digits and commas only, no brackets
+// FIRST '[' in the text (fullGenomeText's shape puts {L}/{Z} -- digits and commas only, no brackets
 // -- before it), so locating it doesn't need to worry about a deeper child's own "[T]" bracket
 // appearing earlier. Splits the bracket's inner text on top-level commas only (tracking combined
-// paren/bracket/brace depth), so a comma INSIDE a child tuple's own {L}/{T'}/[T] never splits it.
+// paren/bracket/brace depth), so a comma INSIDE a child tuple's own {L}/{Z}/[T] never splits it.
 // Returns {} for "(unclassified)" or any text with no bracket at all.
 std::vector<std::string> topLevelTChildren(const std::string& genomeText) {
     const auto open = genomeText.find('[');

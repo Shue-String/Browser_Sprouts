@@ -1,5 +1,5 @@
 // Redundancy-check CLI for candidate single-crit (k=1) left-side text BEFORE it's added to the
-// Advanced Collections registry -- e.g. for vetting rows pulled from the Shue-pairings paper
+// Collections registry -- e.g. for vetting rows pulled from the Shue-pairings paper
 // extraction CSV. Unlike find_yellow_candidates.cpp/unregistered_left_sides.cpp (which already run
 // every scanned candidate through quickCanon()+buildRepCanonSet() automatically), positions sourced
 // from the paper/CSV go through manual review and never pass through that automated filter -- this

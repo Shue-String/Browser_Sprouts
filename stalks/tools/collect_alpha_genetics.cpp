@@ -5,7 +5,7 @@
 // specialPointMovetypes/packMovetypes -- Phases 2a/2b/3/5): unlike the old DisaPoint-based Collect
 // pipeline (collect_genetics.cpp), no provenance tracking or heuristic move-classification is
 // needed here -- the engine already tags every child with a movetype 1-5 for this exact symbol,
-// and per the user's mapping: movetype 1 -> R, 2 -> D, 3 -> L, 4 -> T', 5 -> T.
+// and per the user's mapping: movetype 1 -> R, 2 -> D, 3 -> L, 4 -> Z, 5 -> T.
 //
 // The .spec files are used purely as a cheap SOURCE of already-reachable single-alpha encodings
 // (skipping the minutes-long GameGraph build a from-scratch scan would need) -- genome computation
@@ -16,14 +16,14 @@
 // file already solved (graph.cpp::build()'s own move enumeration is a superset of
 // childrenAllWithMoveTag's, so nothing enumerated here can be missing from the file).
 //
-// Genome bucket key, per the user: "(R,D,{L},{T'})" -- R/D are single nimbers (at most one vanish
-// move and at most one become-scab move for a lone special point), {L}/{T'} are deduped nimber
+// Genome bucket key, per the user: "(R,D,{L},{Z})" -- R/D are single nimbers (at most one vanish
+// move and at most one become-scab move for a lone special point), {L}/{Z} are deduped nimber
 // sets. [T] (the list of untouched-alpha children) is NOT part of the bucket key, same as the old
 // T column -- exact semantics of its own brackets are still TBD, so this only records the raw
 // (enc, nimber) T-children for now.
 //
 // Every stored position (the entry's own enc and each T-child) ALSO carries its quick-canon
-// (Advanced Collections) display form -- quickEnc/quickOffset, true-nimber(x) = nimber(quickEnc) ^
+// (Collections) display form -- quickEnc/quickOffset, true-nimber(x) = nimber(quickEnc) ^
 // quickOffset -- alongside the real exact `enc`. Per the user's request to surface the more compact
 // quick-canon form rather than the raw structural encoding. The exact `enc` is kept as the
 // authoritative identity/re-analysis key (never replaced by the quick-canon rep): a quick-canon rep
@@ -96,7 +96,7 @@ struct Entry {
     int lives = 0;
     int R = 0, D = 0;
     std::set<int> L;
-    std::set<int> Tprime;
+    std::set<int> Z;
     std::vector<TChild> T;
 };
 
@@ -179,7 +179,7 @@ int main(int argc, char** argv) {
             // doesn't disturb the movetype pipeline's own canonical form.
             const int lives = canonicalizeFull(p).leftSideLives2() / 2;
             // Checked before any of the expensive per-position work below (quickCanon, the R/D/
-            // L/T' + T-children enumeration): this position's own lives value alone decides
+            // L/Z + T-children enumeration): this position's own lives value alone decides
             // whether IT is kept, independent of any other position -- its T-children (which have
             // strictly lower lives, being one move away) still get their own independent turn as
             // db.nodes() reaches them directly, so skipping this entry's own expensive work here
@@ -193,7 +193,7 @@ int main(int argc, char** argv) {
             e.lives = lives;
             e.quick = quickDisp(p);
 
-            // R/D/L/T' (movetypes 1-4) AND T-children (movetype 5) in ONE pass over this
+            // R/D/L/Z (movetypes 1-4) AND T-children (movetype 5) in ONE pass over this
             // position's children -- classifyAlphaGenome and tChildrenOf (alpha_genome.cpp) each
             // do their own separate childrenAllWithMoveTag+specialPointMovetypes walk, memoized
             // by exact position; that memoization only pays off for POSITIONS REVISITED from
@@ -206,7 +206,7 @@ int main(int argc, char** argv) {
             // rather than added as a new shared alpha_genome.cpp function to keep this fix scoped
             // to this tool -- other callers' existing cache semantics are untouched.
             std::optional<int> R, D;
-            std::set<int> L, Tprime;
+            std::set<int> L, Z;
             std::set<std::pair<std::string, int>> seenTChild;
             bool warnedMissing = false;
             for (const auto& [child, tag] : childrenAllWithMoveTag(p)) {
@@ -243,7 +243,7 @@ int main(int argc, char** argv) {
                         L.insert(val.nimber);
                         break;
                     case 4:
-                        Tprime.insert(val.nimber);
+                        Z.insert(val.nimber);
                         break;
                     case 5: {
                         const Position childCanon = canonicalize(child);
@@ -260,7 +260,7 @@ int main(int argc, char** argv) {
             e.R = *R;
             e.D = *D;
             e.L = L;
-            e.Tprime = Tprime;
+            e.Z = Z;
 
             ++qualifying;
             byEnc.emplace(node.enc, std::move(e));
@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
 
     std::map<std::string, std::vector<Entry*>> byGenome;
     for (auto& [enc, e] : byEnc)
-        byGenome[stalks_tools::genomeKey({e.R, e.D, e.L, e.Tprime})].push_back(&e);
+        byGenome[stalks_tools::genomeKey({e.R, e.D, e.L, e.Z})].push_back(&e);
     for (auto& [key, entries] : byGenome) {
         std::stable_sort(entries.begin(), entries.end(),
                           [](const Entry* a, const Entry* b) { return a->lives < b->lives; });
@@ -298,9 +298,9 @@ int main(int argc, char** argv) {
     // backslash, so enc strings need no JSON escaping.
     //
     // Top-level shape: {"genomes": <same bucket-grouped structure as before, keyed by "(R,D,{L},
-    // {T'})">, "byEnc": <every qualifying position ONCE, keyed by its real enc, with its own R/D/L/
-    // T'/T -- no T-child ever repeats another position's data inline>}. `byEnc` exists purely so the
-    // Collect pane's Advanced-Collection ("!!") check can look up ANY T-child/T-grandchild's own
+    // {Z})">, "byEnc": <every qualifying position ONCE, keyed by its real enc, with its own R/D/L/
+    // Z/T -- no T-child ever repeats another position's data inline>}. `byEnc` exists purely so the
+    // Collect pane's Collection ("!!") check can look up ANY T-child/T-grandchild's own
     // genome by a single map lookup instead of a fresh engine call OR (the first attempt at this)
     // embedding each T-child's data redundantly inline every place it's referenced -- with heavy
     // fan-in among common low-order T-children, that inline approach blew the file up ~1000x (500MB+
@@ -333,7 +333,7 @@ int main(int argc, char** argv) {
         if (!firstEnc) f << ",";
         firstEnc = false;
         f << "\"" << enc << "\":{\"R\":" << e.R << ",\"D\":" << e.D << ",\"L\":[" << setStrBare(e.L)
-          << "],\"Tprime\":[" << setStrBare(e.Tprime) << "],\"lives\":" << e.lives << ",\"T\":[";
+          << "],\"Z\":[" << setStrBare(e.Z) << "],\"lives\":" << e.lives << ",\"T\":[";
         for (std::size_t j = 0; j < e.T.size(); ++j) {
             if (j) f << ",";
             const TChild& t = e.T[j];

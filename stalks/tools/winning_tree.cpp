@@ -1,5 +1,5 @@
 // Offline tool: build the "winning game tree" for the n-spot start, either against the exact
-// structural game graph (default) or, with --quick, against the Advanced Collections quick-canon
+// structural game graph (default) or, with --quick, against the Collections quick-canon
 // graph (each position identity-reduced to its quick-canon representative; sub-positions are
 // quick-canonized right along with everything else -- see the mode-agnostic traversal below).
 //

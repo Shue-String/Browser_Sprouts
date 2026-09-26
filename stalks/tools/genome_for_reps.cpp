@@ -1,5 +1,5 @@
 // For a given LIST of quick-canon left-side rep encodings (registered or not), computes the full
-// genome text "(R,D,{L},{T'},[T])" for each -- fills a real gap in alpha_genome.cpp's own tooling:
+// genome text "(R,D,{L},{Z},[T])" for each -- fills a real gap in alpha_genome.cpp's own tooling:
 // unregistered_left_sides.cpp explicitly skips anything already-registered, so it can never produce
 // genome text for an already-registered family's own rep; this tool does, for an arbitrary target
 // list, registered or not.
@@ -26,7 +26,7 @@
 // Also avoids a "self-fold" bug (see project_collect_collections_panel.md's "self-fold bug"
 // section): a rep's own quickCanon reduction IS itself, so a plain fullGenomeText(rootPos) call
 // would fold the ENTIRE root straight to its own family name via the registry-fold path (779c86f)
-// instead of showing its real structure. Root's own (R,D,{L},{T'}) head is built directly via
+// instead of showing its real structure. Root's own (R,D,{L},{Z}) head is built directly via
 // classifyAlphaGenome instead; only its real T-CHILDREN are folded via the ordinary fullGenomeText
 // (T-children folding to a name there is correct/desired, unlike at the root).
 //
@@ -76,7 +76,7 @@ std::string rootGenomeText(const Position& p, const SpecDB& db) {
     for (int v : g->L) { if (!first) out << ","; out << v; first = false; }
     out << "},{";
     first = true;
-    for (int v : g->Tprime) { if (!first) out << ","; out << v; first = false; }
+    for (int v : g->Z) { if (!first) out << ","; out << v; first = false; }
     out << "},[";
     auto children = stalks_tools::tChildrenOf(p);
     std::vector<std::string> tTexts;

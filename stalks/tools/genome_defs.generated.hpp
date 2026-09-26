@@ -20,7 +20,7 @@ struct GenomeDef {
     int R;
     int D;
     std::vector<int> L;
-    std::vector<int> Tprime;
+    std::vector<int> Z;
     std::vector<TChildDef> T;
 };
 

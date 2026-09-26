@@ -275,7 +275,7 @@ std::string canonicalizeTrackedProvenance(std::string enc) {
     }
 }
 
-// Standalone quick-canon (Advanced Collections) lookup for an ARBITRARY encoding -- not just a
+// Standalone quick-canon (Collections) lookup for an ARBITRARY encoding -- not just a
 // position's own children (which analyze()'s `quickCanon`/`quickChildren` fields already cover).
 // Needed so a caller holding some other position's full canon (e.g. one specific play-child
 // already picked out of a fully-valued children list) can find which quick-canon equivalence

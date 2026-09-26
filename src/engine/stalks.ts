@@ -60,13 +60,13 @@ export interface ChildInfo {
 export const UNKNOWN_VALUE = -1;
 
 /**
- * Quick-canon (Advanced Collections) representative of a position: rep encoding + nimber offset.
+ * Quick-canon (Collections) representative of a position: rep encoding + nimber offset.
  * `minMoves`/`maxMoves`, when present, are the quick-canon GameGraph node's own move-count bounds —
  * populated only for "whole position" usages (AnalysisOk.quickCanon, QuickAnalysisOk.quickCanon),
  * never on the cheap per-child tags (ChildInfo.quickCanon). These are NOT real game-length bounds:
  * the quick-canon tree isn't a game tree, and playing a position out for real still takes exactly as
  * many moves as the exact-canon minMoves/maxMoves already say. What they measure instead: under
- * optimal play, Advanced Collections equivalence lets a player who knows the theory pre-commit to a
+ * optimal play, Collections equivalence lets a player who knows the theory pre-commit to a
  * whole future move sequence without actively choosing each move as it comes up. Quick-canon
  * minMoves/maxMoves count how many moves in an optimal-play line still require active
  * calculation/choice (until a fully general strategy, if one exists, is found) — i.e. the exact-canon
@@ -256,7 +256,7 @@ export type QuickCanonOfResult =
   | { ok: false; reason: 'parse-error' | 'engine-error' | 'engine-unavailable'; message?: string };
 
 /**
- * Standalone quick-canon (Advanced Collections) lookup for an ARBITRARY encoding -- unlike
+ * Standalone quick-canon (Collections) lookup for an ARBITRARY encoding -- unlike
  * `AnalysisOk.quickCanon`/`quickChildren`, which only cover a position's own value and its own
  * children, this works on any encoding a caller already has in hand (e.g. one specific T-child's
  * own canon() pulled out of a fully-valued `children: ChildInfo[]` list). Used to dedupe such a

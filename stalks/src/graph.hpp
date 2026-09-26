@@ -100,7 +100,7 @@ public:
     // How positions are identified (and therefore how many nodes are expanded).
     //   Exact -- structural canonical form (the base game graph). Distinct positions stay
     //            distinct; every reachable position is a node. This is the historical behavior.
-    //   Quick -- Advanced Collections quick-canon form. A position is identified with its
+    //   Quick -- Collections quick-canon form. A position is identified with its
     //            oplus-0 quick-canon representative and each edge carries the swap's nimber offset
     //            (0/1). Collections-equivalent positions collapse to one node, so far fewer nodes
     //            are expanded and valued -- the whole point of quick-canon -- while the root's

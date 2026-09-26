@@ -1,5 +1,5 @@
 // Offline tool: run quickCanon over every structural position reachable from the n-spot start
-// and report how many times each Advanced-Collection member (and the crit-cell/scab-cell
+// and report how many times each Collection member (and the crit-cell/scab-cell
 // boundary-merge trick) actually fired as the applied reduction -- "how much mileage are we
 // getting out of each Shue Collection member." See collections.hpp's quickReductionCounts for
 // what's counted and how the key text is built. Every registered collection element is reported

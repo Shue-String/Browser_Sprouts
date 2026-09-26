@@ -21,15 +21,15 @@ namespace stalks_tools {
 // #include of the generated header just for this one constant.
 extern const int kMaxFoldDepth;
 
-// The (R, D, {L}, {T'}) genome of a single-alpha position, per the engine's own movetype
-// classification (moves.hpp's specialPointMovetypes; movetype 1->R, 2->D, 3->L, 4->T', 5->T --
+// The (R, D, {L}, {Z}) genome of a single-alpha position, per the engine's own movetype
+// classification (moves.hpp's specialPointMovetypes; movetype 1->R, 2->D, 3->L, 4->Z, 5->T --
 // see collect_alpha_genetics.cpp's top-of-file doc comment for the full mapping). T itself is not
 // part of the genome bucket key and is not computed here.
 struct AlphaGenome {
     int R = 0;
     int D = 0;
     std::set<int> L;
-    std::set<int> Tprime;
+    std::set<int> Z;
 };
 
 // Classifies `p` (a canonicalized position with `target` as its one LIVE special point -- other
@@ -48,14 +48,14 @@ std::optional<AlphaGenome> classifyAlphaGenome(const stalks::Position& p, const 
 
 // The movetype-5 ("T", untouched) children of `p` with respect to `target` -- the same children
 // classifyAlphaGenome's own loop would see, re-enumerated here since case 5 isn't part of that
-// function's own (R,D,{L},{T'}) result. Exported (not file-local) so double_crit_genome.cpp can
-// reuse it for the single-crit recursion at its Ra/Rb/Da/Db/La/Lb/T'a/T'b slots.
+// function's own (R,D,{L},{Z}) result. Exported (not file-local) so double_crit_genome.cpp can
+// reuse it for the single-crit recursion at its Ra/Rb/Da/Db/La/Lb/Za/Zb slots.
 std::vector<stalks::Position> tChildrenOf(const stalks::Position& p, stalks::Token target = stalks::ALPHA);
 
-// "(R,D,{L},{T'})" -- the human-facing genome-bucket key text.
+// "(R,D,{L},{Z})" -- the human-facing genome-bucket key text.
 std::string genomeKey(const AlphaGenome& g);
 
-// The FULL "(R,D,{L},{T'},[T])" genome text, T-children folded to their shorthand name when
+// The FULL "(R,D,{L},{Z},[T])" genome text, T-children folded to their shorthand name when
 // recognized (see the named-genome table in alpha_genome.cpp, derived from the same
 // src/data/genomeDefs.json that src/model/collectAlpha.ts's GENOME_DEFS reads) -- mirrors collect.ts's
 // genomeParts/foldToName convention: a T-child recurses one level with its OWN full [T] computed,
@@ -83,8 +83,8 @@ bool isNamedGenome(const stalks::Position& p, const stalks::SpecDB& db);
 // `p`'s own display name: its exact fold (isNamedGenome) if it has one -- every T-child accounted
 // for, recursively -- else nullopt. Mirrors collect.ts's resolvedGenomeName exactly (synchronous
 // here -- no fire-once-and-settle needed, since this always has a live SpecDB to resolve against
-// immediately). The old Advanced-Collection fallback (matching on bare core + "every extra T-child
-// is itself in SOME Advanced Collection", via the now-removed isInAdvancedCollection) let unrelated
+// immediately). The old Collection fallback (matching on bare core + "every extra T-child
+// is itself in SOME Collection", via the now-removed isInAdvancedCollection) let unrelated
 // named genomes excuse an extra T-child regardless of relevance to the family actually being
 // searched -- exactly the gap that let a false positive (Aa|6,2A, claimed S_2⊕3) through undetected
 // in 2026-08-30's earlier session. Removed to match collect.ts's own fix -- this is now purely the
@@ -121,7 +121,7 @@ bool hasNamedFamilyEntry(const std::string& name);
 // and gets poisoned (see this function's own definition for the full story).
 void warmRegistryNameIndex();
 
-// The NAMED_FAMILIES entry (by name) whose bare (R,D,{L},{T'}) core equals `coreKey` exactly (e.g.
+// The NAMED_FAMILIES entry (by name) whose bare (R,D,{L},{Z}) core equals `coreKey` exactly (e.g.
 // `genomeKey(*classifyAlphaGenome(p, db))`), or nullopt if no family has that core. Same
 // first-match-wins resolution order as the rest of this file's NAMED_FAMILIES lookups (legacy fold
 // keys, then each family's shift-0 form, then shift 1..kMaxShift) -- exposed so callers outside this file
@@ -129,7 +129,7 @@ void warmRegistryNameIndex();
 // without re-deriving the NAMED_FAMILIES table.
 std::optional<std::string> familyNameForCoreKey(const std::string& coreKey);
 
-// EVERY named family whose bare (R,D,{L},{T'}) core equals `coreKey`, not just the first
+// EVERY named family whose bare (R,D,{L},{Z}) core equals `coreKey`, not just the first
 // (priority-order) match familyNameForCoreKey returns -- several distinct (family, shift) pairs
 // legitimately share the same bare core and differ only in required T-genes (S_1/S_15, S_6/S_8/
 // S_17/S_20, S_7/S_10, S_12/S_25, S_14/S_26, S_21/S_24, at every shift -- see the 2026-09-02

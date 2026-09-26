@@ -46,7 +46,7 @@ export interface StalksModule {
    */
   canonicalizeTrackedProvenance(enc: string): string;
   /**
-   * Standalone quick-canon (Advanced Collections) lookup for an arbitrary encoding -- not just a
+   * Standalone quick-canon (Collections) lookup for an arbitrary encoding -- not just a
    * position's own children (see quickCanonOf in wasm_api.cpp / stalks.ts). Returns
    * {"ok":true,"enc":"<rep>","offset":0|1} or a parse/engine error.
    */

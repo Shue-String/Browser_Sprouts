@@ -1,8 +1,8 @@
 /**
  * Model helpers for the alpha-based Collect feature: bucketing a position's children by the
  * engine's own movetype classification (moves.hpp::specialPointMovetypes, exposed via analyze()'s
- * MoveInfo.movetype -- see stalks.ts) into the (R,D,{L},{T'},[T]) genome tuple, per the user's
- * mapping: movetype 1 -> R, 2 -> D, 3 -> L, 4 -> T', 5 -> T.
+ * MoveInfo.movetype -- see stalks.ts) into the (R,D,{L},{Z},[T]) genome tuple, per the user's
+ * mapping: movetype 1 -> R, 2 -> D, 3 -> L, 4 -> Z, 5 -> T.
  *
  * Restricted, for now, to positions containing EXACTLY ONE special-point token, and that token
  * must be alpha ('a') -- packMovetypes' base-6 digit position is fixed by symbol identity, so with
@@ -36,7 +36,7 @@ export interface PositionRef {
 
 /** Maximum recursion depth for nested [T] genomes: 0 = the searched-for position itself, 1 = its
  * T-children' own (complete) genomes, 2 = the T-children of THOSE genomes -- truncated to just
- * the 4-value (R,D,{L},{T'}) tuple, no further [T] expansion, per the user's "third layer in, only
+ * the 4-value (R,D,{L},{Z}) tuple, no further [T] expansion, per the user's "third layer in, only
  * the first four genes" rule. Single-sourced in genomeDefs.json's "maxFoldDepth" (read directly
  * here, via its own inline cast, rather than the later GENOME_DEFS_JSON/GenomeDefsJson -- those
  * aren't declared yet at this point in module evaluation order) -- also threaded to the native side
@@ -48,22 +48,22 @@ const MAX_GENOME_DEPTH: number = (genomeDefsData as { maxFoldDepth: number }).ma
  * a safety cap so a single search can't explode into an unbounded number of engine calls. */
 const MAX_NESTED_GENOME_LIVES = 5;
 
-/** The bare (R,D,{L},{T'}) tuple, with no [T] expansion -- what a depth-2 ("third layer") T-child
+/** The bare (R,D,{L},{Z}) tuple, with no [T] expansion -- what a depth-2 ("third layer") T-child
  * gets instead of a full AlphaGenome.
  *
  * A T move can land on a SPLIT position (a sum of multiple components, only one of which still
  * contains alpha) -- movetype classification only makes sense applied to that one alpha-bearing
  * component, but the other component(s) are never just discarded: their nim-summed nimber (plus
  * the quick-canon offset, since this is always computed on the quick-canon rep) is XORed directly
- * into R/D/L/T', and each away component's OWN real moves are enumerated as additional T-children
+ * into R/D/L/Z, and each away component's OWN real moves are enumerated as additional T-children
  * (they never touch alpha, so by definition they're T moves too) -- see quickAlphaSplitOf/
  * computeAlphaGenomeAt. A component with nimber n necessarily has moves reaching every nimber
  * 0..n-1 (mex), so this naturally reproduces the whole X⊕0..X⊕(n-1) family of a base shape X as
  * real, engine-verified T-children, not a hand-derived pattern -- see NAMED_GENOME_DEFS's S_3⊕1/
  * S_3⊕2 entries. There is deliberately no separate "oplus" field any more: every correction is
- * folded straight into R/D/L/T'/T, so two genomes with the same tuple text are the same gene. */
-/** One raw (undeduped) R/D/L/T' child: its real structural encoding (the quick-canon alpha-bearing
- * rep's own child, NOT further quick-canon-reduced) and nimber. Unlike the deduped `L`/`Tprime`
+ * folded straight into R/D/L/Z/T, so two genomes with the same tuple text are the same gene. */
+/** One raw (undeduped) R/D/L/Z child: its real structural encoding (the quick-canon alpha-bearing
+ * rep's own child, NOT further quick-canon-reduced) and nimber. Unlike the deduped `L`/`Z`
  * nimber sets above, two entries here can share a nimber but have different encodings (the engine
  * can reach the same value via more than one distinct move) -- kept purely for the paper-format
  * export table (see collect.ts's buildExportLatex), which lists every raw move, not just the
@@ -78,14 +78,14 @@ export interface FourGeneGenome {
   R: number | null;
   D: number | null;
   L: number[];
-  Tprime: number[];
+  Z: number[];
   Rc?: MoveChildRef;
   Dc?: MoveChildRef;
   Lc?: MoveChildRef[];
-  TprimeC?: MoveChildRef[];
+  Zc?: MoveChildRef[];
   /** This genome's own quick-canon form (see PositionRef.quickEnc/quickOffset) -- carried directly
    * on the genome object (not threaded as a separate parameter) so foldedPlainText/registryFoldName
-   * below can recognize `g` as a member of ANY registered Advanced Collection (not just the 32
+   * below can recognize `g` as a member of ANY registered Collection (not just the 32
    * genomeDefs.json families) straight off its own structure, via the same collections.cpp registry
    * quickCanon() itself matches against -- no hand-authored genome tuple needed. See
    * [[project_genome_naming_registry_fix]]. Populated wherever a genome is actually computed
@@ -192,7 +192,7 @@ function quickAlphaSplitOf(enc: string): { realAlphaEnc: string; awayEncs: strin
  * actually has. Concretely, searching S_5 and opening a T-child that quick-canons to "S_5 ⊕ 1"
  * (i.e. its own alpha component's real-to-rep offset is 1, with no away component to blame the
  * offset on) showed T=[S_1,S_2] -- S_5's OWN unshifted T-list, verbatim, recomputed from the rep with
- * the offset applied only to R/D/L/T', never to T -- instead of the mathematically required
+ * the offset applied only to R/D/L/Z, never to T -- instead of the mathematically required
  * T=[S_1⊕1,S_2⊕1,S_5] (S_5's T-children shifted the same way, per the "family at every shift
  * 0..shift-1" rule genomeDefs.json's resolveGenome already applies for NAMED families -- see its own
  * doc comment). Classifying on the real component directly sidesteps the whole issue: its own real
@@ -204,7 +204,7 @@ function quickAlphaSplitOf(enc: string): { realAlphaEnc: string; awayEncs: strin
  * actually sees -- the raw candidate encodings never needed to match for that.
  *
  * When `enc` is a split (a sum of components, only one bearing alpha), the away component(s)'
- * nim-summed (real, exact) nimber is XORed directly into R/D/L/T' (a real component of nimber n
+ * nim-summed (real, exact) nimber is XORed directly into R/D/L/Z (a real component of nimber n
  * forces moves to every nimber 0..n-1 by mex, so this is what actually happens to the position's
  * values when it's played as a disjoint sum -- not a display-only correction), and each away
  * component's own real moves are enumerated as additional T-children (see quickAlphaSplitOf's own
@@ -261,9 +261,9 @@ async function computeAlphaGenomeAtCached(
   let Rc: MoveChildRef | undefined;
   let Dc: MoveChildRef | undefined;
   const L: number[] = [];
-  const Tprime: number[] = [];
+  const Z: number[] = [];
   const Lc: MoveChildRef[] = [];
-  const TprimeC: MoveChildRef[] = [];
+  const Zc: MoveChildRef[] = [];
   // Every T-move candidate reachable from the full split position: one per real move of the
   // alpha component (away part(s) carried through unchanged, at their REAL encoding) plus one per
   // real move of each away component (alpha part carried through unchanged, at ITS real encoding) --
@@ -277,7 +277,7 @@ async function computeAlphaGenomeAtCached(
       case 1: R = shifted; Rc = { enc: child.enc, nimber: child.nimber }; break;
       case 2: D = shifted; Dc = { enc: child.enc, nimber: child.nimber }; break;
       case 3: L.push(shifted); Lc.push({ enc: child.enc, nimber: child.nimber }); break;
-      case 4: Tprime.push(shifted); TprimeC.push({ enc: child.enc, nimber: child.nimber }); break;
+      case 4: Z.push(shifted); Zc.push({ enc: child.enc, nimber: child.nimber }); break;
       case 5: candidates.push({ enc: awayPrefix + child.enc, nimber: shifted, lives: child.lives + awayLivesSum }); break;
       default: break;
     }
@@ -304,7 +304,7 @@ async function computeAlphaGenomeAtCached(
     return {
       position,
       genome: {
-        R, D, L: sortedDedup(L), Tprime: sortedDedup(Tprime), Rc, Dc, Lc, TprimeC,
+        R, D, L: sortedDedup(L), Z: sortedDedup(Z), Rc, Dc, Lc, Zc,
         quickEnc: position.quickEnc, quickOffset: position.quickOffset,
         quickAlphaEnc, quickAlphaOffset,
       },
@@ -325,7 +325,7 @@ async function computeAlphaGenomeAtCached(
   return {
     position,
     genome: {
-      R, D, L: sortedDedup(L), Tprime: sortedDedup(Tprime), Rc, Dc, Lc, TprimeC, T,
+      R, D, L: sortedDedup(L), Z: sortedDedup(Z), Rc, Dc, Lc, Zc, T,
       quickEnc: position.quickEnc, quickOffset: position.quickOffset,
       quickAlphaEnc, quickAlphaOffset,
     },
@@ -368,16 +368,16 @@ export async function computeAlphaGenome(enc: string): Promise<{ position: Posit
   return result ? { position: result.position, genome: result.genome as AlphaGenome } : null;
 }
 
-/** Genome bucket key format: "(R,D,{l1,...},{t1,...})", L and T' each sorted ascending and
+/** Genome bucket key format: "(R,D,{l1,...},{t1,...})", L and Z each sorted ascending and
  * deduped -- byte-identical to stalks/tools/collect_alpha_genetics.cpp's genomeKey, which built
  * src/data/collectAlphaGenomes.json's keys. */
-export function genomeKey(R: number, D: number, L: number[], Tprime: number[]): string {
-  return `(${R},${D},{${sortedDedup(L).join(',')}},{${sortedDedup(Tprime).join(',')}})`;
+export function genomeKey(R: number, D: number, L: number[], Z: number[]): string {
+  return `(${R},${D},{${sortedDedup(L).join(',')}},{${sortedDedup(Z).join(',')}})`;
 }
 
 // The trailing ",[...]" (the [T] portion) is optional and, when present, its contents are not
 // parsed/validated -- [T] isn't part of the genome bucket key (genomeKey below), so both the old
-// 4-value form "(R,D,{L},{T'})" and the new 5-value form "(R,D,{L},{T'},[...])" resolve to the
+// 4-value form "(R,D,{L},{Z})" and the new 5-value form "(R,D,{L},{Z},[...])" resolve to the
 // exact same DB lookup. `.` (dotAll off) still matches newlines here because [\s\S] is used instead
 // so a multi-line pasted [T] list doesn't break the match.
 const GENOME_QUERY_RE =
@@ -401,7 +401,7 @@ const GENOME_QUERY_RE =
  * Every "X⊕n" sibling (n = 1..MAX_SHIFT), every fold-matching string, every display string, and
  * every search-shorthand string is derived from the JSON algorithmically below (see
  * resolveGenome/buildRegistry) -- previously all of that lived as ~140 hand-transcribed,
- * unreadable "(R,D,{L},{T'},[T])" strings (GENOME_SHORTHANDS/NAMED_GENOME_DEFS), which is exactly
+ * unreadable "(R,D,{L},{Z},[T])" strings (GENOME_SHORTHANDS/NAMED_GENOME_DEFS), which is exactly
  * backwards: entering a handful of easy-to-check numbers and having the rest built algorithmically
  * is both easier to verify and easier to extend.
  *
@@ -409,7 +409,7 @@ const GENOME_QUERY_RE =
  * (`shift`, default 0) -- e.g. S_3's one T-child is S_1 at shift 0, S_5's second T-child is S_1 at
  * shift 1 (displayed "S_1⊕1"). Why "X⊕n" exists at all: a T move can land on a SPLIT position (a
  * sum of components, only one of which still contains alpha) -- the other component(s)' nim-
- * summed nimber gets XORed directly into R/D/L/T', and (since a component of nimber n forces moves
+ * summed nimber gets XORed directly into R/D/L/Z, and (since a component of nimber n forces moves
  * to every nimber 0..n-1 by mex) each away component's own moves surface as additional, real
  * T-children X⊕0..X⊕(n-1) -- see FourGeneGenome's doc comment and computeAlphaGenomeAt.
  * `resolveGenome` below is the same rule applied algebraically: fold `shift` into every gene via
@@ -456,7 +456,7 @@ interface GenomeDef {
   R: number;
   D: number;
   L: number[];
-  Tprime: number[];
+  Z: number[];
   T: { name: string; shift?: number }[];
 }
 
@@ -485,7 +485,7 @@ interface ResolvedGenome {
   R: number;
   D: number;
   L: number[];
-  Tprime: number[];
+  Z: number[];
   T: string[];
 }
 
@@ -507,7 +507,7 @@ function resolveGenome(family: string, shift: number): ResolvedGenome {
     R: def.R ^ shift,
     D: def.D ^ shift,
     L: sortedDedup(def.L.map(v => v ^ shift)),
-    Tprime: sortedDedup(def.Tprime.map(v => v ^ shift)),
+    Z: sortedDedup(def.Z.map(v => v ^ shift)),
     T: [...names],
   };
   resolvedCache.set(cacheKey, resolved);
@@ -515,7 +515,7 @@ function resolveGenome(family: string, shift: number): ResolvedGenome {
 }
 
 function fourGeneKeyOf(g: ResolvedGenome): string {
-  return `(${g.R},${g.D},{${g.L.join(',')}},{${g.Tprime.join(',')}})`;
+  return `(${g.R},${g.D},{${g.L.join(',')}},{${g.Z.join(',')}})`;
 }
 
 function foldedKeyOf(g: ResolvedGenome): string {
@@ -557,7 +557,7 @@ interface GenomeRegistry {
   named: Record<string, string>;
   /** Inverse: name -> its own canonical plain-text, for NAMED_FAMILY_GENOME_TEXT. */
   genomeTextByName: Record<string, string>;
-  /** Advanced-Collection membership data, in resolution-priority order -- see this function's own
+  /** Collection membership data, in resolution-priority order -- see this function's own
    * doc comment on why order matters here specifically. */
   families: NamedFamily[];
   /** name (as typed with '+', e.g. "S_6+1") -> resolved genome, for expandGenomeShorthand. */
@@ -565,14 +565,14 @@ interface GenomeRegistry {
   /** name (as typed with '+', e.g. "S_6+1") -> the exact canonical name it denotes (e.g. "S_6⊕1"),
    * for nameForShorthand. Kept separate from byShorthand's ResolvedGenome values because a search
    * for a specific shorthand needs the family it explicitly named, not whichever family happens to
-   * share its bare (R,D,{L},{T'}) core -- see nameForShorthand's own doc comment. */
+   * share its bare (R,D,{L},{Z}) core -- see nameForShorthand's own doc comment. */
   shorthandNames: Record<string, string>;
 }
 
 /** Everything derivable from GENOME_DEFS, built once at module load.
  *
  * Iteration order matters in one specific way: several different (family, shift) pairs can
- * compute to the exact same (R,D,{L},{T'}) core with DIFFERENT T-lists (e.g. S_7/S_9, S_10/S_19,
+ * compute to the exact same (R,D,{L},{Z}) core with DIFFERENT T-lists (e.g. S_7/S_9, S_10/S_19,
  * S_17/S_18 all collide on their base forms alone) -- and collect.ts's familyForGenome/
  * isInAdvancedCollection pick the FIRST `families` entry whose core matches. So every family's own
  * shift-0 form is registered before ANY shift>=1 form (bases always win a collision against a
@@ -621,7 +621,7 @@ function buildRegistry(): GenomeRegistry {
 const REGISTRY = buildRegistry();
 
 /** Expand a search-bar shorthand name (e.g. "S_1", "S_1+1", "S_6+1", "S_2", "S_12") to its
- * "(R,D,{L},{T'})" query text; returns the input unchanged if it isn't a recognized name. The [T]
+ * "(R,D,{L},{Z})" query text; returns the input unchanged if it isn't a recognized name. The [T]
  * portion is never included -- GENOME_QUERY_RE above never parses it either (see its own comment),
  * so there was never anything for a caller to gain from a longer string here. */
 export function expandGenomeShorthand(input: string): string {
@@ -632,10 +632,10 @@ export function expandGenomeShorthand(input: string): string {
 }
 
 /** The exact family name (e.g. "S_1⊕2") a search-bar shorthand explicitly denotes, or undefined if
- * `input` isn't a recognized shorthand -- e.g. a raw "(R,D,{L},{T'})" tuple, or free text. Exists
+ * `input` isn't a recognized shorthand -- e.g. a raw "(R,D,{L},{Z})" tuple, or free text. Exists
  * because expandGenomeShorthand only carries the bare four-gene query forward, and re-deriving the
  * searched name from that bare tuple afterward (GENOME_NAMES[key]) is lossy: several different
- * named families can share the exact same (R,D,{L},{T'}) core with different T-lists (e.g. S_1⊕2
+ * named families can share the exact same (R,D,{L},{Z}) core with different T-lists (e.g. S_1⊕2
  * and S_15 both key to "(2,3,{2},{})"), so that reverse lookup silently picks whichever family
  * happened to register first -- not necessarily the one actually typed. Called BEFORE expansion, on
  * the user's own raw input, so it can return the exact name unambiguously. */
@@ -787,7 +787,7 @@ function leftSideDisplay(enc: string): string {
   return `[${enc.replace(/a/g, 'α').replace(/b/g, 'β')}/`;
 }
 
-/** Every currently-registered Advanced Collection's known members, straight from
+/** Every currently-registered Collection's known members, straight from
  * stalks/src/collections.cpp via src/data/collectionsRoster.json (regenerated by
  * tools/dump_collections_roster.cpp -- see that file's own header for the rebuild command) --
  * whenever a roster there is edited (elements added/removed, a whole new collection registered),
@@ -846,12 +846,12 @@ export const GENOME_NAMES: Record<string, string> = withCompactKeys(REGISTRY.nam
  * none in GENOME_DEFS. */
 export const NAMED_FAMILY_GENOME_TEXT: Record<string, string> = REGISTRY.genomeTextByName;
 
-/** A named genome's identity for Advanced-Collection membership testing: its (R,D,{L},{T'}) core
+/** A named genome's identity for Collection membership testing: its (R,D,{L},{Z}) core
  * plus the folded-plain names of its own lowest-order T-children (e.g. S_20's ["S_3","S_1⊕1"]). A
- * bigger, non-lowest-order position belongs to this family (per the user's Advanced Collection /
+ * bigger, non-lowest-order position belongs to this family (per the user's Collection /
  * Grandparent Bypass rule -- see collect.ts's isInAdvancedCollection) when its own core matches
  * AND its own T-children are a superset of tChildPlains AND every extra T-child beyond that has
- * some T-child already in an Advanced Collection. See buildRegistry's own doc comment for why
+ * some T-child already in an Collection. See buildRegistry's own doc comment for why
  * this array's ORDER matters (multiple families can share a core with different T-lists). */
 export const NAMED_FAMILIES: NamedFamily[] = REGISTRY.families;
 
@@ -887,7 +887,7 @@ export interface ParsedGenomeQuery {
   R: number;
   D: number;
   L: number[];
-  Tprime: number[];
+  Z: number[];
 }
 
 /** True iff `g` carries its own real T-children list (an AlphaGenome), as opposed to a truncated
@@ -904,28 +904,28 @@ export function fmtNimber(n: number | null): string {
   return n === null ? 'error' : String(n);
 }
 
-/** A genome's bare (R,D,{L},{T'}) core, matching the format of NamedFamily.coreKey exactly --
+/** A genome's bare (R,D,{L},{Z}) core, matching the format of NamedFamily.coreKey exactly --
  * used to find which named family (if any) a candidate genome could belong to. Moved here
  * (2026-09-03) from collect.ts's own private copy so the T-Tree feature can share the exact same
  * family-matching rule instead of re-deriving it. */
-export function coreKeyOf(g: { R: number | null; D: number | null; L: number[]; Tprime: number[] }): string {
-  return `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}})`;
+export function coreKeyOf(g: { R: number | null; D: number | null; L: number[]; Z: number[] }): string {
+  return `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Z.join(',')}})`;
 }
 
-/** The named family (if any) whose (R,D,{L},{T'}) core exactly matches `g`. Moved here
+/** The named family (if any) whose (R,D,{L},{Z}) core exactly matches `g`. Moved here
  * (2026-09-03) from collect.ts's private `familyForGenome` -- renamed to match the core-based
  * lookup it actually does, and shared with T-Tree's own per-node family resolution. */
-export function familyForCore(g: { R: number | null; D: number | null; L: number[]; Tprime: number[] }): NamedFamily | undefined {
+export function familyForCore(g: { R: number | null; D: number | null; L: number[]; Z: number[] }): NamedFamily | undefined {
   return NAMED_FAMILIES.find(f => f.coreKey === coreKeyOf(g));
 }
 
-/** EVERY named family whose (R,D,{L},{T'}) core matches `g`, not just the first (priority-order)
+/** EVERY named family whose (R,D,{L},{Z}) core matches `g`, not just the first (priority-order)
  * match familyForCore returns -- several distinct (family, shift) pairs legitimately share a bare
  * core and differ only in required T-genes (mirrors the native side's allFamiliesForCoreKey; see
  * that function's own doc comment). Used by shiftedFamilyFoldName so a lower-priority sibling
  * sharing a base family's core isn't invisible to folding just because a higher-priority one
  * happens to come first and doesn't fit. */
-export function familiesForCore(g: { R: number | null; D: number | null; L: number[]; Tprime: number[] }): NamedFamily[] {
+export function familiesForCore(g: { R: number | null; D: number | null; L: number[]; Z: number[] }): NamedFamily[] {
   const key = coreKeyOf(g);
   return NAMED_FAMILIES.filter(f => f.coreKey === key);
 }
@@ -946,7 +946,7 @@ function sameBaseOtherShift(family: NamedFamily, resolvedName: string | null): b
   return !!t && t.base === family.base && t.shift !== family.shift;
 }
 
-/** A genome's name via EVERY named family sharing its bare (R,D,{L},{T'}) core (not just the first
+/** A genome's name via EVERY named family sharing its bare (R,D,{L},{Z}) core (not just the first
  * -- see familiesForCore's own doc comment: several distinct families/shifts can collide on a bare
  * core). For each candidate family, every one of `g`'s own T-children must be accounted for --
  * satisfying a required T-gene, bypassing back to this same family, OR (see sameBaseOtherShift)
@@ -976,7 +976,7 @@ function sameBaseOtherShift(family: NamedFamily, resolvedName: string | null): b
  * bypassOnlyFoldNameChecked: nothing then stopped a future caller holding a full genome from picking
  * the unchecked one, silently reintroducing the exact 2026-09-16 bug above -- their split was
  * enforced only by doc-comment convention, not the type system, since the unchecked variant's
- * structural `{R,D,L,Tprime}` parameter type let a full AlphaGenome through without complaint).
+ * structural `{R,D,L,Z}` parameter type let a full AlphaGenome through without complaint).
  * `resolveChild`/`depth` are unused (but still required) when `g` isn't full.
  *
  * Cached by (`g` object identity, `depth`) -- this is the expensive step in the whole fold chain
@@ -1057,14 +1057,14 @@ export function foldChain(g: AlphaGenome | FourGeneGenome, plain: string, resolv
  * `genomeParts`, so both collect.ts and ttree.ts fold a genome to its name via exactly one
  * algorithm. A T-child whose own genome isn't resolved yet (resolveChild returns undefined) folds
  * on its bare encoding instead of a tuple -- guaranteed not to collide with any real
- * "(R,D,{L},{T'}...)" text, so it just fails to match any name (self-corrects on a later call once
+ * "(R,D,{L},{Z}...)" text, so it just fails to match any name (self-corrects on a later call once
  * that fetch lands), matching the original's "pending -> not named yet, not an error" behavior. */
 function foldedPlainText(
   g: AlphaGenome | FourGeneGenome,
   resolveChild: ResolveChild,
   depth: number,
 ): string {
-  const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Tprime.join(',')}}`;
+  const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Z.join(',')}}`;
   if (!isFullGenome(g)) {
     const plain = head + ')';
     return foldChain(g, plain, resolveChild, depth) ?? plain;
@@ -1204,7 +1204,7 @@ export function classifyTChildren(
   return rows;
 }
 
-/** Parse a typed genome query "(R,D,{L},{T'})" into its normalized key + parts, or null if it
+/** Parse a typed genome query "(R,D,{L},{Z})" into its normalized key + parts, or null if it
  * doesn't match the expected shape. */
 export function parseGenomeQuery(input: string): ParsedGenomeQuery | null {
   const m = GENOME_QUERY_RE.exec(input.trim());
@@ -1212,9 +1212,9 @@ export function parseGenomeQuery(input: string): ParsedGenomeQuery | null {
   const R = Number.parseInt(m[1], 10);
   const D = Number.parseInt(m[2], 10);
   const L = parseNumSet(m[3]);
-  const Tprime = parseNumSet(m[4]);
-  if (L === null || Tprime === null) return null;
+  const Z = parseNumSet(m[4]);
+  if (L === null || Z === null) return null;
   const sortedL = sortedDedup(L);
-  const sortedTprime = sortedDedup(Tprime);
-  return { key: genomeKey(R, D, sortedL, sortedTprime), R, D, L: sortedL, Tprime: sortedTprime };
+  const sortedZ = sortedDedup(Z);
+  return { key: genomeKey(R, D, sortedL, sortedZ), R, D, L: sortedL, Z: sortedZ };
 }

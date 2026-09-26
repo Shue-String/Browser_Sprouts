@@ -1,4 +1,4 @@
-// Offline audit: for every currently-registered Advanced Collection element (single/double/multi),
+// Offline audit: for every currently-registered Collection element (single/double/multi),
 // reduce its OWN literal authored text via quickCanon()'s traced fixpoint and check whether its OWN
 // registry entry ever actually fires. quickReductionCounts() (collections.hpp) records exactly
 // which key fired each reduction round, keyed by "[" + <registered element's raw text> + "/" for a

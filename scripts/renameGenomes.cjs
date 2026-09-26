@@ -1,4 +1,4 @@
-// Renames Advanced Collections / genome families across the two hand-maintained JSON source files
+// Renames Collections / genome families across the two hand-maintained JSON source files
 // and regenerates everything derived from them. Built as a standing tool because this codebase has
 // already renamed genome families multiple times (see project_advanced_collections.md's rename
 // history, and collections.cpp's own 2026-08-29 "NAMING NOTE" doc comment) and is expected to
@@ -19,7 +19,7 @@
 //    via an exact-quoted-string two-phase (old -> sentinel -> new) text replace that preserves the
 //    file's existing hand-curated one-line-per-family formatting AND declaration order exactly.
 //    Declaration order is NOT touched, even cosmetically: it is load-bearing for collision-priority
-//    resolution whenever two+ families share a bare (R,D,{L},{T'}) core with different T-lists
+//    resolution whenever two+ families share a bare (R,D,{L},{Z}) core with different T-lists
 //    (scripts/genGenomeDefsHeader.cjs's own header comment: "order is load-bearing"; confirmed
 //    empirically 2026-09-20 -- an earlier version of this tool DID reorder to new-numeric order "for
 //    readability" and silently changed several T-gene fold counts as a result, since bypassOnlyFold
@@ -38,7 +38,7 @@
 //     this codebase (see reference_stalks_wasm_build_gotcha), worth doing watched.
 //  2. `npx tsc --noEmit` and a live browser check of the Collect pane / Collections panel.
 //  3. Regenerate src/data/collectAlphaGenomes.json ONLY if you also changed genome bucket data
-//     (R/D/L/T' shapes) -- a pure rename never does; names are resolved live from genomeDefs.json,
+//     (R/D/L/Z shapes) -- a pure rename never does; names are resolved live from genomeDefs.json,
 //     never baked into that snapshot, so it does not need touching for a rename alone.
 // Also does not touch historical prose comments that reference old names for context (established
 // project convention -- see collections.cpp's own NAMING NOTE, which deliberately left its OWN

@@ -1,5 +1,5 @@
 // Mechanically transcribes src/data/collectionElements.json (the single hand-authored source of
-// every registered Advanced Collection element -- see collections.cpp's singleCritFamilies/
+// every registered Collection element -- see collections.cpp's singleCritFamilies/
 // doubleCritFamilies/multiCritFamilies doc comments) into
 // stalks/src/collection_elements.generated.hpp: a compile-time C++ literal with the exact same
 // shape, in the exact same order (order only matters for allCollectionRosters()'s introspection
@@ -67,7 +67,7 @@ function generateContent(data) {
 
   return `// GENERATED FILE -- do not hand-edit.
 // Produced by scripts/genCollectionElementsHeader.cjs from src/data/collectionElements.json (the
-// single hand-authored source of every registered Advanced Collection element -- see that file's
+// single hand-authored source of every registered Collection element -- see that file's
 // "notes" fields for provenance commentary not reproduced here). Re-run that script after editing
 // the JSON, then rebuild any target that includes this header (it's #included directly inside
 // collections.cpp's anonymous namespace, right after the RosterGroup/CritFamily definitions).

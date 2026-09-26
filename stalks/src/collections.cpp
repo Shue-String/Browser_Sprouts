@@ -1213,13 +1213,13 @@ Component applyCritSwap(const Component& c, std::uint32_t R, const std::vector<B
 }
 
 // ---------------------------------------------------------------------------
-// Crit-cell congruity (the hollow-cell family of simple collections). A region whose tokens are
+// Crit-cell congruity (the hollow-cell family of collections). A region whose tokens are
 // EXACTLY k>=2 membranes, all crits (paired to the OUTSIDE, distinct pairings -- not to each
 // other), and nothing else, plays identically for ANY right side y regardless of how the k crits
 // are partitioned into boundaries. k=2 is the hollow cell C_[ab/ = {[ab/y],[a,b/y]} (Shue, PROVEN
 // closed). k=3 is C_[abc/ = {[abc/],[a,bc/],[a,b,c/]} (closure UNPROVEN; adopted empirically per
 // author 2026-07-07, gated by testQuickNimber -- a false merge would surface there as a nimber
-// mismatch). All offset 0 (simple collections).
+// mismatch). All offset 0.
 //
 // We canonicalize toward the SINGLE-BOUNDARY form ([9..9], all k crits on one boundary). Two
 // reasons this is the correct direction:

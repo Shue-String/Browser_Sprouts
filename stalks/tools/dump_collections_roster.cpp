@@ -1,4 +1,4 @@
-// Offline tool: dump every currently-registered Advanced Collection roster (collections.cpp's
+// Offline tool: dump every currently-registered Collection roster (collections.cpp's
 // registry()/doubleCritRegistry(), exposed via allCollectionRosters() -- see collections.hpp) to
 // JSON, for the Collect pane's Collections panel (src/data/collectionsRoster.json). This is the
 // single source of truth for that panel's static reference rosters: whenever a roster in
