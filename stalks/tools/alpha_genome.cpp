@@ -738,6 +738,19 @@ bool isYellowCandidate(const Position& candidate, const SpecDB& db, const std::s
     const NamedFamily* family = familyForName(searchedFamilyName);
     if (!family) throw std::runtime_error("isYellowCandidate: no NAMED_FAMILIES entry named \"" + searchedFamilyName + "\"");
 
+    // Every EXISTING caller (find_yellow_candidates.cpp via allFamilyNamesForCoreKey,
+    // shiftedFamilyFoldNameChecked via allFamiliesForCoreKey, check_ttree_extras.cpp via a node's own
+    // resolvedGenomeName) only ever calls this with a `candidate` whose own (R,D,{L},{Z}) core
+    // ALREADY equals `family`'s -- so this check was always implicitly true and never enforced here.
+    // A caller that skips that pre-filter (found 2026-09-27: a fresh audit tool that tried every
+    // candidate against every named family directly) gets false YES verdicts whenever the two
+    // families just happen to share a generic T-child set (e.g. S_8/S_9/S_10/S_11/S_22/S_23 all
+    // require exactly [S_1⊕1, S_2] despite having six different heads) -- the T-child check below
+    // was never meant to stand alone. Enforced directly here so the function is correct on its own
+    // terms, not just for callers that happen to pre-filter.
+    const auto candidateGenome = classifyAlphaGenome(candidate, db);
+    if (!candidateGenome || genomeKey(*candidateGenome) != family->coreKey) return false;
+
     bool noExtras = true;
     std::set<std::string> presentNames;
     for (const Position& t : tChildrenOf(candidate)) {

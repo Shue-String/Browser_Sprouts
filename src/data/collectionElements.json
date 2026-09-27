@@ -1110,8 +1110,13 @@
             {
               "encoding": "1,5a",
               "minSpots": null
+            },
+            {
+              "encoding": "1a,23",
+              "minSpots": null
             }
-          ]
+          ],
+          "notes": "Merged S_91 (rep \"1a,23\") into this family 2026-09-27: identical genome, its own rep added as an element."
         }
       ]
     },
@@ -1708,16 +1713,6 @@
               "minSpots": null
             }
           ]
-        }
-      ]
-    },
-    {
-      "rep": "1a,23",
-      "groups": [
-        {
-          "name": "S_91",
-          "offset": 0,
-          "elements": []
         }
       ]
     },
@@ -14569,8 +14564,25 @@
             {
               "encoding": "AB|CD|ACE|BEF|2a,DF",
               "minSpots": null
+            },
+            {
+              "encoding": "3A|2a,5A",
+              "minSpots": null
+            },
+            {
+              "encoding": "3A|2a,37A8",
+              "minSpots": null
+            },
+            {
+              "encoding": "3A|2BC|2a,ABC",
+              "minSpots": null
+            },
+            {
+              "encoding": "AB|2AC|2a,3BC",
+              "minSpots": null
             }
-          ]
+          ],
+          "notes": "Merged S_192 (rep \"3A|2a,5A\") into this family 2026-09-27: verified via yellow_check.exe (isYellowCandidate vs S_5 = YES for its rep and all 3 elements) that its extra T-children (S_29, S_80, S_5⊕1) are all bypass-witnessed by the shared grandchild S_5. Its own rep added as an element."
         },
         {
           "name": "S_5⊕1",
@@ -15072,8 +15084,32 @@
             {
               "encoding": "2AB|3a,AB",
               "minSpots": null
+            },
+            {
+              "encoding": "AB|AC|2BD|CDa",
+              "minSpots": null
+            },
+            {
+              "encoding": "AB|ACD|BCE|DEa",
+              "minSpots": null
             }
-          ]
+          ],
+          "notes": "Merged S_200 (rep \"AB|AC|2BD|CDa\") into this family 2026-09-27: identical genome, its own rep added as an element."
+        },
+        {
+          "name": "S_70⊕1",
+          "offset": 1,
+          "elements": [
+            {
+              "encoding": "5AB|3a,AB",
+              "minSpots": null
+            },
+            {
+              "encoding": "37AB8|3a,AB",
+              "minSpots": null
+            }
+          ],
+          "notes": "Formerly S_187 (rep \"5AB|3a,AB\"), merged 2026-09-27: its computed genome exactly matches S_70's offset-1 shift, so it's the same collection as S_70⊕1, not a separate family. Its own rep added as an element."
         }
       ]
     },
@@ -16602,21 +16638,6 @@
       ]
     },
     {
-      "rep": "5AB|3a,AB",
-      "groups": [
-        {
-          "name": "S_187",
-          "offset": 0,
-          "elements": [
-            {
-              "encoding": "37AB8|3a,AB",
-              "minSpots": null
-            }
-          ]
-        }
-      ]
-    },
-    {
       "rep": "3A|12,Aa",
       "groups": [
         {
@@ -16648,29 +16669,6 @@
           "name": "S_190",
           "offset": 0,
           "elements": []
-        }
-      ]
-    },
-    {
-      "rep": "3A|2a,5A",
-      "groups": [
-        {
-          "name": "S_192",
-          "offset": 0,
-          "elements": [
-            {
-              "encoding": "3A|2a,37A8",
-              "minSpots": null
-            },
-            {
-              "encoding": "3A|2BC|2a,ABC",
-              "minSpots": null
-            },
-            {
-              "encoding": "AB|2AC|2a,3BC",
-              "minSpots": null
-            }
-          ]
         }
       ]
     },
@@ -16773,21 +16771,6 @@
           "name": "S_199",
           "offset": 0,
           "elements": []
-        }
-      ]
-    },
-    {
-      "rep": "AB|AC|2BD|CDa",
-      "groups": [
-        {
-          "name": "S_200",
-          "offset": 0,
-          "elements": [
-            {
-              "encoding": "AB|ACD|BCE|DEa",
-              "minSpots": null
-            }
-          ]
         }
       ]
     },

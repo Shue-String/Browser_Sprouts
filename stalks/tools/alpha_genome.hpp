@@ -92,13 +92,20 @@ bool isNamedGenome(const stalks::Position& p, const stalks::SpecDB& db);
 std::optional<std::string> resolvedGenomeName(const stalks::Position& p, const stalks::SpecDB& db);
 
 // True iff `candidate` "goes yellow" when searched for the named family `searchedFamilyName` (e.g.
-// "S_1", "S_1⊕1") -- mirrors collect.ts's renderRequiredLine/computeRowInfos exactly: every one of
-// the family's own lowest-order T-children (family.tChildPlains) must appear among `candidate`'s own
-// top-level T-children (by resolvedGenomeName), AND every top-level T-child must be accounted for --
-// either itself satisfying that requirement, or carrying a direct one-level "bypass" (one of ITS OWN
-// T-children, i.e. a grandchild of `candidate`, whose exact fold equals `searchedFamilyName` itself,
-// not any AC-recursion -- see collect.ts's findBypassMatches). Throws if `searchedFamilyName` isn't
-// a NAMED_FAMILIES entry -- ONLY the 32 hand-authored S_1-S_32 (+shifts) families have one; a
+// "S_1", "S_1⊕1"). First checks that `candidate`'s own (R,D,{L},{Z}) core equals `family`'s core
+// exactly (added 2026-09-27 -- every existing caller already pre-filtered to core-matching families
+// before this point, e.g. via allFamilyNamesForCoreKey/allFamiliesForCoreKey, so this was always
+// implicitly true and never enforced here; a caller that skips that pre-filter, such as a batch audit
+// testing every candidate against every named family directly, got false YES verdicts whenever the
+// two families just happened to share a generic T-child set despite having completely different
+// heads -- see [[feedback_use_yellow_line_for_collection_matching]]). Then mirrors collect.ts's
+// renderRequiredLine/computeRowInfos exactly: every one of the family's own lowest-order T-children
+// (family.tChildPlains) must appear among `candidate`'s own top-level T-children (by
+// resolvedGenomeName), AND every top-level T-child must be accounted for -- either itself satisfying
+// that requirement, or carrying a direct one-level "bypass" (one of ITS OWN T-children, i.e. a
+// grandchild of `candidate`, whose exact fold equals `searchedFamilyName` itself, not any
+// AC-recursion -- see collect.ts's findBypassMatches). Throws if `searchedFamilyName` isn't a
+// NAMED_FAMILIES entry -- ONLY the 32 hand-authored S_1-S_32 (+shifts) families have one; a
 // registry-only fold (S_33+, the vast majority of the registry as of 2026-09-20) has no
 // tChildPlains to check against at all. A caller that resolves `searchedFamilyName` itself (e.g. by
 // walking resolvedGenomeName over an arbitrary descendant node, not a known top-level search target)

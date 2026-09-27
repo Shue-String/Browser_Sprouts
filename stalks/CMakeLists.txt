@@ -69,6 +69,9 @@ target_link_libraries(genome_for_reps PRIVATE stalks_core)
 add_executable(yellow_check tools/yellow_check.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(yellow_check PRIVATE stalks_core)
 
+add_executable(audit_yellow_bases tools/audit_yellow_bases.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+target_link_libraries(audit_yellow_bases PRIVATE stalks_core)
+
 add_executable(find_yellow_candidates tools/find_yellow_candidates.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(find_yellow_candidates PRIVATE stalks_core)
 
