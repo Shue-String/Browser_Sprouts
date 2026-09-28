@@ -10,6 +10,13 @@ instead of Claude re-deriving it from memory files or grep each time.
 ## Architecture summary
 - Region layer is RECOMPUTED from the planar embedding each move (`recomputeRegions` in
   `src/model/moves.ts`). No incremental split/merge logic. See memory `reference_rotation_system_model.md`.
+- **Finding "which region/side is this" (containment queries)**: use `regionContainsPoint`/
+  `windingAround` (`src/model/moves.ts`) with a SIGNED winding check, restricted to candidates
+  actually adjacent to the query, and resolve an `isOuter` region only BY ELIMINATION — never by
+  testing it directly (its winding can read a false negative, or even a false-magnitude near-tie
+  with the true match). Canonical reference implementations: `computeScabArc`,
+  `renderRegionDiagnostic`, `screenOuterRegion` (all in `src/render/renderer.ts`, fixed to this
+  pattern 2026-09-27). Full recipe + bug history: memory `feedback_sphere_native_containment.md`.
 - Dead-region elimination (shrink+pop) is in `src/model/deadRegions.ts`. Main containment fix
   (regions embedded inside a living component) shipped 2026-09-12. See memory
   `project_dead_region_elimination.md` for current status and open bugs.
@@ -33,9 +40,14 @@ instead of Claude re-deriving it from memory files or grep each time.
 
 ## Open TODOs
 - `eliminateIsolatedVertex` (`src/model/deadRegions.ts`) has a known self-crossing edge case still
-  open, and some 2D `pointInPolygon` containment call sites haven't been migrated to the spherical
-  winding-number test yet (`feedback_sphere_native_containment.md`). See
-  `project_dead_region_elimination.md` for specifics.
+  open. See `project_dead_region_elimination.md` for specifics.
+- 2D `pointInPolygon` containment call sites not yet migrated to the spherical winding-number
+  pattern: `src/model/moveCode.ts`'s `computeEnclosureCoverage` (~line 456, a debug helper) and
+  `src/model/moves.ts`'s `probeLeftInside` (~line 1001, decides a cycle's interior-left handedness
+  during `recomputeRegions` face classification — majority vote over projected per-dart probes).
+  `src/render/renderer.ts`'s three containment sites (`computeScabArc`, `renderRegionDiagnostic`,
+  `screenOuterRegion`) were the last ones there and got migrated 2026-09-27 — see
+  `feedback_sphere_native_containment.md`.
 - Quick-canon re-canonicalization efficiency: re-verify from scratch, focused on the move-menu-cache
   question. See `project_quickcanon_recanonicalization_perf.md`.
 - Optimal-play game trees: fetch unrestricted `maxMoves` for 12/16-spot starts. Not urgent. See

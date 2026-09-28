@@ -440,11 +440,22 @@ Bump `FULL_KEY` (this file) whenever the `AnalysisOk`/`ChildInfo` shape changes 
 `showVertexIds`, `showBoundaryArrows`, `showDualGraph`.
 
 Notable private helpers: `drawHoverWedge`/`computeScabArc`/`drawHoverCircle` (scab wedge
-rendering — see memory `project_scab_rendering.md`), `renderRecreateHints`,
+rendering — see memory `project_scab_rendering.md`), `renderRegionDiagnostic` (region
+bookkeeping-vs-geometry cross-check overlay), `renderRecreateHints`,
 `renderRegionNetwork`, `renderPop`, `computeRegionHues`, `renderRegionFills`,
 `screenOuterRegion`, `boundarySphereLoop`/`boundaryPolygon`, `renderBoundaryArrows`,
 `projectAdaptive` (adaptive edge subdivision near projection singularities),
 `renderSubregionHighlight`.
+
+**Finding "which region/side is this" (containment queries):** `computeScabArc`,
+`renderRegionDiagnostic`, and `screenOuterRegion` are the canonical reference implementations —
+each resolves a point/wedge to a region via `regionContainsPoint`/`windingAround` (`moves.ts`)
+using the SIGNED winding number, restricted to candidates actually adjacent to the
+vertex/edge/query point, with an `isOuter` region resolved only BY ELIMINATION, never by testing
+it directly (`Math.abs()` or a bare threshold against an outer/majority region can misfire —
+see memory `feedback_sphere_native_containment.md` for the full recipe and bug history, fixed
+2026-09-27). Any new containment/region-side logic should follow this same pattern rather than a
+fresh `pointInPolygon` check or a naive magnitude comparison.
 
 ---
 
