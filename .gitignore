@@ -19,6 +19,10 @@ stalks/yellow_candidates*
 stalks/ttree_extras*
 stalks/held_out_5families*
 
+# Ad-hoc local test saves (testSave-1.json, TestSave_2.json, testsave-17.json,
+# etc.) -- scratch files for manual testing, never meant to be committed.
+[Tt]est[Ss]ave[-_][0-9]*.json
+
 # Ad-hoc audit/scan tool output (stalks/tools/*.cpp CLIs -- audit_registry_*, unregistered_left_sides,
 # etc. -- that dump straight into stalks/ with a name chosen per run). A blanket root-level pattern
 # instead of one filename added here per new tool run, since that one-off-filename list kept growing

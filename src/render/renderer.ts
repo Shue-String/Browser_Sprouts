@@ -12,7 +12,6 @@ import { VertexVisualState } from '../model/types';
 import type { RotationMatrix, CanvasPoint, SpherePoint } from '../math/sphere';
 import { rotateSpherePoint, unrotateSpherePoint, normalize, project, projectRect, slerp } from '../math/sphere';
 import { chaikin } from '../math/chaikin';
-import { pointInPolygon } from '../math/intersect';
 import { edgeRepellers } from '../model/smooth';
 import { edgePtsForEntry, pointAtBearing, bearingFrom, boundarySphereLoop, windingAround, regionContainsPoint } from '../model/moves';
 
@@ -198,7 +197,7 @@ export class Renderer {
     // to different neighbours and share one region, so "which edge continues
     // the walk" IS the distinguishing information); for a scab it doesn't
     // apply and previously left the wedge on the wrong (dead) side.
-    const scab = this.computeScabArc(state, camera, v, (VERTEX_RADIUS_ACTIVE + HOVER_GROW) * 4);
+    const scab = this.computeScabArc(state, camera, v);
     if (scab) {
       ({ a1, a2, anticlockwise } = scab);
     } else if (e1.id === e2.id) {
@@ -239,7 +238,6 @@ export class Renderer {
     state: GameState,
     camera: RotationMatrix,
     v: { id: number; pos: SpherePoint },
-    probeRadius: number,
   ): { a1: number; a2: number; anticlockwise: boolean } | null {
     if (state.vertices.get(v.id)?.degree !== 2) return null;
     const { px, py } = this.toCanvas(v.pos, camera);
@@ -287,22 +285,52 @@ export class Renderer {
     // The sign convention above assumes the two edge-stubs bound the SAME two
     // regions consistently, which fails for a bigon/self-loop lens (the face
     // classifier can mis-route both darts, or e1's forward/reverse convention
-    // doesn't line up with the mixed e1/e2 angle pair). Verify geometrically:
-    // probe just off each candidate sweep and test against the dead region's
-    // actual boundary polygon; trust that over the sign math whenever they
-    // disagree.
+    // doesn't line up with the mixed e1/e2 angle pair). Verify geometrically —
+    // but sphere-natively (see feedback_sphere_native_containment /
+    // renderRegionDiagnostic above): a 2D pointInPolygon test on the dead
+    // region's CAMERA-PROJECTED boundary (the old approach here) silently
+    // flips sides whenever the projection distorts that region's shape —
+    // exactly the "scabs land on the wrong side depending on sphere
+    // orientation" bug, since rotating the camera must never change which
+    // side of a vertex is topologically alive.
     const deadRegion = adjRegions.find(r => r?.isDead);
+    const liveRegionForCheck = adjRegions.find(r => r && !r.isDead);
     if (deadRegion) {
-      const deadPolys = deadRegion.boundaries.map(b => this.boundaryPolygon(b.entries, state, camera));
-      const inDeadRegion = (pt: CanvasPoint): boolean => {
-        let inside = false;
-        for (const poly of deadPolys) if (poly.length >= 3 && pointInPolygon(poly, pt)) inside = !inside;
-        return inside;
+      const TAU = Math.PI * 2;
+      const b1 = bearingFrom(v.pos, p1 ?? v.pos);
+      const b2raw = bearingFrom(v.pos, p2 ?? v.pos);
+      const b2 = b2raw > b1 ? b2raw : b2raw + TAU; // unwrap so the b1→b2 sweep is well-defined
+      const PROBE_ANGLE = 0.05; // radians on the sphere, same magnitude as renderRegionDiagnostic
+      const probeAB3D = pointAtBearing(v.pos, (b1 + b2) / 2, PROBE_ANGLE);
+      // Never winding-test an OUTER region directly: an outer cycle's own
+      // boundary walk winds the OPPOSITE sign from an ordinary bounded
+      // region's, so `regionContainsPoint` (which requires > 0.5) can
+      // structurally never return true for it, no matter how obviously the
+      // probe sits inside it — see feedback_sphere_native_containment's
+      // "outer cycle negates winding" note. A dead region CAN be the outer
+      // one (a game can die into "everything outside the live pocket"), and
+      // testing it directly there always silently reads "not dead" and mis-
+      // colors this exact wedge. Test whichever of the two candidates is NOT
+      // outer, and take the other by elimination.
+      const preferLive = deadRegion.isOuter && !!liveRegionForCheck && !liveRegionForCheck.isOuter;
+      const testRegion = preferLive ? liveRegionForCheck! : deadRegion;
+      const abMatchesTest = regionContainsPoint(state, testRegion, probeAB3D);
+      const abIsDead = preferLive ? !abMatchesTest : abMatchesTest;
+      // Reconcile with canvas chirality: the sphere-forward wedge (b1→b2) can
+      // project to EITHER the a1→a2 (anticlockwise=false) canvas sweep or its
+      // mirror, depending on which side of the sphere is facing the camera —
+      // same reasoning renderRegionDiagnostic's inForwardSpan check uses.
+      const canvasAngleOf = (p: SpherePoint): number => {
+        const c = this.toCanvas(p, camera);
+        return Math.atan2(c.py - py, c.px - px);
       };
-      const delta = ((a2 - a1) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
-      const midFalse = a1 + delta / 2; // bisector of the anticlockwise=false sweep
-      const probeFalse: CanvasPoint = { px: px + Math.cos(midFalse) * probeRadius, py: py + Math.sin(midFalse) * probeRadius };
-      livingIsLeft = inDeadRegion(probeFalse);
+      const a2u = a2 > a1 ? a2 : a2 + TAU;
+      let probeCanvasAngle = canvasAngleOf(probeAB3D);
+      while (probeCanvasAngle < a1) probeCanvasAngle += TAU;
+      while (probeCanvasAngle >= a1 + TAU) probeCanvasAngle -= TAU;
+      const abMatchesCanvasForward = probeCanvasAngle <= a2u;
+      // livingIsLeft means "the a1→a2 (anticlockwise=false) sweep is dead".
+      livingIsLeft = abMatchesCanvasForward ? abIsDead : !abIsDead;
     }
     return { a1, a2, anticlockwise: livingIsLeft };
   }
@@ -520,7 +548,7 @@ export class Renderer {
       const hasSelfLoop = v.degree === 2 &&
         [...state.edges.values()].some(e => e.v1 === v.id && e.v2 === v.id);
       if (v.degree === 2 && (!isSat || hasSelfLoop) && !isGrayed) {
-        const scab = this.computeScabArc(state, camera, v, radius * 4);
+        const scab = this.computeScabArc(state, camera, v);
         if (scab) {
           ctx.fillStyle = color;
           ctx.beginPath();
@@ -1125,37 +1153,50 @@ export class Renderer {
       this.lastScreenOuterVersion = state.nextRegionId;
     }
     const n = normalize(unrotateSpherePoint({ x: 0, y: 0, z: 1 }, camera));
-    const winding = new Map<RegionId, number>();
+
+    // Never winding-test the model's OUTER region directly, and never compare
+    // candidates by Math.abs() magnitude alone — both are the same mistake
+    // this file's other containment fixes already ran into (see
+    // feedback_sphere_native_containment's "abs() hides a real sign" and
+    // "outer cycle negates winding" notes). Concretely: an outer region's own
+    // loop is often the near-exact reverse of whichever bounded region
+    // actually contains a given point, so it can read a winding magnitude
+    // just as close to 1 as the real match — sometimes fractionally LARGER
+    // due to floating-point noise — even though its SIGN is wrong. Comparing
+    // raw abs() let that outvote the genuine +1 match purely by chance.
+    // Fix: test every BOUNDED (non-outer) region with the correctly-signed
+    // winding number (only `total > 0.5` counts as containment — this
+    // codebase's "interior always on the left" convention makes genuine
+    // containment always +1, never the reverse), and take the outer region
+    // only BY ELIMINATION when no bounded region's signed winding matches.
+    let outerId: RegionId | null = null;
     let bestId: RegionId | null = null, bestW = 0;
     for (const r of state.regions.values()) {
+      if (r.isOuter) { outerId = r.id; continue; }
       let total = 0;
       for (const b of r.boundaries) total += windingAround(boundarySphereLoop(b.entries, state), n);
-      const wn = Math.abs(total);
-      winding.set(r.id, wn);
-      if (wn > bestW) { bestW = wn; bestId = r.id; }
+      if (total > bestW) { bestW = total; bestId = r.id; }
     }
 
-    // Hysteresis: when the back-pole sits near a boundary two faces can have
-    // near-equal winding, and tiny numerical differences would otherwise toggle
-    // the choice (and thus the background colour) every frame. Keep the previous
-    // outer region unless a different one wins by a clear margin.
+    // Hysteresis: when the back-pole sits near a boundary a bounded region's
+    // winding can hover near 0.5, and tiny numerical differences would
+    // otherwise toggle the choice (and thus the background colour) every
+    // frame. Keep the previous pick unless a new bounded region wins by a
+    // clear margin over the previous pick's OWN (also signed) winding — only
+    // applicable when the previous pick was itself bounded; the outer
+    // region has no reliable winding value to compare against.
     const HYSTERESIS = 0.2;
-    if (this.lastScreenOuter !== null) {
-      const prevW = winding.get(this.lastScreenOuter);
-      if (prevW !== undefined && bestW - prevW < HYSTERESIS) {
-        bestId = this.lastScreenOuter;
-        bestW = prevW;
-      }
-    }
-
-    // A bounded face that winds ±1 around the back-pole contains it → it's the
-    // screen-outer. Otherwise the back-pole lies in the model's outer face (whose
-    // components are all holes, winding 0), so fall back to that.
-    let result: RegionId | null = null;
+    let result: RegionId | null;
     if (bestW > 0.5) {
       result = bestId;
+      const prevRegion = this.lastScreenOuter !== null ? state.regions.get(this.lastScreenOuter) : undefined;
+      if (prevRegion && !prevRegion.isOuter && prevRegion.id !== result) {
+        let prevTotal = 0;
+        for (const b of prevRegion.boundaries) prevTotal += windingAround(boundarySphereLoop(b.entries, state), n);
+        if (bestW - prevTotal < HYSTERESIS) result = prevRegion.id;
+      }
     } else {
-      for (const r of state.regions.values()) if (r.isOuter) { result = r.id; break; }
+      result = outerId;
     }
     this.lastScreenOuter = result;
     return result;
@@ -1637,7 +1678,9 @@ export class Renderer {
           if (r?.isDead) adjacentDeadIds.add(rid); else if (r) adjacentLiveIds.add(rid);
         }
       }
-      const unambiguousLive = adjacentLiveIds.size === 1 ? [...adjacentLiveIds][0] : undefined;
+      const candidateIds = [...adjacentDeadIds, ...adjacentLiveIds];
+      const nonOuterIds = candidateIds.filter(id => !state.regions.get(id)?.isOuter);
+      const outerIds = candidateIds.filter(id => state.regions.get(id)?.isOuter);
 
       // Sort by true 3D bearing (camera-independent — the same measure
       // recomputeRegions' own ring sort uses) to get the real wedge adjacency;
@@ -1662,16 +1705,23 @@ export class Renderer {
         const nextBearing = next.bearing > cur.bearing ? next.bearing : next.bearing + TAU;
         const probe3D = pointAtBearing(v.pos, (cur.bearing + nextBearing) / 2, PROBE_ANGLE);
 
-        // 1. Narrow, reliable dead check.
+        // Never winding-test an OUTER region directly (see computeScabArc's
+        // matching comment and feedback_sphere_native_containment's "outer
+        // cycle negates winding" note) — regionContainsPoint structurally
+        // can never return true for it, so a dead-region test that happens
+        // to land on the outer region would always silently read "not
+        // dead" and default this wedge to whatever live id looked
+        // unambiguous, even when it's really the dead/outer wedge. Test
+        // every NON-OUTER candidate directly (reliable both ways); take an
+        // outer candidate only BY ELIMINATION when no non-outer one matches.
         let rid: RegionId | undefined;
         let verified = false;
-        const deadHits = [...adjacentDeadIds].filter(id => insideRegion(id, probe3D));
-        if (deadHits.length === 1) { rid = deadHits[0]; verified = true; }
-        // 2. Unambiguous single-live-region shortcut (no probing needed).
-        else if (unambiguousLive !== undefined) { rid = unambiguousLive; verified = true; }
-        // 3. Genuinely ambiguous — still restricted to this vertex's own
+        const nonOuterHits = nonOuterIds.filter(id => insideRegion(id, probe3D));
+        if (nonOuterHits.length === 1) { rid = nonOuterHits[0]; verified = true; }
+        else if (nonOuterHits.length === 0 && outerIds.length === 1) { rid = outerIds[0]; verified = true; }
+        // Genuinely ambiguous — still restricted to this vertex's own
         // adjacent regions (never the whole region set — see probeAmong).
-        else { rid = probeAmong([...adjacentDeadIds, ...adjacentLiveIds], probe3D); verified = false; }
+        else { rid = probeAmong(nonOuterIds, probe3D) ?? outerIds[0]; verified = false; }
 
         // cur/next order came from 3D bearing (the true rotation order); the
         // canvas angle of the SAME two edges can come out mirrored relative
