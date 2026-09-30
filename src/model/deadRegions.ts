@@ -1174,7 +1174,8 @@ export function scabAloneCollapse(state: GameState, skipVertices?: Set<VertexId>
         const liveIds = new Set<VertexId>();
         for (const entry of b.entries) {
           const v = state.vertices.get(entry.vertexId);
-          if (v && v.degree < 3) liveIds.add(v.id);
+          // Pseudo-vertices (parallel-edge midpoints, degree 0) are structural, not live.
+          if (v && !v.isPseudo && v.degree < 3) liveIds.add(v.id);
         }
         if (liveIds.size !== 1) continue;
 
@@ -1194,7 +1195,7 @@ export function scabAloneCollapse(state: GameState, skipVertices?: Set<VertexId>
         // Collect dead vertex IDs to delete.
         const vertsToDelete = new Set<VertexId>();
         for (const entry of b.entries) {
-          if (entry.vertexId !== scabId) vertsToDelete.add(entry.vertexId);
+          if (entry.vertexId !== scabId && !state.vertices.get(entry.vertexId)?.isPseudo) vertsToDelete.add(entry.vertexId);
         }
         if (vertsToDelete.size === 0) continue; // already a clean self-loop
 
@@ -1219,6 +1220,9 @@ export function scabAloneCollapse(state: GameState, skipVertices?: Set<VertexId>
         for (let i = 0; i < n; i++) {
           const idx = (scabPos + i) % n;
           const entry = b.entries[idx];
+          // A pseudo-vertex splits its parallel edge into two boundary steps; the real-vertex
+          // step already contributes the whole edge geometry, so skip the second half.
+          if (state.vertices.get(entry.vertexId)?.isPseudo) continue;
           const eid = entry.edgeId;
           if (eid === undefined) { loopPoints.length = 0; break; }
           const edge = state.edges.get(eid);
@@ -1226,7 +1230,7 @@ export function scabAloneCollapse(state: GameState, skipVertices?: Set<VertexId>
 
           const fromVid = entry.vertexId;
           const pts = edge.v1 === fromVid ? [...edge.points] : [...edge.points].reverse();
-          if (i === 0) loopPoints.push(...pts);
+          if (loopPoints.length === 0) loopPoints.push(...pts);
           else         loopPoints.push(...pts.slice(1));
         }
 
