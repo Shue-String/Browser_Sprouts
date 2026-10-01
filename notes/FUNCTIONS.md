@@ -448,15 +448,18 @@ bookkeeping-vs-geometry cross-check overlay), `renderRecreateHints`,
 `projectAdaptive` (adaptive edge subdivision near projection singularities),
 `renderSubregionHighlight`.
 
-**Finding "which region/side is this" (containment queries):** `computeScabArc`,
-`renderRegionDiagnostic`, and `screenOuterRegion` are the canonical reference implementations —
-each resolves a point/wedge to a region via `regionContainsPoint`/`windingAround` (`moves.ts`)
-using the SIGNED winding number, restricted to candidates actually adjacent to the
-vertex/edge/query point, with an `isOuter` region resolved only BY ELIMINATION, never by testing
-it directly (`Math.abs()` or a bare threshold against an outer/majority region can misfire —
-see memory `feedback_sphere_native_containment.md` for the full recipe and bug history, fixed
-2026-09-27). Any new containment/region-side logic should follow this same pattern rather than a
-fresh `pointInPolygon` check or a naive magnitude comparison.
+**Finding "which region/side is this" (containment queries):** use `regionContainsPointNearest` /
+`regionNearestFeature` (`moves.ts`, 2026-10-01) — side of the region's nearest boundary feature
+(`regionNearestFeature` also returns the distance, for hysteresis). Sphere-native, no antipodal
+blind spot, identical for outer and non-outer regions, no elimination logic. Callers:
+`computeScabArc`, `renderRegionDiagnostic`, `screenOuterRegion` (renderer.ts) and
+`computeSpliceSlots` (moves.ts). It replaced a winding-number test (`regionContainsPoint`,
+deleted) that read a false 0 for any region containing both the probe and its antipode (128 of 489
+wedge probes on one 19-move save) and needed an outer-region-by-elimination workaround at every
+call site. Don't write a new `pointInPolygon`-on-projection or winding-based check; see memory
+`feedback_sphere_native_containment.md` for the history. `recomputeRegions` also uses it (via
+`loopsNearestFeature` on each cycle's `loop3`) to nest a component/isolated spot into its containing face;
+`windingAround` and `probeInsidePointSphere` no longer exist.
 
 ---
 

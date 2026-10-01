@@ -131,7 +131,7 @@ interface Cycle {
   leftInside: boolean;   // is a probe just LEFT of the walk inside the polygon?
   entries: BoundaryEntry[]; // this cycle's boundary entries (same as entriesFromDarts(darts, ...))
   loop3: SpherePoint[];     // the cycle's raw 3D boundary loop (boundarySphereLoop(entries, state))
-  rep3: SpherePoint | null; // a point just off the boundary, on the side loop3 itself winds +1 around
+  repPoint: SpherePoint | null; // a real (non-pseudo) vertex of this cycle's component — see containingFace
 }
 
 /** Bearing (CCW angle, tangent-plane) from a point ON the sphere toward another point. */
@@ -209,40 +209,103 @@ export function boundarySphereLoop(entries: BoundaryEntry[], state: GameState): 
   return loop;
 }
 
-/** Spherical winding number of `loop` around `point`: the signed bearing-angle
- *  swept by the loop, in full turns (~1 means enclosed, ~0 means not). Entirely
- *  camera/projection-independent — rotating the view can never change the
- *  answer, unlike a 2D pointInPolygon test on any projected polygon. */
-export function windingAround(loop: SpherePoint[], point: SpherePoint): number {
-  if (loop.length < 2) return 0;
-  // A near-degenerate sample (loop point very close to `point`, where
-  // bearingFrom's local tangent frame is singular) poisons the whole running
-  // sum with a wild-but-plausible-looking jump — skip those, same guard
-  // stablePt applies elsewhere in this file.
-  const NEAR_EPS = 1e-3;
-  const kept = loop.filter(p => p.x * point.x + p.y * point.y + p.z * point.z <= 1 - NEAR_EPS);
-  if (kept.length < 2) return 0;
-  let total = 0;
-  let prev = bearingFrom(point, kept[kept.length - 1]);
-  for (const p of kept) {
-    const a = bearingFrom(point, p);
-    let da = a - prev;
-    while (da > Math.PI) da -= 2 * Math.PI;
-    while (da < -Math.PI) da += 2 * Math.PI;
-    total += da; prev = a;
-  }
-  return total / (2 * Math.PI);
+/**
+ * Sphere-native containment with NO antipodal blind spot.
+ *
+ * Why a winding-number test (the previous approach here, since deleted) can't be trusted for a big region: the winding
+ * number of a region's boundary loop around `p` equals [p in R] - [-p in R]
+ * (R = the face on the loop's left). It is +1/-1 only when p and its antipode
+ * are on opposite sides; when BOTH are inside R (any region bigger than about
+ * a hemisphere, or one whose loop sprawls past -p) it reads 0 — a false
+ * "not inside" — and a smaller offset or different probe doesn't reliably
+ * dodge it. Outer regions hit this almost always, but so can an ordinary
+ * non-outer one (found 2026-10-01: a live region whose loop passed near the
+ * antipode of a scab's probe).
+ *
+ * This version asks a purely LOCAL question instead: the open segment from p
+ * to the nearest point of R's boundary lies entirely inside one face, so p is
+ * in R iff p is on R's side (the left of R's boundary darts) at that nearest
+ * feature. Nearest feature is either the interior of a boundary segment
+ * (left-of-dart test) or a boundary vertex (is p's bearing inside R's corner
+ * sweep there). Ties (the two darts of a pendant edge, a joint visited twice)
+ * count as inside if ANY tied feature has p on its inside. Works identically
+ * for outer and non-outer regions — no elimination logic needed by callers.
+ *
+ * Returns the distance to that nearest feature (radians; Infinity if the
+ * region has no usable boundary) alongside the verdict, for callers that want
+ * hysteresis near a boundary. Most callers want `regionContainsPointNearest`.
+ */
+export function regionNearestFeature(
+  state: GameState,
+  region: { boundaries: { entries: BoundaryEntry[] }[] },
+  point: SpherePoint,
+): { dist: number; inside: boolean } {
+  return loopsNearestFeature(region.boundaries.map(b => boundarySphereLoop(b.entries, state)), point);
 }
 
-/** Sphere-native containment: true iff `point` winds +1 turn around `region`'s
- *  boundary. (recomputeRegions' "interior always on the left" convention makes
- *  genuine containment wind +1, not just |winding| large — an unrelated loop
- *  can wind -1, or rarely +1, around the SAME point purely as a numerical
- *  artifact of passing near that point's antipode.) */
-export function regionContainsPoint(state: GameState, region: { boundaries: { entries: BoundaryEntry[] }[] }, point: SpherePoint): boolean {
-  let total = 0;
-  for (const b of region.boundaries) total += windingAround(boundarySphereLoop(b.entries, state), point);
-  return total > 0.5;
+/** The loop-level core of regionNearestFeature, for callers that already hold
+ *  a face's raw 3D boundary loops (e.g. recomputeRegions' per-cycle `loop3`).
+ *  Every loop is walked with the face on its LEFT. */
+export function loopsNearestFeature(
+  loops: SpherePoint[][],
+  point: SpherePoint,
+): { dist: number; inside: boolean } {
+  const TAU = Math.PI * 2;
+  const TIE = 1e-9;
+  const p = point as V3;
+  let bestDist = Infinity;
+  let bestInside = false;
+  const consider = (dist: number, inside: boolean) => {
+    if (dist < bestDist - TIE) { bestDist = dist; bestInside = inside; }
+    else if (dist <= bestDist + TIE) bestInside = bestInside || inside;
+  };
+  for (const loop of loops) {
+    const n = loop.length;
+    if (n < 2) continue; // an isolated spot has no sides — it can't decide membership
+    for (let i = 0; i < n; i++) {
+      const u = loop[i] as V3;
+      const prev = loop[(i + n - 1) % n] as V3;
+      const next = loop[(i + 1) % n] as V3;
+
+      // Boundary segment u -> next (great-circle arc), region on its left.
+      const nrm = cross(u, next);
+      const nLen = Math.hypot(nrm.x, nrm.y, nrm.z);
+      if (nLen > 1e-12) {
+        const nu: V3 = { x: nrm.x / nLen, y: nrm.y / nLen, z: nrm.z / nLen };
+        const s = dot(p, nu);
+        const f: V3 = { x: p.x - s * nu.x, y: p.y - s * nu.y, z: p.z - s * nu.z };
+        // Foot of p on the arc's great circle, valid only if it falls between u and next.
+        if (dot(cross(u, f), nu) >= 0 && dot(cross(f, next), nu) >= 0) {
+          consider(Math.asin(Math.min(1, Math.abs(s))), s > 0);
+        }
+      }
+
+      // Boundary vertex u: nearest feature when the foot of both adjacent
+      // segments clamps here. Corner interior = CCW sweep from the outgoing
+      // stub (toward next) to the incoming stub (toward prev).
+      if (Math.hypot(next.x - u.x, next.y - u.y, next.z - u.z) < 1e-12) continue;
+      if (Math.hypot(prev.x - u.x, prev.y - u.y, prev.z - u.z) < 1e-12) continue;
+      const dist = Math.acos(Math.max(-1, Math.min(1, dot(p, u))));
+      if (dist > bestDist + TIE) continue; // can't win or tie — skip the bearing math
+      const bOut = bearingFrom(u as SpherePoint, next as SpherePoint);
+      const bIn = bearingFrom(u as SpherePoint, prev as SpherePoint);
+      const bP = bearingFrom(u as SpherePoint, point);
+      const mod = (x: number) => ((x % TAU) + TAU) % TAU;
+      let sweep = mod(bIn - bOut);
+      if (sweep < 1e-12) sweep = TAU; // pendant tip: the face wraps all the way round
+      consider(dist, mod(bP - bOut) < sweep);
+    }
+  }
+  return { dist: bestDist, inside: bestInside };
+}
+
+/** True iff `point` is inside `region` — see regionNearestFeature. */
+export function regionContainsPointNearest(
+  state: GameState,
+  region: { boundaries: { entries: BoundaryEntry[] }[] },
+  point: SpherePoint,
+): boolean {
+  return regionNearestFeature(state, region, point).inside;
 }
 
 /**
@@ -300,34 +363,17 @@ function computeSpliceSlots(
     ? v1Candidates
     : v1Candidates.filter(r => touchesVertex(r, moveInfo.v2));
 
-  // windingAround (the sphere-native containment test) sums signed bearing
-  // angles measured from `point`'s own local tangent frame — a formula that
-  // is only reliable close to the loop itself. bearingFrom(point, ·) has a
-  // genuine singularity not just AT point but also at point's ANTIPODE, and a
-  // region whose boundary sprawls across much of the sphere (as any region
-  // bordering a majority/outer face necessarily does) is far more likely to
-  // pass near an arbitrary query's antipode somewhere along its curve than a
-  // small, local region is — so regionContainsPoint silently returns a false
-  // negative for a sprawling region far more often than for a compact one
-  // (confirmed empirically: a moderate-bow stroke's own midpoint tested FALSE
-  // against both the correct outer candidate and the small sibling it should
-  // have lost to, collapsing this whole tie-break to the arbitrary `??
-  // candidates[0]` fallback and splicing the new dart into the wrong ring
-  // position — see the "region acts like it's the same as an untouched
-  // neighbour" bug this was root-caused from). Fix: never test a same-sign
-  // candidate that IS the outer/majority region directly — try every other
-  // candidate first (small regions test reliably), and only reach for an
-  // outer candidate by ELIMINATION (if it's the sole remaining candidate) or,
-  // failing that, still test it directly as a last resort.
+  // Resolved with regionContainsPointNearest (side of each region's nearest
+  // boundary feature), NOT a winding number: winding reads a false "not
+  // inside" for any region that contains both the probe and its antipode —
+  // always the case for a sprawling/majority region, which is exactly what a
+  // joint on a dead region's boundary tends to involve. That used to need an
+  // outer-region-by-elimination workaround here; the nearest-feature test has
+  // no such blind spot, so every candidate is simply tested directly.
   const pickContaining = (
     pool: { boundaries: { entries: BoundaryEntry[] }[]; isOuter?: boolean }[],
-  ): { boundaries: { entries: BoundaryEntry[] }[] } | null => {
-    const nonOuter = pool.filter(r => !r.isOuter);
-    const outer = pool.filter(r => r.isOuter);
-    return nonOuter.find(r => regionContainsPoint(state, r, midPos))
-      ?? (outer.length === 1 ? outer[0] : outer.find(r => regionContainsPoint(state, r, midPos)))
-      ?? null;
-  };
+  ): { boundaries: { entries: BoundaryEntry[] }[] } | null =>
+    pool.find(r => regionContainsPointNearest(state, r, midPos)) ?? null;
 
   let containing: { boundaries: { entries: BoundaryEntry[] }[] } | null = null;
   if (candidates.length === 1) {
@@ -596,6 +642,23 @@ export function recomputeRegions(
     return ring[(p - 1 + ring.length) % ring.length];
   };
 
+  // A real vertex position of a cycle's component, used as the test point for
+  // "which other face contains this whole component". Components are
+  // vertex-disjoint by construction (that's what the union-find above
+  // computes), so any real vertex of this component lies in exactly one face
+  // of everything ELSE — an unambiguous point with no offset/probe math
+  // (a point nudged off the cycle's own curve was the old approach: fragile,
+  // and redundant, since a vertex is always a valid stand-in).
+  const realVertexPos = (seq: number[]): SpherePoint | null => {
+    for (const di of seq) {
+      const origin = darts[di].origin;
+      if (pseudoIds.has(origin)) continue;
+      const v = state.vertices.get(origin);
+      if (v) return v.pos;
+    }
+    return null;
+  };
+
   // --- Trace face cycles. ---
   const cycles: Cycle[] = [];
   const visited = new Set<number>();
@@ -616,8 +679,7 @@ export function recomputeRegions(
     const rep = poly.length ? poly[0] : { px: 0, py: 0 };
     const entries = entriesFromDarts(seq, darts, pseudoIds);
     const loop3 = boundarySphereLoop(entries, state);
-    const rep3 = probeInsidePointSphere(seq, darts, pseudoIds, loop3);
-    cycles.push({ darts: seq, comp: find(darts[s].origin), poly, area: Math.abs(signedArea(poly)), rep, leftInside, entries, loop3, rep3 });
+    cycles.push({ darts: seq, comp: find(darts[s].origin), poly, area: Math.abs(signedArea(poly)), rep, leftInside, entries, loop3, repPoint: realVertexPos(seq) });
   }
 
   // --- Degenerate self-loop correction. A lone self-loop bisects whatever face
@@ -648,33 +710,6 @@ export function recomputeRegions(
     cycles[weaker].leftInside = !cycles[weaker].leftInside;
     trace(`recompute: forced complementary leftInside for degenerate 2-cycle component ` +
       `(comp=${cycles[i].comp}), flipped cycle ${weaker}`);
-  }
-
-  // Any cycle whose near-curve probe came back null is a case
-  // probeInsidePointSphere can genuinely fail on: a cycle that is its
-  // component's ONLY exterior-side representative (no complementary bounded
-  // cycle in the same component for it to test against — e.g. an isolated
-  // self-loop/digon's outer half, or a plain pendant tree with no enclosed
-  // area at all) has a near-curve winding around its own boundary that's -1
-  // or 0 everywhere, never +1 — and for a thin/sparse curve that -1 reading
-  // can also fail to resolve at any offset distance, since a tangent-offset
-  // point that far from a paper-thin curve is no longer meaningfully "near"
-  // it at all. But components are vertex-disjoint by construction (that's
-  // what the union-find above computes), so EVERY cycle's real vertices are
-  // guaranteed unshared with any other component: a vertex's own exact
-  // position is always an unambiguous stand-in for "a point inside whatever
-  // face contains this whole component" — no offset math needed, and
-  // containingFace already excludes this cycle's own component from
-  // candidates. Used only as a last resort, when the normal near-curve
-  // search already came back empty.
-  for (const c of cycles) {
-    if (c.rep3 !== null) continue;
-    for (const di of c.darts) {
-      const origin = darts[di].origin;
-      if (pseudoIds.has(origin)) continue;
-      const v = state.vertices.get(origin);
-      if (v) { c.rep3 = v.pos; break; }
-    }
   }
 
   // --- Classify each cycle as a bounded face vs its component's exterior cycle.
@@ -720,11 +755,11 @@ export function recomputeRegions(
   const globalOuter: Face = { boundaries: [], isOuter: true };
 
   // Smallest bounded face (from another component) that sphere-natively contains
-  // pt — a spherical winding-number test against each candidate's own 3D
-  // boundary loop (loop3), never a 2D pointInPolygon on a projected polygon.
-  // A projected test silently breaks once a candidate face is large enough to
-  // fold over on itself in ANY fixed projection (exactly the failure mode a
-  // majority-spanning/outer face hits) — see [[feedback_sphere_native_containment]].
+  // pt — loopsNearestFeature against each candidate's own 3D boundary loop
+  // (loop3), the same containment test every other caller uses (never a 2D
+  // pointInPolygon on a projected polygon, which folds over for a big face, nor
+  // a winding number, which reads a false 0 for a face containing both pt and
+  // its antipode) — see [[feedback_sphere_native_containment]].
   // `area` (2D, projected) is kept only as a last-resort tie-break between
   // multiple genuinely-containing candidates, never as the containment test itself.
   const containingFace = (pt: SpherePoint | null, ownComp: number | null): number => {
@@ -732,7 +767,7 @@ export function recomputeRegions(
     let best = -1, bestArea = Infinity;
     for (const ci of boundedIdx) {
       if (ownComp !== null && cycles[ci].comp === ownComp) continue;
-      if (cycles[ci].loop3.length >= 2 && windingAround(cycles[ci].loop3, pt) > 0.5 && cycles[ci].area < bestArea) {
+      if (cycles[ci].loop3.length >= 2 && cycles[ci].area < bestArea && loopsNearestFeature([cycles[ci].loop3], pt).inside) {
         bestArea = cycles[ci].area; best = cycleToFace.get(ci)!;
       }
     }
@@ -742,7 +777,7 @@ export function recomputeRegions(
   // Outer cycles → attach as a boundary of their containing face (a hole).
   cycles.forEach((c, i) => {
     if (!isOuterCycle[i]) return;
-    const fi = containingFace(c.rep3, c.comp);
+    const fi = containingFace(c.repPoint, c.comp);
     const entries = entriesFromDarts(c.darts, darts, pseudoIds);
     (fi >= 0 ? faces[fi] : globalOuter).boundaries.push(entries);
   });
@@ -833,10 +868,9 @@ export function recomputeRegions(
   trace(`recompute: ${state.regions.size} regions, ${state.subpositions.length} subpositions, ${cycles.length} face cycles`);
 }
 
-/** Region id that an outer cycle's darts border (the face it nests into). Sphere-
- *  native winding number against each candidate's own 3D loop — see containingFace
- *  above and [[feedback_sphere_native_containment]] for why a projected
- *  pointInPolygon test is unsound here. */
+/** Region id that an outer cycle's darts border (the face it nests into). Same
+ *  sphere-native nearest-feature containment as containingFace above — see it and
+ *  [[feedback_sphere_native_containment]]. */
 function outerCycleFace(
   i: number,
   cycles: Cycle[],
@@ -844,12 +878,12 @@ function outerCycleFace(
   cycleToFace: Map<number, number>,
   globalOuterFace: number,
 ): RegionId {
-  const pt = cycles[i].rep3;
+  const pt = cycles[i].repPoint;
   if (!pt) return globalOuterFace;
   let best = -1, bestArea = Infinity;
   for (const ci of boundedIdx) {
     if (cycles[ci].comp === cycles[i].comp) continue;
-    if (cycles[ci].loop3.length >= 2 && windingAround(cycles[ci].loop3, pt) > 0.5 && cycles[ci].area < bestArea) {
+    if (cycles[ci].loop3.length >= 2 && cycles[ci].area < bestArea && loopsNearestFeature([cycles[ci].loop3], pt).inside) {
       bestArea = cycles[ci].area; best = cycleToFace.get(ci)!;
     }
   }
@@ -1002,80 +1036,6 @@ function probeLeftInside(
     else outVotes++;
   }
   return inVotes > outVotes;
-}
-
-/**
- * A single 3D point a small angular distance off the cycle's own boundary
- * curve, on whichever tangent-plane side the cycle's OWN loop3 winds +1
- * around — used as containingFace's/outerCycleFace's containment-test point
- * instead of a naive vertex-average centroid (a bounded face and its
- * complementary outer face share the exact same physical curve, so a centroid
- * of that curve sits right on the shared boundary: an ambiguous point that can
- * read as "inside" some unrelated nearby region). Sphere-native and
- * projection-independent throughout — see [[feedback_sphere_native_containment]].
- * Trying both tangent-plane offset directions and keeping whichever this
- * cycle's own winding number agrees is interior avoids needing any hand-picked
- * "which side is left" sign convention — loop3's own orientation is already
- * ground truth.
- *
- * Returns null (by design, not a bug) for an OUTER cycle that isn't nested in
- * anything else — its own near-curve winding is never +1 (reversing a loop's
- * direction negates winding, so an outer cycle reads -1 on its bounded
- * sibling's side and 0 everywhere else, never +1) and the caller correctly
- * treats null as "no other region claims this — it's the global outer." See
- * the "degenerate self-loop correction" in recomputeRegions for the one case
- * where an outer cycle genuinely IS nested elsewhere despite this (an isolated
- * self-loop/digon with nothing else attached), handled there directly with a
- * real vertex position instead of retrying the winding search here.
- *
- * Tried at a SEQUENCE of offset distances, smallest first, rather than one
- * fixed constant. A single fixed distance can't work for every cycle: too
- * small and it can sit closer to a coarsely-sampled curve than that curve's
- * own discretization can resolve by a winding-number sum (a freshly-drawn
- * edge, e.g. a self-loop's own two halves, is often much more sparsely
- * sampled than an established boundary); too large risks drifting into
- * unrelated nearby territory. Escalating from a small distance means a
- * normal, densely-sampled loop still resolves on the first try (unchanged
- * behavior), while a coarser one gets progressively larger attempts until one
- * actually clears its own discretization (found via testSave-2.json: a
- * self-loop drawn on an isolated spot came back with a null probe point at
- * the old fixed 0.01 rad offset — see [[project_dead_region_elimination]]).
- */
-function probeInsidePointSphere(
-  seq: number[],
-  darts: Dart[],
-  pseudoIds: Set<VertexId>,
-  loop3: SpherePoint[],
-): SpherePoint | null {
-  const PROBE_SCALES = [0.01, 0.03, 0.1, 0.25]; // radians, ascending
-  for (const probe of PROBE_SCALES) {
-    for (const di of seq) {
-      const d = darts[di];
-      if (pseudoIds.has(d.origin)) continue; // pseudo-vertex dart: no geometry to probe
-      const pts = d.origin === d.edge.v1 ? d.edge.points : [...d.edge.points].reverse();
-      if (pts.length < 2) continue;
-      const mi = Math.floor(pts.length / 2);
-      const A = pts[Math.max(0, mi - 1)] as V3;
-      const B = pts[Math.min(pts.length - 1, mi + 1)] as V3;
-      const M = pts[mi] as V3;
-      let t: V3 = { x: B.x - A.x, y: B.y - A.y, z: B.z - A.z };
-      const tDotM = dot(t, M);
-      t = { x: t.x - tDotM * M.x, y: t.y - tDotM * M.y, z: t.z - tDotM * M.z };
-      const L = Math.hypot(t.x, t.y, t.z);
-      if (L < 1e-9) continue;
-      t = { x: t.x / L, y: t.y / L, z: t.z / L };
-      const side = normalize(cross(M, t)) as V3;
-      for (const sign of [1, -1]) {
-        const cand = normalize({
-          x: M.x + side.x * sign * probe,
-          y: M.y + side.y * sign * probe,
-          z: M.z + side.z * sign * probe,
-        });
-        if (windingAround(loop3, cand) > 0.5) return cand;
-      }
-    }
-  }
-  return null;
 }
 
 /** Assign 'only'/'firstVisit'/'secondVisit' to a boundary by vertex repetition. */

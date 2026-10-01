@@ -10,13 +10,12 @@ instead of Claude re-deriving it from memory files or grep each time.
 ## Architecture summary
 - Region layer is RECOMPUTED from the planar embedding each move (`recomputeRegions` in
   `src/model/moves.ts`). No incremental split/merge logic. See memory `reference_rotation_system_model.md`.
-- **Finding "which region/side is this" (containment queries)**: use `regionContainsPoint`/
-  `windingAround` (`src/model/moves.ts`) with a SIGNED winding check, restricted to candidates
-  actually adjacent to the query, and resolve an `isOuter` region only BY ELIMINATION — never by
-  testing it directly (its winding can read a false negative, or even a false-magnitude near-tie
-  with the true match). Canonical reference implementations: `computeScabArc`,
-  `renderRegionDiagnostic`, `screenOuterRegion` (all in `src/render/renderer.ts`, fixed to this
-  pattern 2026-09-27). Full recipe + bug history: memory `feedback_sphere_native_containment.md`.
+- **Finding "which region/side is this" (containment queries)**: use `regionContainsPointNearest`/
+  `regionNearestFeature` (`src/model/moves.ts`, 2026-10-01: side of the nearest boundary feature —
+  no antipodal blind spot, no outer-region elimination). Used by `computeScabArc`,
+  `renderRegionDiagnostic`, `screenOuterRegion` (renderer.ts), `computeSpliceSlots` and `recomputeRegions`' component/spot nesting (`containingFace`/`outerCycleFace`, via `loopsNearestFeature`; moves.ts).
+  Replaced the old winding-number pattern, which read a false 0 for big regions. Full history:
+  memory `feedback_sphere_native_containment.md`.
 - Dead-region elimination (shrink+pop) is in `src/model/deadRegions.ts`. Main containment fix
   (regions embedded inside a living component) shipped 2026-09-12. See memory
   `project_dead_region_elimination.md` for current status and open bugs.
