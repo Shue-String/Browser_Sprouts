@@ -1,7 +1,8 @@
-// Mechanically transcribes src/data/genomeDefs.json (the single hand-authored source of the
-// alpha-genome family shapes -- see src/model/collectAlpha.ts's own doc comment on GENOME_DEFS)
+// Mechanically transcribes the hand-authored genomes in src/data/collectionElements.json (the
+// single source of the alpha-genome family shapes -- see src/model/collectAlpha.ts's own doc
+// comment on GENOME_DEFS; genomes flagged "derived" are engine-computed snapshots and are skipped)
 // into stalks/tools/genome_defs.generated.hpp: a compile-time C++ literal with the exact same
-// shape, in the exact same order (order is load-bearing -- see collectAlpha.ts's buildRegistry
+// shape, in the exact same order (collection order in the JSON; order is load-bearing -- see collectAlpha.ts's buildRegistry
 // doc comment on collision-resolution priority).
 //
 // This script does NO derivation -- it only reshapes JSON into C++ struct-literal syntax. The
@@ -10,13 +11,13 @@
 // the algorithm itself is the only thing that (deliberately) exists in both languages -- the DATA
 // exists in exactly one hand-edited place.
 //
-// Run after editing genomeDefs.json: `node scripts/genGenomeDefsHeader.cjs`
+// Run after editing collectionElements.json: `node scripts/genGenomeDefsHeader.cjs`
 
 const fs = require('fs');
 const path = require('path');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
-const JSON_PATH = path.join(REPO_ROOT, 'src', 'data', 'genomeDefs.json');
+const { JSON_PATH } = require('./collectionsJson.cjs');
 const OUT_PATH = path.join(REPO_ROOT, 'stalks', 'tools', 'genome_defs.generated.hpp');
 
 function cppStr(s) {
@@ -41,16 +42,21 @@ function genomeDefLiteral(def) {
   return `{${def.R}, ${def.D}, ${L}, ${Z}, ${T}}`;
 }
 
+// [name, genome] for every collection with a hand-authored (non-derived) genome, in JSON order.
+function authoredGenomes(data) {
+  return data.collections.filter(c => c.genome && !c.genome.derived).map(c => [c.name, c.genome]);
+}
+
 // Pure: JSON data in, generated file text out -- no disk I/O, so scripts/checkGeneratedHeaders.cjs
 // can reuse this exact logic to check OUT_PATH for staleness without re-deriving it.
 function generateContent(data) {
-  const familyEntries = Object.entries(data.families)
+  const familyEntries = authoredGenomes(data)
     .map(([name, def]) => `    {${cppStr(name)}, ${genomeDefLiteral(def)}},`)
     .join('\n');
 
   return `// GENERATED FILE -- do not hand-edit.
-// Produced by scripts/genGenomeDefsHeader.cjs from src/data/genomeDefs.json (the single
-// hand-authored source of these shapes -- see src/model/collectAlpha.ts's GENOME_DEFS doc
+// Produced by scripts/genGenomeDefsHeader.cjs from src/data/collectionElements.json (the
+// single source of these shapes -- see src/model/collectAlpha.ts's GENOME_DEFS doc
 // comment). Re-run that script after editing the JSON, then rebuild the native tools that
 // #include this header (alpha_genome.cpp -- collect_alpha_genetics, unregistered_left_sides).
 #pragma once
@@ -77,7 +83,7 @@ struct GenomeDef {
 constexpr int kMaxShift = ${data.maxShift};
 constexpr int kMaxFoldDepth = ${data.maxFoldDepth};
 
-// Declaration order matches genomeDefs.json exactly -- required for buildRegistry's
+// Declaration order matches collectionElements.json exactly -- required for buildRegistry's
 // collision-resolution priority (base forms before shifted forms, in this order).
 inline const std::vector<std::pair<std::string, GenomeDef>>& familyDefs() {
     static const std::vector<std::pair<std::string, GenomeDef>> kDefs = {
@@ -94,7 +100,7 @@ ${familyEntries}
 function generate() {
   const data = JSON.parse(fs.readFileSync(JSON_PATH, 'utf8'));
   fs.writeFileSync(OUT_PATH, generateContent(data), 'utf8');
-  console.log(`Wrote ${path.relative(REPO_ROOT, OUT_PATH)} (${Object.keys(data.families).length} families)`);
+  console.log(`Wrote ${path.relative(REPO_ROOT, OUT_PATH)} (${authoredGenomes(data).length} families)`);
 }
 
 module.exports = { JSON_PATH, OUT_PATH, generateContent };

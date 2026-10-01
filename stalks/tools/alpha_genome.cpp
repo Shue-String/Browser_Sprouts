@@ -20,7 +20,7 @@ using namespace stalks;
 
 namespace stalks_tools {
 
-// Single-sourced from genomeDefs.json's "maxFoldDepth" via genome_defs.generated.hpp (see
+// Single-sourced from collectionElements.json's "maxFoldDepth" via genome_defs.generated.hpp (see
 // genGenomeDefsHeader.cjs); declared (extern) in alpha_genome.hpp so double_crit_genome.cpp can
 // share this same definition instead of hand-typing its own copy of the constant.
 const int kMaxFoldDepth = genome_defs_generated::kMaxFoldDepth;
@@ -39,7 +39,7 @@ std::string setStrBare(const std::set<int>& s) {
 }
 
 // Named-genome shorthand table. The DATA (per-family R/D/{L}/{Z}/[T] shape) is single-sourced in
-// src/data/genomeDefs.json and reaches this file as genome_defs.generated.hpp -- a mechanical
+// src/data/collectionElements.json (each collection's "genome" field; hand-authored ones only) and reaches this file as genome_defs.generated.hpp -- a mechanical
 // transcription, not a hand-typed copy (see that header's own comment). This function ports
 // collectAlpha.ts's resolveGenome/buildRegistry ALGORITHM (fold `shift` into every gene via XOR,
 // union T-children across the shift range, detect same-genome-different-name collisions) natively
@@ -351,7 +351,7 @@ const std::map<std::string, std::map<int, std::string>>& registryNameIndex() {
 // carrying its own offset suffix if non-zero, see registryNameIndex's own doc comment) or empty if
 // no match. Unlike namedGenomes()'s exact full-tuple-TEXT match, this works directly off `p`'s own
 // STRUCTURE via the same quickCanon() engine the Collect pane's Collections toggle itself
-// uses, so it never needs a hand-authored genomeDefs.json entry to recognize a family. Purely
+// uses, so it never needs a hand-authored genome to recognize a family. Purely
 // structural (quickCanon needs neither `db` nor `target`), and unconditional regardless of the
 // STALKS_COLLECTIONS toggle -- exactly like namedGenomes() itself, this is a display-fold concern,
 // independent of whether quick-canon structural swapping is active for the position's own identity.
@@ -445,7 +445,7 @@ std::string sumDecompositionFoldName(const Position& p) {
 // {Z},[T])" strings); failing that, the registry-based structural match above; failing that, the
 // bypass-only core fallback below -- a finite string table can never enumerate every real T-list a
 // bypass-only family's members can have, which is exactly what broke on [1212a/ (core (0,1,{0},{}),
-// matching S_1) before that fix. Tries namedGenomes() FIRST (not the registry) so a genomeDefs.json
+// matching S_1) before that fix. Tries namedGenomes() FIRST (not the registry) so a hand-authored genome
 // entry's hand-verified text always wins over a same-shape registry match -- see
 // [[project_genome_naming_registry_fix]]'s own note on this ordering choice.
 std::string foldToName(const std::string& plainText, const Position& p) {

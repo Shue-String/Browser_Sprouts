@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "npm run check:generated && tsc && vite build && vite build --config vite.voronoiTest.config.js",
     "preview": "vite preview",
-    "gen:headers": "node scripts/genCollectionElementsHeader.cjs && node scripts/genGenomeDefsHeader.cjs",
+    "gen:headers": "node scripts/genCollectionElementsHeader.cjs && node scripts/genGenomeDefsHeader.cjs && node scripts/genCollectionGenomesJson.cjs",
     "check:generated": "node scripts/checkGeneratedHeaders.cjs"
   },
   "devDependencies": {

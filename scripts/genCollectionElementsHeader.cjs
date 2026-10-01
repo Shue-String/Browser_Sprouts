@@ -6,7 +6,7 @@
 // dump ordering -- the matching registries below key off a std::map, order-independent there).
 //
 // This script does NO derivation -- it only reshapes JSON into C++ struct-literal syntax (same
-// role as scripts/genGenomeDefsHeader.cjs plays for src/data/genomeDefs.json). The JSON's "notes"
+// role as scripts/genGenomeDefsHeader.cjs plays for collectionElements.json's genomes). The JSON's "notes"
 // fields (hand-written provenance commentary: date added, verification method, why a candidate
 // was rejected/removed) and each element's "minSpots" (the minimum starting-spot count at which
 // that left side is known to appear, or null if unknown) are intentionally NOT transcribed here --
@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
-const JSON_PATH = path.join(REPO_ROOT, 'src', 'data', 'collectionElements.json');
+const { JSON_PATH, flatFamilies } = require('./collectionsJson.cjs');
 const OUT_PATH = path.join(REPO_ROOT, 'stalks', 'src', 'collection_elements.generated.hpp');
 
 function cppStr(s) {
@@ -63,7 +63,7 @@ function generateContent(data) {
     ['multi', 'multiCritFamilies'],
   ];
 
-  const body = sections.map(([key, fnName]) => familiesFunction(fnName, data[key])).join('\n\n');
+  const body = sections.map(([key, fnName]) => familiesFunction(fnName, flatFamilies(data, key))).join('\n\n');
 
   return `// GENERATED FILE -- do not hand-edit.
 // Produced by scripts/genCollectionElementsHeader.cjs from src/data/collectionElements.json (the
@@ -80,10 +80,13 @@ function generate() {
   const data = JSON.parse(fs.readFileSync(JSON_PATH, 'utf8'));
   fs.writeFileSync(OUT_PATH, generateContent(data), 'utf8');
   let groups = 0, elements = 0;
+  let families = 0;
   for (const key of ['single', 'double', 'multi'])
-    for (const fam of data[key])
+    for (const fam of flatFamilies(data, key)) {
+      families++;
       for (const g of fam.groups) { groups++; elements += g.elements.length; }
-  console.log(`Wrote ${path.relative(REPO_ROOT, OUT_PATH)} (${data.single.length + data.double.length + data.multi.length} families, ${groups} groups, ${elements} elements)`);
+    }
+  console.log(`Wrote ${path.relative(REPO_ROOT, OUT_PATH)} (${data.collections.length} collections, ${families} families, ${groups} groups, ${elements} elements)`);
 }
 
 module.exports = { JSON_PATH, OUT_PATH, generateContent };

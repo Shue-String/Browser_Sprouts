@@ -20,7 +20,7 @@
 
 import { analyze, quickCanonOf } from '../engine/stalks';
 import collectionsRosterJson from '../data/collectionsRoster.json';
-import genomeDefsData from '../data/genomeDefs.json';
+import collectionGenomesData from '../data/collectionGenomes.generated.json';
 
 /** A position reference carrying both its real (exact structural) encoding -- the authoritative
  * identity, used for any further engine call (re-analysis, etc.) -- and its quick-canon (Advanced
@@ -37,11 +37,12 @@ export interface PositionRef {
 /** Maximum recursion depth for nested [T] genomes: 0 = the searched-for position itself, 1 = its
  * T-children' own (complete) genomes, 2 = the T-children of THOSE genomes -- truncated to just
  * the 4-value (R,D,{L},{Z}) tuple, no further [T] expansion, per the user's "third layer in, only
- * the first four genes" rule. Single-sourced in genomeDefs.json's "maxFoldDepth" (read directly
- * here, via its own inline cast, rather than the later GENOME_DEFS_JSON/GenomeDefsJson -- those
- * aren't declared yet at this point in module evaluation order) -- also threaded to the native side
+ * the first four genes" rule. Single-sourced in collectionElements.json's "maxFoldDepth" (via
+ * collectionGenomes.generated.json, read directly here, via its own inline cast, rather than the
+ * later COLLECTION_GENOMES_JSON/CollectionGenomesJson -- those aren't declared yet at this point in
+ * module evaluation order) -- also threaded to the native side
  * as genome_defs.generated.hpp's kMaxFoldDepth (alpha_genome.cpp, double_crit_genome.cpp). */
-const MAX_GENOME_DEPTH: number = (genomeDefsData as { maxFoldDepth: number }).maxFoldDepth;
+const MAX_GENOME_DEPTH: number = (collectionGenomesData as { maxFoldDepth: number }).maxFoldDepth;
 
 /** Above this many lives, a position's own T-children don't get a nested genome computed at all
  * (they still appear in [T] as plain position/nimber/lives T-children, just without `.genome`) --
@@ -388,14 +389,16 @@ const GENOME_QUERY_RE =
  * so there's no single-alpha genome to define for them; their Collections-panel folders come
  * entirely from the roster JSON instead -- see COLLECTION_ROSTER_FOLDER_NAMES below).
  *
- * The data lives in src/data/genomeDefs.json -- the SINGLE hand-authored source of these shapes,
- * shared with the native C++ side: stalks/tools/genome_defs.generated.hpp is mechanically
- * transcribed from this same JSON (run `node scripts/genGenomeDefsHeader.cjs` after editing it),
+ * The data lives in each collection's own "genome" field in src/data/collectionElements.json --
+ * the SINGLE hand-authored source of these shapes (formerly a separate genomeDefs.json, merged in
+ * 2026-09-30), shared with the native C++ side: stalks/tools/genome_defs.generated.hpp is
+ * mechanically transcribed from that same JSON (run `npm run gen:headers` after editing it), and
+ * this file reads the small src/data/collectionGenomes.generated.json slice of it,
  * and alpha_genome.cpp's own resolveGenome/buildRegistry port consumes that header the same way
  * this file consumes the JSON directly. Previously this data was hand-entered independently in
  * THREE places (this file, alpha_genome.cpp's hardcoded name table, and briefly a third informal
  * copy) -- exactly the kind of drift risk (see the S_10/S_11 mix-up below) a single JSON source
- * eliminates. Do not hand-edit the numbers in two places again; edit genomeDefs.json and
+ * eliminates. Do not hand-edit the numbers in two places again; edit collectionElements.json and
  * regenerate.
  *
  * Every "X⊕n" sibling (n = 1..MAX_SHIFT), every fold-matching string, every display string, and
@@ -460,19 +463,41 @@ interface GenomeDef {
   T: { name: string; shift?: number }[];
 }
 
-interface GenomeDefsJson {
-  maxShift: number;
-  families: Record<string, GenomeDef>;
+/** A genome as stored in collectionElements.json: a hand-authored one (GenomeDef's shape) or an
+ * engine-derived snapshot (`derived: true`), whose T list may also hold a nested genome where the
+ * engine found a T-child no registered collection names. */
+interface StoredGenome {
+  R: number;
+  D: number;
+  L: number[];
+  Z: number[];
+  T: (StoredTChild | StoredGenome)[];
+  derived?: boolean;
+}
+interface StoredTChild {
+  name: string;
+  shift?: number;
 }
 
-const GENOME_DEFS_JSON = genomeDefsData as unknown as GenomeDefsJson;
-const GENOME_DEFS: Record<string, GenomeDef> = GENOME_DEFS_JSON.families;
+interface CollectionGenomesJson {
+  maxShift: number;
+  maxFoldDepth: number;
+  collections: { name: string; genome: StoredGenome }[];
+}
+
+const COLLECTION_GENOMES_JSON = collectionGenomesData as unknown as CollectionGenomesJson;
+/** Hand-authored genomes only, in collectionElements.json's own collection order (load-bearing --
+ * see buildRegistry): these alone feed the fold/collision registry. Engine-derived ones are
+ * display-only, see COLLECTION_GENOME_TEXT. */
+const GENOME_DEFS: Record<string, GenomeDef> = Object.fromEntries(
+  COLLECTION_GENOMES_JSON.collections.filter(c => !c.genome.derived).map(c => [c.name, c.genome as unknown as GenomeDef]),
+);
 
 /** How many "X⊕n" siblings get derived for every family above. A component of nimber n forces
  * moves to every nimber 0..n-1 (mex), so this pattern genuinely could extend further, but per the
  * user's own call: treat this as a deliberate ceiling, not a waypoint, until a case actually needs
  * more. */
-const MAX_SHIFT = GENOME_DEFS_JSON.maxShift;
+const MAX_SHIFT = COLLECTION_GENOMES_JSON.maxShift;
 
 function nameOf(family: string, shift: number): string {
   return shift === 0 ? family : `${family}⊕${shift}`;
@@ -677,7 +702,7 @@ export function distinctPortLetters(s: string): number {
 /** Every registered collection's own reduction target + offset, keyed by the reduced position's
  * quick-canon encoding (a `PositionRef.quickEnc`-shaped string) -- the TS-side counterpart of
  * alpha_genome.cpp's `registryNameIndex()` (see that function's own doc comment for the full
- * rationale, identical here: a T-child in S_33+ territory has no genomeDefs.json entry at all, so
+ * rationale, identical here: a T-child in S_33+ territory has no hand-authored genome at all, so
  * `foldedPlainText`/`registryFoldName` below need to recognize it structurally instead, straight off
  * the same collections.cpp registry quickCanon() already matches against). Unlike the native version,
  * this only quick-canons ONE element per collection (`elements[0]`), not every one: every element of
@@ -846,6 +871,34 @@ export const GENOME_NAMES: Record<string, string> = withCompactKeys(REGISTRY.nam
  * none in GENOME_DEFS. */
 export const NAMED_FAMILY_GENOME_TEXT: Record<string, string> = REGISTRY.genomeTextByName;
 
+/** A stored genome's own "(R,D,{L},{Z},[T])" text, T-children as names ("S_1⊕1") or nested tuples,
+ * deduplicated and sorted by text -- the same shape genomeParts/registryGenomeTupleText in collect.ts
+ * produce for a live genome. */
+function storedGenomeText(g: StoredGenome): string {
+  const head = `(${g.R},${g.D},{${g.L.join(',')}},{${g.Z.join(',')}}`;
+  const children = new Set(
+    g.T.map(t => ('name' in t ? nameOf(t.name, t.shift ?? 0) : storedGenomeText(t))),
+  );
+  return `${head},[${[...children].sort().join(',')}])`;
+}
+
+/** EVERY collection's own genome text, hand-authored or engine-derived (S_33 onward) alike, keyed
+ * by collection name -- a superset of NAMED_FAMILY_GENOME_TEXT (hand-authored names resolve through
+ * it, so their text is identical to before). Double-crit collections (Z_n) have no genome and so no
+ * entry. */
+export const COLLECTION_GENOME_TEXT: Record<string, string> = Object.fromEntries(
+  COLLECTION_GENOMES_JSON.collections.map(c => [
+    c.name,
+    c.genome.derived ? storedGenomeText(c.genome) : REGISTRY.genomeTextByName[c.name],
+  ]),
+);
+
+/** Names of collections whose genome is an engine-derived snapshot rather than hand-authored
+ * (registry-only, S_33 onward) -- i.e. the ones with no entry in NAMED_FAMILY_GENOME_TEXT. */
+export const DERIVED_GENOME_COLLECTIONS: ReadonlySet<string> = new Set(
+  COLLECTION_GENOMES_JSON.collections.filter(c => c.genome.derived).map(c => c.name),
+);
+
 /** A named genome's identity for Collection membership testing: its (R,D,{L},{Z}) core
  * plus the folded-plain names of its own lowest-order T-children (e.g. S_20's ["S_3","S_1⊕1"]). A
  * bigger, non-lowest-order position belongs to this family (per the user's Collection /
@@ -854,26 +907,6 @@ export const NAMED_FAMILY_GENOME_TEXT: Record<string, string> = REGISTRY.genomeT
  * some T-child already in an Collection. See buildRegistry's own doc comment for why
  * this array's ORDER matters (multiple families can share a core with different T-lists). */
 export const NAMED_FAMILIES: NamedFamily[] = REGISTRY.families;
-
-export interface NamedFamilyGroup {
-  /** The shift-0 (plain) name, e.g. "S_1". */
-  base: string;
-  /** "base⊕1".."base⊕MAX_SHIFT", in shift order -- buildRegistry always registers exactly this
-   * many for every GENOME_DEFS family unconditionally (see its own second registration pass), so
-   * this is computed directly via nameOf rather than filtered out of REGISTRY.families -- no risk
-   * of missing or extra entries. */
-  offsets: string[];
-}
-
-/** One group per GENOME_DEFS family, in GENOME_DEFS' own declaration order (a DIFFERENT thing from
- * display order -- collect.ts sorts these itself for the Collections panel; this array's order
- * stays tied to GENOME_DEFS purely because that's the natural free order to compute it in). Lets a
- * consumer nest each family's "X⊕n" siblings inside its own base's collapsible section instead of
- * listing ~4x as many top-level folders -- exactly what the Collections panel needed. */
-export const NAMED_FAMILY_GROUPS: NamedFamilyGroup[] = Object.keys(GENOME_DEFS).map(base => ({
-  base,
-  offsets: Array.from({ length: MAX_SHIFT }, (_, i) => nameOf(base, i + 1)),
-}));
 
 function parseNumSet(raw: string): number[] | null {
   const trimmed = raw.trim();

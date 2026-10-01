@@ -22,8 +22,9 @@ instead of Claude re-deriving it from memory files or grep each time.
   `project_dead_region_elimination.md` for current status and open bugs.
 - Canonical position encoding: `src/model/encoding.ts`. All dead-region surgery is gated
   by a before/after encoding check.
-- Advanced Collections / genome registry: hand-authored data lives in `src/data/genomeDefs.json`
-  and `src/data/collectionElements.json`; everything else (both `.generated.hpp` native headers,
+- Advanced Collections / genome registry: hand-authored data lives in ONE file, `src/data/collectionElements.json` (one object per
+  collection: name, rep, genome, and per-offset `single`/`double`/`multi` element lists; S_33+ genomes are engine-derived snapshots flagged `derived`,
+  regenerate via `stalks/tools/genome_for_reps`); everything else (both `.generated.hpp` native headers, `collectionGenomes.generated.json`,
   `collectionsRoster.json`, `collectAlpha.ts`'s in-memory registry) is a mechanical derivation —
   see `FUNCTIONS.md`'s "Build scripts" section and `reference_encoding_system.md`. The native
   registry (`stalks/collections.cpp`) and its ~20 audit/discovery tools under `stalks/tools/` are

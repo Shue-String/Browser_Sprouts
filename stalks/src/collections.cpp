@@ -1034,7 +1034,7 @@ struct CritFamily {
 // rejected/removed, cross-references) for all three functions below lives in
 // src/data/collectionElements.json's per-family/per-group "notes" fields, not here -- see that
 // file, and scripts/genCollectionElementsHeader.cjs which reshapes it into the #include below
-// (same role genGenomeDefsHeader.cjs plays for src/data/genomeDefs.json). Edit the JSON, re-run
+// (same role genGenomeDefsHeader.cjs plays for collectionElements.json's genomes). Edit the JSON, re-run
 // the script, rebuild.
 #include "collection_elements.generated.hpp"
 

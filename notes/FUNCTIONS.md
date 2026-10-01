@@ -316,8 +316,9 @@ directly (`moves.hpp`'s `specialPointMovetypes`: movetype 1→R, 2→D, 3→L, 4
 the single TS-side source of truth for genome shapes, family names, and fold/bypass resolution;
 shared by both Collect (`src/ui/collect.ts`) and T-Tree (`src/model/ttree.ts` / `src/ui/ttree.ts`).
 The native mirror of this file's registry is `stalks/tools/alpha_genome.cpp` — the two are kept in
-sync via `src/data/genomeDefs.json` (hand-authored) → `scripts/genGenomeDefsHeader.cjs` →
-`stalks/tools/genome_defs.generated.hpp` (do not hand-edit the generated header).
+sync via each collection's `genome` field in `src/data/collectionElements.json` (hand-authored for S_1–S_32, engine-derived and flagged
+`derived: true` for S_33+) → `scripts/genGenomeDefsHeader.cjs` (hand-authored only) → `stalks/tools/genome_defs.generated.hpp`, and →
+`scripts/genCollectionGenomesJson.cjs` → `src/data/collectionGenomes.generated.json` (every genome; what this file reads). Do not hand-edit the generated files. `COLLECTION_GENOME_TEXT` holds every collection's genome text.
 
 | Export | Description |
 |---|---|
@@ -325,10 +326,10 @@ sync via `src/data/genomeDefs.json` (hand-authored) → `scripts/genGenomeDefsHe
 | `shiftMembraneLetters(enc)` | Re-letter membranes so an embedded left-side text doesn't collide with a host's own letters |
 | `genomeKey(R, D, L, Tprime)` | Canonical dedup key for a 4-gene `(R,D,{L},{T'})` genome bucket |
 | `expandGenomeShorthand(input)` / `nameForShorthand(input)` | Parse/resolve a typed shorthand (e.g. a family name or `⊕n` offset form) in the Collect search box |
-| `registryIndexReady` (promise) | Resolves once `buildRegistryIndex()` has finished folding `genomeDefs.json` into the in-memory `REGISTRY` |
+| `registryIndexReady` (promise) | Resolves once `buildRegistryIndex()` has finished folding the stored genomes into the in-memory `REGISTRY` |
 | `registryFoldName(g)` | Resolve a `{quickEnc, quickOffset}` pair to its registered family name, if any |
 | `KNOWN_COLLECTION_MEMBERS` / `KNOWN_COLLECTION_REP` / `KNOWN_COLLECTION_REP_RAW` | Per-family member lists / representative encodings, derived from `COLLECTION_ROSTERS` |
-| `GENOME_NAMES` / `NAMED_FAMILY_GENOME_TEXT` / `NAMED_FAMILIES` / `NAMED_FAMILY_GROUPS` | The resolved family registry (name → genome text, full family records, and families grouped by base name for the `⊕n` offset siblings) |
+| `GENOME_NAMES` / `NAMED_FAMILY_GENOME_TEXT` / `NAMED_FAMILIES` / `COLLECTION_GENOME_TEXT` | The resolved family registry (name → genome text, full family records; `COLLECTION_GENOME_TEXT` covers every collection incl. engine-derived S_33+) |
 | `familyForCore(g)` | Look up a family by its `(R,D,{L},{T'})` core key alone (ignores `[T]`) — see `reference_family_core_collision_bug.md` for a 2026-09-03 bug in an earlier version of this lookup |
 | `bypassOnlyFoldName(g, resolveChild, depth)` / `resolvedFoldName(...)` | Resolve a genome's display name allowing one level of "bypass" (fold through an unnamed intermediate T-child to a named grandchild) |
 | `findBypassMatches(...)` | Full bypass-match search used by the T-gene table / T-Tree "extra" edge classification |
@@ -771,8 +772,10 @@ never hand-edit a `.generated.hpp` or JSON marked generated.
 
 | Script | Purpose |
 |---|---|
-| `genGenomeDefsHeader.cjs` | `src/data/genomeDefs.json` → `stalks/tools/genome_defs.generated.hpp` |
-| `genCollectionElementsHeader.cjs` | `src/data/collectionElements.json` → `stalks/src/collection_elements.generated.hpp` |
-| `checkGeneratedHeaders.cjs` | CI-style check: fails if either generated header above is stale relative to its JSON source; wired into `npm run build` |
+| `collectionsJson.cjs` | Shared reader/writer + schema doc for `src/data/collectionElements.json` (collections → shared `rep` + `genome` → `offsets` → `single`/`double`/`multi` element lists) |
+| `genGenomeDefsHeader.cjs` | hand-authored genomes in `src/data/collectionElements.json` → `stalks/tools/genome_defs.generated.hpp` |
+| `genCollectionElementsHeader.cjs` | `src/data/collectionElements.json` → `stalks/src/collection_elements.generated.hpp` (flattened to per-section families) |
+| `genCollectionGenomesJson.cjs` | `src/data/collectionElements.json` → `src/data/collectionGenomes.generated.json` (genomes only, for the front end) |
+| `checkGeneratedHeaders.cjs` | CI-style check: fails if any generated file above is stale relative to its JSON source; wired into `npm run build` |
 | `renameGenomes.cjs` | Rename Advanced Collections/genome families across both JSON sources and regenerate everything derived from them in one pass (`node scripts/renameGenomes.cjs <mapping.json> [--dry-run] [--skip-native]`) — built as a standing tool since family renames have happened multiple times (see `project_advanced_collections.md`, `project_genome_renaming_tool.md`) |
 | `filterLives.cjs` | Quick filter pass over `master_meta.json` for encodings with life count 5-7 containing a DisaPoint — pure-JS port, no WASM needed |

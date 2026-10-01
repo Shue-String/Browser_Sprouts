@@ -15,7 +15,7 @@ namespace stalks_tools {
 
 // Maximum recursion depth for nested [T] genomes -- depth 0 is the position itself, 1 its
 // T-children's own full genomes, kMaxFoldDepth the last level with a full [T] expansion (one level
-// beyond that truncates to the bare 4-gene tuple). Single-sourced in src/data/genomeDefs.json's
+// beyond that truncates to the bare 4-gene tuple). Single-sourced in src/data/collectionElements.json's
 // "maxFoldDepth" (mirrors collectAlpha.ts's own MAX_GENOME_DEPTH) via genome_defs.generated.hpp;
 // re-exported here so a caller of this header (e.g. double_crit_genome.cpp) doesn't need its own
 // #include of the generated header just for this one constant.
@@ -57,7 +57,7 @@ std::string genomeKey(const AlphaGenome& g);
 
 // The FULL "(R,D,{L},{Z},[T])" genome text, T-children folded to their shorthand name when
 // recognized (see the named-genome table in alpha_genome.cpp, derived from the same
-// src/data/genomeDefs.json that src/model/collectAlpha.ts's GENOME_DEFS reads) -- mirrors collect.ts's
+// src/data/collectionElements.json (via collectionGenomes.generated.json) that src/model/collectAlpha.ts's GENOME_DEFS reads) -- mirrors collect.ts's
 // genomeParts/foldToName convention: a T-child recurses one level with its OWN full [T] computed,
 // and bottoms out at a bare 4-gene tuple two levels down (matching collectAlpha.ts's
 // MAX_GENOME_DEPTH), since none of the currently-named genomes need deeper nesting to be

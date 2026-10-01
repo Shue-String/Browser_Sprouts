@@ -1,6 +1,6 @@
 // GENERATED FILE -- do not hand-edit.
-// Produced by scripts/genGenomeDefsHeader.cjs from src/data/genomeDefs.json (the single
-// hand-authored source of these shapes -- see src/model/collectAlpha.ts's GENOME_DEFS doc
+// Produced by scripts/genGenomeDefsHeader.cjs from src/data/collectionElements.json (the
+// single source of these shapes -- see src/model/collectAlpha.ts's GENOME_DEFS doc
 // comment). Re-run that script after editing the JSON, then rebuild the native tools that
 // #include this header (alpha_genome.cpp -- collect_alpha_genetics, unregistered_left_sides).
 #pragma once
@@ -27,7 +27,7 @@ struct GenomeDef {
 constexpr int kMaxShift = 3;
 constexpr int kMaxFoldDepth = 2;
 
-// Declaration order matches genomeDefs.json exactly -- required for buildRegistry's
+// Declaration order matches collectionElements.json exactly -- required for buildRegistry's
 // collision-resolution priority (base forms before shifted forms, in this order).
 inline const std::vector<std::pair<std::string, GenomeDef>>& familyDefs() {
     static const std::vector<std::pair<std::string, GenomeDef>> kDefs = {
@@ -40,11 +40,11 @@ inline const std::vector<std::pair<std::string, GenomeDef>>& familyDefs() {
     {"S_21", {0, 2, {0, 1}, {}, {{"S_1", 1}}}},
     {"S_5", {2, 3, {0, 2}, {}, {{"S_1", 0}, {"S_1", 1}}}},
     {"S_8", {0, 2, {0}, {}, {{"S_2", 0}, {"S_1", 1}}}},
-    {"S_11", {0, 2, {0, 1}, {}, {{"S_2", 0}, {"S_1", 1}}}},
+    {"S_12", {0, 2, {0, 1}, {}, {{"S_2", 0}, {"S_1", 1}}}},
     {"S_22", {0, 3, {2}, {}, {{"S_2", 0}, {"S_1", 1}}}},
     {"S_9", {0, 3, {0, 2}, {}, {{"S_2", 0}, {"S_1", 1}}}},
     {"S_23", {0, 3, {1, 2}, {}, {{"S_2", 0}, {"S_1", 1}}}},
-    {"S_10", {0, 3, {0, 1, 2}, {}, {{"S_2", 0}, {"S_1", 1}}}},
+    {"S_11", {0, 3, {0, 1, 2}, {}, {{"S_2", 0}, {"S_1", 1}}}},
     {"S_24", {2, 3, {2}, {}, {{"S_1", 0}, {"S_2", 0}, {"S_1", 1}}}},
     {"S_25", {2, 2, {0, 1}, {}, {{"S_1", 0}, {"S_2", 0}, {"S_1", 1}}}},
     {"S_17", {2, 3, {0, 2}, {}, {{"S_2", 0}, {"S_1", 0}, {"S_1", 1}}}},
@@ -55,13 +55,13 @@ inline const std::vector<std::pair<std::string, GenomeDef>>& familyDefs() {
     {"S_13", {0, 3, {0}, {}, {{"S_2", 0}, {"S_3", 0}, {"S_1", 1}}}},
     {"S_14", {0, 3, {2}, {1}, {{"S_2", 0}, {"S_3", 0}, {"S_1", 1}}}},
     {"S_26", {0, 3, {0, 1}, {}, {{"S_2", 0}, {"S_1", 1}, {"S_3", 0}}}},
-    {"S_12", {0, 3, {0, 2}, {}, {{"S_2", 0}, {"S_3", 0}, {"S_1", 1}}}},
+    {"S_10", {0, 3, {0, 2}, {}, {{"S_2", 0}, {"S_3", 0}, {"S_1", 1}}}},
     {"S_27", {0, 3, {0, 1, 2}, {}, {{"S_2", 0}, {"S_3", 0}, {"S_1", 1}}}},
     {"S_28", {3, 1, {0}, {}, {{"S_1", 1}, {"S_2", 1}, {"S_3", 0}, {"S_6", 0}}}},
     {"S_18", {3, 1, {0}, {}, {{"S_1", 1}, {"S_2", 1}, {"S_3", 0}, {"S_4", 0}, {"S_6", 0}}}},
-    {"S_29", {3, 2, {1, 3}, {}, {{"S_1", 0}, {"S_1", 1}, {"S_12", 0}, {"S_5", 0}}}},
+    {"S_29", {3, 2, {1, 3}, {}, {{"S_1", 0}, {"S_1", 1}, {"S_10", 0}, {"S_5", 0}}}},
     {"S_30", {3, 1, {0}, {2}, {{"S_1", 1}, {"S_2", 1}, {"S_3", 0}, {"S_6", 0}}}},
-    {"S_31", {1, 2, {1, 3}, {}, {{"S_1", 0}, {"S_9", 0}, {"S_12", 0}, {"S_2", 1}}}},
+    {"S_31", {1, 2, {1, 3}, {}, {{"S_1", 0}, {"S_9", 0}, {"S_10", 0}, {"S_2", 1}}}},
     {"S_32", {1, 1, {0}, {0}, {{"S_1", 2}, {"S_14", 0}, {"S_2", 1}, {"S_6", 0}}}},
     };
     return kDefs;

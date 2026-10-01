@@ -47,22 +47,20 @@ import {
   type AlphaGenome,
   type FourGeneGenome,
   type NamedFamily,
-  type NamedFamilyGroup,
   type PositionRef,
   type ResolveChild,
   type TChild,
   type TChildClassification,
+  COLLECTION_GENOME_TEXT,
   COLLECTION_ROSTER_FOLDER_NAMES,
+  DERIVED_GENOME_COLLECTIONS,
   GENOME_NAMES,
   KNOWN_COLLECTION_MEMBERS,
   KNOWN_COLLECTION_REP,
-  KNOWN_COLLECTION_REP_RAW,
   NAMED_FAMILIES,
   NAMED_FAMILY_GENOME_TEXT,
-  NAMED_FAMILY_GROUPS,
   classifyTChildren,
   computeAlphaGenome,
-  distinctPortLetters,
   expandGenomeShorthand,
   familyForCore,
   familyRequiresTChildPlain,
@@ -359,37 +357,6 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
   return foldToName(g, plain, html, cls, depth);
 }
 
-/** `g`'s own full "(R,D,{L},{Z},[T])" genome text -- T-children folded to names exactly like
- * `genomeParts` (delegates to it, at depth 1, via the same `lookupGenome` fetch path the T-gene
- * table already uses), but the OUTER tuple itself is NEVER folded to a name -- unlike every
- * genomeParts call, which wants folding at every level. Folding the outer level here would be
- * actively wrong, not a mere redundancy: a registry-only collection's own REP is, by definition, its
- * shared reduction target, so `registryFoldName` legitimately resolves it right back to its own name
- * -- confirmed live, an earlier version called `genomeParts(repGenome, 0)` directly and every S_33+
- * folder showed its own name again as its "genome", e.g. "S_33" under "S_33 (2)". T-children fetch
- * through the ordinary, already-proven `lookupGenome`/`genomeLookupPending` path -- safe here since
- * the background warmup (see registryGenomeQueue's own doc comment) already pre-warms every one of a
- * genome's T-children sequentially before this ever runs on it for the first time, so in practice
- * this rarely triggers a fresh fetch of its own. Called FRESH on every render (see
- * renderCollectionHeaderRow), not cached as a frozen string -- a T-child/grandchild that's still
- * pending the first few times this runs self-corrects on a later render the same way every other
- * genome display in this file already does, once lookupGenome resolves it. */
-function registryGenomeTupleText(g: AlphaGenome | FourGeneGenome): string {
-  const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Z.join(',')}}`;
-  if (!isFullGenome(g)) return head + ')';
-  const seen = new Set<string>();
-  const childPlains: string[] = [];
-  for (const t of g.T) {
-    const childGenome = lookupGenome(t.enc, t.genome, true, t);
-    const plain = childGenome ? genomeParts(childGenome, 1).plain : quickLabel(t);
-    if (seen.has(plain)) continue;
-    seen.add(plain);
-    childPlains.push(plain);
-  }
-  childPlains.sort();
-  return `${head},[${childPlains.join(',')}])`;
-}
-
 /** When the Quick-Genome toggle is on, fold a genome node whose exact plain-text tuple matches a
  * known shorthand (see GENOME_NAMES) down to its name, replacing the full tuple rendering -- or,
  * failing that, whose bare core matches a bypass-only family AND every one of its own T-children is
@@ -461,7 +428,7 @@ function isNamedGenome(genome: AlphaGenome | FourGeneGenome): boolean {
  * entry always carries its quickEnc/quickOffset alongside `enc`) attach it to the returned genome,
  * the same way a freshly-computed genome always carries it (see FourGeneGenome's own doc comment).
  * Without this, a T-child resolved via this fast path could never be recognized as a member of a
- * registered Collection with no genomeDefs.json entry (S_33+) -- registryFoldName would
+ * registered Collection with no hand-authored genome (S_33+) -- registryFoldName would
  * just silently find nothing, forever, since this path never falls through to a fresh engine call
  * once it answers. */
 function byEncGenome(enc: string, ref?: { quickEnc: string; quickOffset: number }): AlphaGenome | undefined {
@@ -1145,7 +1112,7 @@ function collectionItemStats(name: string): { count: number; hasContent: boolean
  * or not, on every single render() call -- including every registry-genome resolution's own
  * scheduleRender(), potentially dozens of times as the user scrolled through the panel. This alone
  * was NOT sufficient (2026-09-20): the user still hit a freeze scrolling past ~120 folders, root-
- * caused to a second, larger cost stacked on top -- see patchRegistryGenomeHeader's own doc comment
+ * caused to a second, larger cost stacked on top -- see patchRegistryGenomeHeader's own doc comment (that live-genome machinery was removed 2026-09-30 once every genome became a stored field; the history stands)
  * (that resolution handler was triggering a FULL panel rebuild every time, independent of any one
  * folder's own content size). That patch was then tested WITHOUT this cap (MAX_LISTED_MEMBERS below)
  * or the sibling small-folder filter and looked sufficient on its own under this session's own
@@ -1198,143 +1165,16 @@ function renderCollectionItems(name: string, members: Entry[]): { itemsHtml: str
   return { itemsHtml, count: members.length + staticLabels.length + (repItem ? 1 : 0), hasContent: members.length + staticLabels.length > 0 };
 }
 
-/** RAW genome for a registry-only collection's own rep (S_33+ -- no genomeDefs.json entry, so
- * nothing in NAMED_FAMILY_GENOME_TEXT), keyed by collection name. `null` is cached (not re-fetched)
- * for a name with no rep, or a double-crit one (Z_1/Z_2 -- same "no genome to show" state they
- * already have via NAMED_FAMILY_GENOME_TEXT).
- *
- * Deliberately caches the GENOME OBJECT, not its formatted text -- an earlier version cached
- * `registryGenomeTupleText(result.genome)` (a frozen string) directly, which was itself a real bug:
- * that formatting recursively folds T-children via `lookupGenome`, and any T-CHILD (or grandchild)
- * not yet resolved AT THE MOMENT this ran falls back to its own quickLabel placeholder PERMANENTLY --
- * `lookupGenome`'s own later `scheduleRender()`, once that T-child's fetch actually lands, re-runs
- * the whole panel renderer, but a renderer that just reads an already-frozen STRING out of a cache
- * has nothing left to recompute. Confirmed live: two of S_92's seven T-children stayed stuck as raw
- * unfolded fallback text ("[1] ⊕ [2α/" instead of "S_1") even after waiting several seconds past
- * when their own underlying lookupGenome fetch must have settled. Caching the raw genome object
- * instead and calling registryGenomeTupleText fresh on every render (see renderCollectionHeaderRow)
- * fixes this the same way every OTHER genome display in this file already self-corrects on a later
- * render -- formatting is cheap and reads whatever lookupGenome's cache currently holds, exactly
- * like formatGenomeCell/genomeParts already do for the T-gene table. */
-const registryGenomeCache = new Map<string, AlphaGenome | null>();
-const registryGenomePending = new Set<string>();
-
-/** Fetches `enc`'s genome via the SAME `genomeLookupCache`/`genomeLookupPending` pair `lookupGenome`
- * itself reads (see that function's own doc comment) -- reused directly, not re-implemented, so a
- * child warmed here is indistinguishable from one `lookupGenome` would have fetched on its own; a
- * later `lookupGenome(enc, ...)` call (from `registryGenomeTupleText`'s own children loop, or the
- * ordinary T-gene table) just finds it already cached, no duplicate fetch. No-op if already
- * cached/pending -- safe to call for a child several collections happen to share.
- *
- * `known`, when already a FULL genome, is seeded directly with NO fetch at all -- a real
- * inefficiency caught live: a top-level rep's own DIRECT T-children already arrive as full genomes
- * (`computeAlphaGenomeAtCached` populates one level of real children before its depth cap bites), so
- * calling this on them without passing `known` triggered a completely redundant fresh
- * `computeAlphaGenome` call for a position already fully in hand. The genuinely UNRESOLVED work is
- * one level deeper (grandchildren, which DO come back as bare truncated tuples past the depth cap)
- * -- see ensureRegistryGenome's own two-level pre-warm. */
-async function warmGenomeLookup(enc: string, known?: AlphaGenome | FourGeneGenome): Promise<void> {
-  if (genomeLookupCache.has(enc) || genomeLookupPending.has(enc)) return;
-  if (known && isFullGenome(known)) {
-    genomeLookupCache.set(enc, known);
-    return;
-  }
-  genomeLookupPending.add(enc);
-  const result = await computeAlphaGenome(enc);
-  genomeLookupPending.delete(enc);
-  genomeLookupCache.set(enc, result ? result.genome : null);
-}
-
-/** Fetches and caches `name`'s own genome (see registryGenomeCache's own doc comment), plus
- * pre-warms its direct T-children's own T-children (grandchildren relative to `name`'s rep -- see
- * warmGenomeLookup's own doc comment for why direct children need no fetch of their own). No-op if
- * already cached or already in flight.
- *
- * Triggered per-VISIBLE-folder (see the IntersectionObserver in renderCollections), NOT eagerly for
- * all ~200 registry-only folders at once and NOT gated behind manually opening each one either --
- * both were tried and rejected. Opening-only was rejected per the user's own report: having to
- * expand a folder just to see its genome defeated the point of showing it on the header at all.
- * Eager-for-everyone (a background queue draining all ~200 names, sequentially, each with a real
- * `setTimeout(0)` yield between steps) was tried next and reliably made the tab fully unresponsive
- * in testing -- confirmed repeatedly, including once the yields were genuinely correct and even
- * after fixing a real inefficiency (redundantly re-fetching already-known direct children, see
- * warmGenomeLookup's own history) -- with the true per-item cost of ~200 arbitrary registered
- * shapes' full recursive live fold never pinned down (a native single-level timing sweep of the
- * REPS alone showed no slow entries, but that doesn't cover the recursive grandchild-level fan-out
- * this code actually does). Gating on VIEWPORT VISIBILITY instead bounds concurrent live computation
- * to however many folders are actually on screen at once -- a human scrolling through a list, not
- * "all 200 simultaneously" -- without needing to fully resolve exactly how expensive the worst case
- * can get. */
-function ensureRegistryGenome(name: string): void {
-  if (registryGenomeCache.has(name) || registryGenomePending.has(name)) return;
-  const rawRep = KNOWN_COLLECTION_REP_RAW[name];
-  if (!rawRep || distinctPortLetters(rawRep) !== 1) {
-    registryGenomeCache.set(name, null);
-    return;
-  }
-  registryGenomePending.add(name);
-  void (async () => {
-    const result = await computeAlphaGenome(rawRep);
-    if (result && isFullGenome(result.genome)) {
-      for (const t of result.genome.T) {
-        await warmGenomeLookup(t.enc, t.genome);
-        const childGenome = genomeLookupCache.get(t.enc);
-        if (childGenome && isFullGenome(childGenome)) {
-          for (const gc of childGenome.T) await warmGenomeLookup(gc.enc, gc.genome);
-        }
-      }
-    }
-    registryGenomePending.delete(name);
-    registryGenomeCache.set(name, result ? result.genome : null);
-    patchRegistryGenomeHeader(name);
-  })();
-}
-
-/** Updates JUST `name`'s own `<summary>` in place once its genome resolves -- deliberately NOT
- * `scheduleRender()` (a full `render()`/`renderCollections()` pass, rebuilding EVERY one of ~200+
- * folders' header markup and tearing down + recreating the whole IntersectionObserver, every single
- * time ANY one genome resolves). That full-rebuild-per-resolution cost is exactly what still froze
- * real scrolling even after every OTHER cost in this feature was already fixed (member-list size
- * cap, lazy body-fill, viewport-gated fetching) -- a real user's continuous scroll gesture fires far
- * more IntersectionObserver batches than this session's own synthetic `scrollTop = X` jumps ever
- * exercised, so dozens of genomes can resolve in quick succession during one scroll, each one
- * previously paying the FULL panel's rebuild cost regardless of how cheap any single folder's own
- * markup was. Patching one `<summary>`'s innerHTML directly is O(1) in the folder count instead of
- * O(N) per resolution, and needs no observer teardown at all (the `<details>` element itself is
- * untouched, still the same DOM node the observer is already watching). Silently does nothing if
- * the folder isn't in the DOM (panel closed, or re-rendered for an unrelated reason since this fetch
- * started) -- not an error case, just nothing left to patch. */
-function patchRegistryGenomeHeader(name: string): void {
-  const detailsEl = document.querySelector<HTMLDetailsElement>(`details.collect-coll-group[data-registry-name="${cssEscape(name)}"]`);
-  const summary = detailsEl?.querySelector('summary');
-  if (!summary) return;
-  const offsets = NAMED_FAMILY_GROUPS.find(g => g.base === name)?.offsets ?? [];
-  summary.innerHTML = renderCollectionHeaderRow(name, collectionCountText(name, offsets));
-}
-
-/** `CSS.escape`, with a manual fallback for an environment that somehow lacks it -- every name this
- * is ever called with is an ASCII "S_123"/"Z_1"-shaped identifier (see folderSortKey), so escaping
- * is purely defensive here, never expected to change the string in practice. */
-function cssEscape(s: string): string {
-  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
-}
-
 /** The name/count/genome header row shared by both a top-level group's <summary> and a nested
- * offset block's own header -- names in NAMED_GENOME_DEFS (S_1, S_1⊕1, S_2, S_3, S_5, S_6, S_7,
- * S_8, S_9, ...) have a hand-authored tuple, shown immediately; anything else registered (S_33
- * onward) formats registryGenomeCache's raw genome FRESH every call (see that cache's own doc
- * comment for why this must be reformatted each render rather than caching the text once) --
- * populated once this folder scrolls into view or gets expanded (see the IntersectionObserver/
- * toggle listener in renderCollections, and ensureRegistryGenome's own doc comment). Blank
- * (undefined) until then -- self-corrects on a later render once it resolves, no different from any
- * other pending lookup in this file. Z_1/Z_2 (the
- * roster's own two-crit "S_3"/"S_4") still show nothing, since neither source has an entry for a
- * two-crit shape. `countText` is omitted entirely for a nested offset block's own header -- all of a
- * family's counts (base plus any non-empty "X⊕n" siblings) are shown ONCE, on the top-level summary
- * only, joined by " ; " (see renderCollectionGroup). */
+ * offset block's own header -- every collection with a stored genome (hand-authored S_1-S_32 via
+ * NAMED_FAMILY_GENOME_TEXT, plus the engine-derived S_33 onward via COLLECTION_GENOME_TEXT, both
+ * straight from collectionElements.json) shows it immediately, with no engine call at all. Z_n
+ * (double-crit) and offset siblings of a derived collection have no stored genome and show none.
+ * `countText` is omitted entirely for a nested offset block's own header -- all of a family's
+ * counts (base plus any non-empty "X⊕n" siblings) are shown ONCE, on the top-level summary only,
+ * joined by " ; " (see renderCollectionGroup). */
 function renderCollectionHeaderRow(name: string, countText?: string): string {
-  const registryGenome = registryGenomeCache.get(name);
-  const genomeText = NAMED_FAMILY_GENOME_TEXT[name] ?? (registryGenome ? registryGenomeTupleText(registryGenome) : undefined);
+  const genomeText = NAMED_FAMILY_GENOME_TEXT[name] ?? COLLECTION_GENOME_TEXT[name];
   const genomeHtml = genomeText
     ? `<span class="collect-coll-header-genome" title="${escapeHtml(genomeText)}">${escapeHtml(genomeText)}</span>`
     : '';
@@ -1355,7 +1195,7 @@ function renderOffsetBlock(name: string, itemsHtml: string): string {
 }
 
 /** One `<details>` group for the Collections panel -- collapsed by default per the user's request,
- * with `offsets` (a base family's "X⊕n" siblings, if any -- see NAMED_FAMILY_GROUPS) nested inside
+ * with `offsets` (a base family's "X⊕n" siblings, if any -- see COLLECTION_OFFSET_GROUPS) nested inside
  * as renderOffsetBlock sub-sections, so expanding the base reveals its own siblings too without
  * those needing separate top-level folders. Per the user's request: an offset with NOTHING in it
  * (no real members, no static roster elements -- a sibling shift that just doesn't happen to have
@@ -1376,9 +1216,7 @@ function renderCollectionGroup(name: string, offsets: string[]): string {
 }
 
 /** `name`'s own header count string (base, then each non-empty "X⊕n" offset, joined by " ; " -- see
- * renderCollectionGroup's own doc comment) -- factored out so `patchRegistryGenomeHeader` can
- * recompute the exact same text a fresh renderCollectionGroup call would have produced, without
- * needing to re-render the whole group. */
+ * renderCollectionGroup's own doc comment) -- factored out of renderCollectionGroup. */
 function collectionCountText(name: string, offsets: string[]): string {
   const base = collectionItemStats(name);
   const shownOffsetNames = offsets.filter(offsetName => collectionItemStats(offsetName).hasContent);
@@ -1389,7 +1227,7 @@ function collectionCountText(name: string, offsets: string[]): string {
  * markup -- exactly once, the first time this folder is actually opened (never on scroll-into-view;
  * unlike the genome header, collapsed body content isn't shown at all, so there's nothing to gain
  * from filling it before the user actually expands the folder). Recomputes offsets via
- * NAMED_FAMILY_GROUPS directly rather than threading them through a data attribute -- cheap, and
+ * COLLECTION_OFFSET_GROUPS directly rather than threading them through a data attribute -- cheap, and
  * this only ever runs once per folder per session. `members`/`byFamily` are always `[]`/empty (see
  * renderCollections' own doc comment), so renderCollectionItems is called the same way
  * collectionItemStats already assumed. */
@@ -1400,7 +1238,7 @@ function fillCollectionBody(detailsEl: HTMLDetailsElement): void {
   body.dataset.filled = '1';
 
   const base = renderCollectionItems(name, []);
-  const offsetNames = NAMED_FAMILY_GROUPS.find(g => g.base === name)?.offsets ?? [];
+  const offsetNames = COLLECTION_OFFSET_GROUPS.get(name) ?? [];
   const shownOffsets = offsetNames
     .map(offsetName => ({ name: offsetName, ...renderCollectionItems(offsetName, []) }))
     .filter(o => o.hasContent);
@@ -1421,17 +1259,38 @@ function folderSortKey(name: string): [number, string, number] {
   return m ? [0, m[1], Number(m[2])] : [1, name, 0];
 }
 
+/** base collection name -> its "X⊕n" offset names in offset order, for every collection the roster or
+ * the named-genome registry knows (S_33+, Z_1 and the rest included, not just the hand-authored
+ * families) -- so each collection is one folder with its offsets nested inside, never a separate
+ * top-level folder per offset. Hand-authored families always list all their MAX_SHIFT offsets
+ * (empty ones get dropped later via hasContent); others list only the offsets the roster has. */
+const COLLECTION_OFFSET_GROUPS: ReadonlyMap<string, string[]> = (() => {
+  const byBase = new Map<string, Set<string>>();
+  const add = (base: string, offset?: string) => {
+    let set = byBase.get(base);
+    if (!set) byBase.set(base, (set = new Set()));
+    if (offset !== undefined) set.add(offset);
+  };
+  for (const name of [...COLLECTION_ROSTER_FOLDER_NAMES, ...NAMED_FAMILIES.map(f => f.name)]) {
+    const i = name.indexOf('⊕');
+    if (i < 0) add(name);
+    else add(name.slice(0, i), name);
+  }
+  const shiftOf = (name: string): number => Number(name.slice(name.indexOf('⊕') + 1));
+  return new Map([...byBase].map(([base, set]) => [base, [...set].sort((a, b) => shiftOf(a) - shiftOf(b))]));
+})();
+
 /** Render the Collections side panel (see index.html's #collect-collections-panel): one folder per
  * known collection/family, pre-populated with its static roster members (KNOWN_COLLECTION_MEMBERS,
- * straight from src/data/collectionsRoster.json / genomeDefs.json). A no-op (and leaves the panel's
+ * straight from src/data/collectionsRoster.json, genomes from collectionElements.json). A no-op (and leaves the panel's
  * previous content alone) while the panel is closed, so building this tree doesn't run every
  * render() call for no reason.
  *
- * TOP-LEVEL folders are NAMED_FAMILY_GROUPS' bases (S_1, S_2, S_3, ...) unioned with
+ * TOP-LEVEL folders are the named families (S_1, S_2, S_3, ...) unioned with
  * COLLECTION_ROSTER_FOLDER_NAMES (every collection currently registered in stalks/src/
- * collections.cpp, straight from src/data/collectionsRoster.json -- Z_1/Z_2 today, but also
- * whatever's added there later) MINUS anything that's actually an "X⊕n" offset of some base
- * (reachable via a roster alias, e.g. "S_5⊕1" -- see ROSTER_TO_FOLDER_NAME) -- those get nested
+ * collections.cpp, straight from src/data/collectionsRoster.json -- whatever's added there later
+ * too) MINUS anything that's actually an "X⊕n" offset of some base (S_5⊕1, Z_1⊕1, ... -- see
+ * COLLECTION_OFFSET_GROUPS) -- those get nested
  * inside their own base's group instead (see renderCollectionGroup), never their own top-level
  * folder. So a brand-new Stalks-side collection still gets a folder (with its static roster
  * content, via KNOWN_COLLECTION_MEMBERS) with NO TypeScript change needed.
@@ -1446,19 +1305,19 @@ function renderCollections(): void {
   const panel = document.getElementById('collect-collections-panel');
   if (!dialog || !panel || !dialog.classList.contains('collections-open')) return;
 
-  const offsetNames = new Set(NAMED_FAMILY_GROUPS.flatMap(g => g.offsets));
-  const groupByBase = new Map<string, NamedFamilyGroup>(NAMED_FAMILY_GROUPS.map(g => [g.base, g]));
-  // Registry-only "S_n" folders (no genomeDefs.json entry -- S_33 onward) with only 2 elements are
-  // hidden from the panel entirely. Re-added after being removed once: the header-patch fix in
-  // patchRegistryGenomeHeader looked sufficient on its own under this session's own scripted rapid-
-  // scroll test, but the user's real fast scroll crashed it again regardless -- see
-  // renderCollectionItems' own doc comment (MAX_LISTED_MEMBERS) for the fuller account. Scoped to
-  // the "S_n" name shape (not e.g. Z_1/Z_2) and to EXACTLY 2 elements, matching the user's own
-  // wording; collectionsRoster.json/KNOWN_COLLECTION_MEMBERS themselves are untouched, this only
-  // changes which folders the panel itself lists.
+  const offsetNames = new Set([...COLLECTION_OFFSET_GROUPS.values()].flat());
+  // Registry-only "S_n" folders (engine-derived genome -- S_33 onward) with only 2 elements are
+  // hidden from the panel entirely. Re-added after being removed once: a header-patch fix for the
+  // (since removed) live genome fetch looked sufficient on its own under a scripted rapid-scroll
+  // test, but the user's real fast scroll crashed it again regardless -- see
+  // renderCollectionItems' own doc comment (MAX_LISTED_MEMBERS) for the fuller account, and don't
+  // remove this or that cap again without live confirmation. Scoped to the "S_n" name shape (not
+  // e.g. Z_1) and to EXACTLY 2 elements, matching the user's own wording;
+  // collectionsRoster.json/KNOWN_COLLECTION_MEMBERS themselves are untouched, this only changes
+  // which folders the panel itself lists.
   const isHiddenTinyRegistryFolder = (name: string): boolean =>
-    /^S_\d+$/.test(name) && !NAMED_FAMILY_GENOME_TEXT[name] && collectionItemStats(name).count === 2;
-  const topLevelNames = [...new Set([...COLLECTION_ROSTER_FOLDER_NAMES, ...NAMED_FAMILIES.map(f => f.name)])].filter(
+    DERIVED_GENOME_COLLECTIONS.has(name) && collectionItemStats(name).count === 2;
+  const topLevelNames = [...new Set([...COLLECTION_ROSTER_FOLDER_NAMES, ...NAMED_FAMILIES.map(f => f.name), ...COLLECTION_OFFSET_GROUPS.keys()])].filter(
     name => !offsetNames.has(name) && !isHiddenTinyRegistryFolder(name),
   );
   topLevelNames.sort((a, b) => {
@@ -1469,39 +1328,15 @@ function renderCollections(): void {
 
   let html = '';
   for (const name of topLevelNames) {
-    html += renderCollectionGroup(name, groupByBase.get(name)?.offsets ?? []);
+    html += renderCollectionGroup(name, COLLECTION_OFFSET_GROUPS.get(name) ?? []);
   }
   panel.innerHTML = html;
 
-  // Registry-only genome: fetched per folder, once it's actually SCROLLED INTO VIEW (bounds
-  // concurrent live computation to whatever's on screen, see ensureRegistryGenome's own doc comment
-  // for why this is gated on visibility rather than fired for all ~200 at once or left until the
-  // user manually expands each one). A fresh IntersectionObserver every render is fine -- render()
-  // just rebuilt this whole subtree, so any previous observer's targets are already detached.
-  const registryObserver = new IntersectionObserver(
-    entries => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        const name = (entry.target as HTMLElement).dataset.registryName;
-        if (name) ensureRegistryGenome(name);
-      }
-    },
-    { root: panel, rootMargin: '200px' },
-  );
+  // Member-list bodies are built lazily, the first time a folder is actually opened (see
+  // fillCollectionBody's own doc comment -- the body is never built any other way).
   panel.querySelectorAll<HTMLDetailsElement>('details[data-registry-name]').forEach(el => {
-    const name = el.dataset.registryName;
-    if (!name) return;
-    registryObserver.observe(el);
-    // `toggle` covers both jobs that only matter once a folder is actually opened: fetching the
-    // registry genome for a folder expanded via keyboard before ever intersecting (the
-    // IntersectionObserver above is the primary trigger; this is a belated fallback, and
-    // ensureRegistryGenome is idempotent so having both never double-fetches), and lazily filling
-    // in the member-list body (see fillCollectionBody's own doc comment -- this one is NOT
-    // redundant with anything else, the body is never built any other way).
     el.addEventListener('toggle', () => {
-      if (!el.open) return;
-      ensureRegistryGenome(name);
-      fillCollectionBody(el);
+      if (el.open) fillCollectionBody(el);
     });
   });
 }

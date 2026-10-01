@@ -1,4 +1,4 @@
-// Fails (nonzero exit) if either committed .generated.hpp is stale relative to its hand-authored
+// Fails (nonzero exit) if any committed generated file (.generated.hpp / .generated.json) is stale relative to its hand-authored
 // JSON source -- i.e. if re-running the generator right now would produce different bytes than
 // what's on disk. Catches both failure modes the JSON->hpp step of the Collections /
 // genome-defs data pipeline is otherwise silent about: editing the JSON and forgetting to re-run
@@ -21,10 +21,12 @@ const fs = require('fs');
 
 const collectionElements = require('./genCollectionElementsHeader.cjs');
 const genomeDefs = require('./genGenomeDefsHeader.cjs');
+const collectionGenomes = require('./genCollectionGenomesJson.cjs');
 
 const TARGETS = [
   { label: 'collection elements', ...collectionElements, regenCmd: 'node scripts/genCollectionElementsHeader.cjs' },
   { label: 'genome defs', ...genomeDefs, regenCmd: 'node scripts/genGenomeDefsHeader.cjs' },
+  { label: 'collection genomes (front end)', ...collectionGenomes, regenCmd: 'node scripts/genCollectionGenomesJson.cjs' },
 ];
 
 // core.autocrlf=true in this repo (no .gitattributes override) means a freshly checked-out
