@@ -67,7 +67,7 @@ const MAX_NESTED_GENOME_LIVES = 5;
  * rep's own child, NOT further quick-canon-reduced) and nimber. Unlike the deduped `L`/`Z`
  * nimber sets above, two entries here can share a nimber but have different encodings (the engine
  * can reach the same value via more than one distinct move) -- kept purely for the paper-format
- * export table (see collect.ts's buildExportLatex), which lists every raw move, not just the
+ * export table (see collect.ts's buildGenomeTableLatex), which lists every raw move, not just the
  * deduped value set. Optional because only a fresh computeAlphaGenomeAt call populates it --
  * GENOME_DB-loaded/byEncGenome-loaded genomes predate this field and don't carry it. */
 export interface MoveChildRef {
@@ -135,7 +135,12 @@ export interface AlphaGenome extends FourGeneGenome {
  * on-screen labels (collect.ts's quickLabel) so the two always agree. Never applied to `enc` itself
  * (the real, engine-native encoding used for re-analysis) -- only to display-only text. */
 export function shiftMembraneLetters(enc: string): string {
-  return enc.replace(/[A-Z]/g, ch => String.fromCharCode(((ch.charCodeAt(0) - 65 + 2) % 26) + 65));
+  // A component that is exactly 'N' is the dead (empty) subposition token, not a membrane letter
+  // (membranes always come in a pair inside one component) -- shifting it would display "P".
+  return enc
+    .split('+')
+    .map(part => (part === 'N' ? part : part.replace(/[A-Z]/g, ch => String.fromCharCode(((ch.charCodeAt(0) - 65 + 2) % 26) + 65))))
+    .join('+');
 }
 
 /** True iff `enc` contains exactly one special-point character, and it's alpha specifically --

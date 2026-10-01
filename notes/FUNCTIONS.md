@@ -378,6 +378,13 @@ signal a candidate does NOT cleanly fold to the searched family). Includes the p
 path (`toLatexMath`) and the dotted-line move-preview demo referenced in
 `project_move_preview_hover.md`.
 
+## `src/ui/ttreeExport.ts` — T-Tree "Export Tables" bulk LaTeX dump
+
+| Function | Description |
+|---|---|
+| `buildTTreeTablesLatex(graph, onProgress?)` | One compilable LaTeX document: a genome table (`collect.ts`'s `buildGenomeTableLatex`, with each bypassed T-child's last column showing the position it bypasses to) for every `requiredByAny` (i.e. non-bypassed) node, fewest lives first, then ONE nimber table: the full game tree (every single subposition, via `analyze`) below every R/D/L/Z child those tables quote, smallest-lives parent first, each parent's distinct children + their nimbers (just the child's nimber, no written-out nim-sum). Sum XORs and per-parent mex are re-checked against the engine, mismatches flagged `(!)`. Each parent is one unbreakable longtable row with a nested children table; fixed column widths so one compile pass aligns the header |
+| `downloadText(filename, text)` | Blob-download helper (the dump is too big to paste) |
+
 ---
 
 ## `src/ui/collect.ts` — Collect window: genetic-code browser + Advanced Collections panel

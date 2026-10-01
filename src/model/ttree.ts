@@ -511,8 +511,11 @@ export function layoutTTree(graph: TTreeGraph): TTreeLayout {
  * exporter in ui/ttree.ts (which needs the same pixel-accurate layout the SVG pane itself computes,
  * so it lives alongside that layout code rather than here) can reuse it verbatim. */
 export function toLatexMath(text: string): string {
+  // A genome name's offset ("S_1⊕2") is a superscript (S_{1}^{2}); any other ⊕ is a disjoint sum.
   return text
+    .replace(/(_\d+)⊕(\d+)/g, '$1^$2')
     .replace(/_(\d+)/g, '_{$1}')
+    .replace(/\^(\d+)/g, '^{$1}')
     .replace(/⊕/g, '\\oplus ')
     .replace(/α/g, '\\alpha ');
 }

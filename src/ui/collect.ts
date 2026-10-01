@@ -42,6 +42,7 @@
  * collectAlpha.ts's isSingleAlpha.
  */
 
+import { canon } from '../engine/stalks';
 import { display as bracketDisplay } from './positionBrowser';
 import {
   type AlphaGenome,
@@ -562,7 +563,7 @@ async function foldedPlainOfTChild(t: TChild): Promise<string> {
  * only -- a Grandparent Bypass check, not open recursion) contain one that itself folds entirely to
  * a name (cited by ITS OWN position, not by name again, matching the paper's own convention), or
  * (3) `none` -- no such one-level bypass was found (this is a shallow, paper-matching check only,
- * not a claim about Collection membership more broadly). Used only by buildExportLatex now
+ * not a claim about Collection membership more broadly). Used only by buildGenomeTableLatex now
  * (for the shifted-letter LaTeX form's own
  * Relevancy column, matching the paper's table format) -- the in-app T-gene table shows a plain
  * Genome column instead (see formatGenomeCell), a different, non-paper-matching view. */
@@ -976,14 +977,23 @@ function renderDetail(): void {
  * throughout genome tuple text, e.g. "{1,3}") to \{/\} since LaTeX treats unescaped braces as
  * grouping delimiters and would silently swallow them rather than rendering them -- so the exported
  * text is ready to paste, not just visually similar. */
-function toLatexSymbols(text: string): string {
-  return text.replace(/⊕/g, '\\oplus ').replace(/α/g, '\\alpha ').replace(/[{}]/g, ch => `\\${ch}`);
+export function toLatexSymbols(text: string): string {
+  // The "_NN" subscript braces are added AFTER the bare-brace escape so they stay real grouping braces
+  // (without them a two-digit family number like S_34 only subscripts its first digit). A genome
+  // name's offset ("S_1⊕2") becomes a superscript (S_{1}^{2}); every other ⊕ is a disjoint sum.
+  return text
+    .replace(/(_\d+)⊕(\d+)/g, '$1^$2')
+    .replace(/⊕/g, '\\oplus ')
+    .replace(/α/g, '\\alpha ')
+    .replace(/[{}]/g, ch => `\\${ch}`)
+    .replace(/_(\d+)/g, '_{$1}')
+    .replace(/\^(\d+)/g, '^{$1}');
 }
 
 /** A real (non-quick-canon) structural encoding, formatted for the export table: membrane letters
  * shifted per the paper's own left/right pairing convention (see shiftMembraneLetters), alpha
  * marked, bracket-wrapped, and with ⊕/α converted to real LaTeX macros. */
-function exportEncoding(enc: string): string {
+export function exportEncoding(enc: string): string {
   return toLatexSymbols(paperDisplay(enc));
 }
 
@@ -997,6 +1007,13 @@ function exportCanonLabel(ref: PositionRef): string {
   return exportEncoding(ref.enc);
 }
 
+/** Natural-sort key for a genome name like "S_12" or "S_12⊕1": [0, prefix, number, offset] (so S_2
+ * sorts before S_10, and S_1 before S_1⊕1 before S_2); anything not shaped like that sorts after. */
+function genomeNameSortKey(name: string): [number, string, number, number] {
+  const m = name.match(/^([A-Za-z]+)_(\d+)(?:⊕(\d+))?$/);
+  return m ? [0, m[1], Number(m[2]), Number(m[3] ?? 0)] : [1, name, 0, 0];
+}
+
 function formatRelevancyExport(v: RelevancyVerdict): string {
   if (v.kind === 'name') return toLatexSymbols(v.name);
   if (v.kind === 'position') return exportCanonLabel(v.ref);
@@ -1005,15 +1022,23 @@ function formatRelevancyExport(v: RelevancyVerdict): string {
 
 const EXPORT_PAD = '\\multicolumn{1}{m{.75cm}|}{} & \\multicolumn{1}{m{.75cm}|}{}';
 
-/** Builds the full \begin{tabular}...\end{tabular} block for `entry`, matching the paper's genome
+/** Builds the full \begin{tabular}...\end{tabular} block for the position `enc`, matching the paper's genome
  * sequencing table template (see the module header): left three columns are every raw R/D/L/Z
  * child (one row each, undeduped -- see MoveChildRef's doc comment), right two columns are every T
  * move's child + its Relevancy verdict (see computeRelevancy), and the two sides are padded to the
  * same row count with the template's own empty-cell placeholder. Always recomputes the genome fresh
- * (regardless of entry.genomeFresh) since only a live computeAlphaGenomeAt call populates the raw
- * Rc/Dc/Lc/Zc child data this needs -- GENOME_DB-loaded entries predate that field. */
-async function buildExportLatex(entry: Entry): Promise<string> {
-  const fresh = await computeAlphaGenome(entry.position.enc);
+ * (regardless of any Entry's genomeFresh) since only a live computeAlphaGenomeAt call populates the
+ * raw Rc/Dc/Lc/Zc child data this needs -- GENOME_DB-loaded entries predate that field. Exported so
+ * the T-Tree pane's bulk table export can emit one of these per node.
+ *
+ * `bypassTargets` (canonical T-child enc -> the canonical position it bypasses to) overrides that
+ * T-child's Relevancy cell with the bypass destination itself -- the T-Tree export passes each node's
+ * own bypass edges (via -> to) so the table agrees with the drawn tree. */
+export async function buildGenomeTableLatex(
+  enc: string,
+  bypassTargets?: ReadonlyMap<string, string>,
+): Promise<string> {
+  const fresh = await computeAlphaGenome(enc);
   if (!fresh) throw new Error("couldn't re-analyze this position for export");
   const { position, genome } = fresh;
 
@@ -1032,11 +1057,32 @@ async function buildExportLatex(entry: Entry): Promise<string> {
   for (const c of genome.Lc ?? []) leftRows.push({ mt: 'L', enc: c.enc, nimber: c.nimber });
   for (const c of genome.Zc ?? []) leftRows.push({ mt: "Z", enc: c.enc, nimber: c.nimber });
 
-  const rightRows: { child: string; relevancy: string }[] = [];
+  // T rows, ordered: directly-named T-genes first by genome name (numeric subscript, then offset),
+  // then bypassed ones (a bypass target, or a one-level "position" verdict) by their child's position
+  // text, then "none" rows the same way.
+  interface TRow { child: string; childSort: string; relevancy: string; group: 0 | 1 | 2; name: string }
+  const rightRows: TRow[] = [];
   for (const t of genome.T) {
+    const base = { child: exportCanonLabel(t), childSort: paperDisplay(t.enc) };
+    const bypassTarget = bypassTargets?.get((await canon(t.enc)) || t.enc);
+    if (bypassTarget !== undefined) {
+      rightRows.push({ ...base, relevancy: exportEncoding(bypassTarget), group: 1, name: '' });
+      continue;
+    }
     const verdict = await computeRelevancy(genome, t);
-    rightRows.push({ child: exportCanonLabel(t), relevancy: formatRelevancyExport(verdict) });
+    const group = verdict.kind === 'name' ? 0 : verdict.kind === 'position' ? 1 : 2;
+    rightRows.push({ ...base, relevancy: formatRelevancyExport(verdict), group, name: verdict.kind === 'name' ? verdict.name : '' });
   }
+  rightRows.sort((a, b) => {
+    if (a.group !== b.group) return a.group - b.group;
+    if (a.group === 0) {
+      const ak = genomeNameSortKey(a.name);
+      const bk = genomeNameSortKey(b.name);
+      const byName = ak[0] - bk[0] || ak[1].localeCompare(bk[1]) || ak[2] - bk[2] || ak[3] - bk[3];
+      if (byName) return byName;
+    }
+    return a.childSort < b.childSort ? -1 : a.childSort > b.childSort ? 1 : 0;
+  });
 
   const rowCount = Math.max(leftRows.length, rightRows.length, 1);
   const lines: string[] = [];
@@ -1071,7 +1117,7 @@ async function runExport(): Promise<void> {
   statusEl.textContent = 'Exporting…';
   statusEl.classList.remove('error');
   try {
-    const latex = await buildExportLatex(entry);
+    const latex = await buildGenomeTableLatex(entry.position.enc);
     await navigator.clipboard.writeText(latex);
     statusEl.textContent = 'Copied to clipboard.';
     statusEl.classList.remove('error');

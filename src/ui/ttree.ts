@@ -20,6 +20,7 @@ import {
   toLatexMath,
 } from '../model/ttree';
 import { paperDisplay } from './collect';
+import { buildTTreeTablesLatex, downloadText } from './ttreeExport';
 
 let wired = false;
 let lastGraph: TTreeGraph | null = null;
@@ -696,6 +697,24 @@ async function runExport(): Promise<void> {
   render();
 }
 
+async function runExportTables(): Promise<void> {
+  if (!lastGraph) return;
+  const graph = lastGraph;
+  statusIsError = false;
+  try {
+    const latex = await buildTTreeTablesLatex(graph, message => {
+      status = message;
+      render();
+    });
+    downloadText('ttree-tables.tex', latex);
+    status = 'Tables downloaded as ttree-tables.tex.';
+  } catch (err) {
+    status = `Couldn't build the tables: ${err instanceof Error ? err.message : String(err)}`;
+    statusIsError = true;
+  }
+  render();
+}
+
 export function initTTree(): void {
   if (wired) return;
   wired = true;
@@ -711,6 +730,8 @@ export function initTTree(): void {
 
   const exportBtn = document.getElementById('ttree-export-btn') as HTMLButtonElement;
   exportBtn.addEventListener('click', () => void runExport());
+  const tablesBtn = document.getElementById('ttree-tables-btn') as HTMLButtonElement;
+  tablesBtn.addEventListener('click', () => void runExportTables());
 
   void runSearch(DEFAULT_ENCODING);
 }
