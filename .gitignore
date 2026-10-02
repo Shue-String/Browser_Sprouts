@@ -34,3 +34,7 @@ stalks/held_out_5families*
 stalks/*.tsv
 stalks/*.txt
 !stalks/CMakeLists.txt
+
+# Generated output of scripts/exportCollectionsLatex.cjs (any --from/--to range) -- regenerate as needed.
+notes/collections_S*.tex
+notes/collections_S*.pdf

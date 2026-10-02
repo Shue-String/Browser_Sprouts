@@ -813,6 +813,7 @@ never hand-edit a `.generated.hpp` or JSON marked generated.
 | `genGenomeDefsHeader.cjs` | hand-authored genomes in `src/data/collectionElements.json` → `stalks/tools/genome_defs.generated.hpp` |
 | `genCollectionElementsHeader.cjs` | `src/data/collectionElements.json` → `stalks/src/collection_elements.generated.hpp` (flattened to per-section families) |
 | `genCollectionGenomesJson.cjs` | `src/data/collectionElements.json` → `src/data/collectionGenomes.generated.json` (genomes only, for the front end) |
+| `exportCollectionsLatex.cjs` | Registry (Collections panel data) → standalone LaTeX: one section per collection S_n over a range (default S_2–S_10), base collection left / its ⊕1 offset right, rep first, membrane letters shifted to start at C; `--from/--to/--out/--pdf` |
 | `checkGeneratedHeaders.cjs` | CI-style check: fails if any generated file above is stale relative to its JSON source; wired into `npm run build` |
 | `renameGenomes.cjs` | Rename Advanced Collections/genome families across both JSON sources and regenerate everything derived from them in one pass (`node scripts/renameGenomes.cjs <mapping.json> [--dry-run] [--skip-native]`) — built as a standing tool since family renames have happened multiple times (see `project_advanced_collections.md`, `project_genome_renaming_tool.md`) |
 | `filterLives.cjs` | Quick filter pass over `master_meta.json` for encodings with life count 5-7 containing a DisaPoint — pure-JS port, no WASM needed |
