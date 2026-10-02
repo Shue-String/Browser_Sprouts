@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
@@ -177,21 +178,46 @@ std::vector<const Node*> reachableMinimal(const Node* root) {
 // under edge references -- every component of every edge is itself in `mins` -- which holds both for
 // a whole graph's minimal nodes and for the reachable-from-a-root subset.
 std::size_t writeMinimal(const GameGraph& g, std::vector<const Node*> mins, std::ostream& out) {
-    // Order by ascending lives, so every child -- always strictly fewer lives -- precedes its
-    // parents. Tie-break on the encoding purely for a reproducible byte stream (ties never sit on an
-    // edge, so any order is a valid topo order).
+    // Order by ascending lives, tie-broken on the encoding for a reproducible byte stream, then
+    // repair into a true topological order (every edge's components before the node). Lives alone
+    // is not enough: a registry rewrite can send a child edge to a representative with EQUAL lives
+    // (e.g. "2AB|2,4,AB" -> "2,233", both 12), which the tie-break could place after its parent.
+    // The repair is a DFS in sorted order that emits components first, so it leaves an
+    // already-valid order untouched.
     std::vector<int> lives(mins.size());
     for (std::size_t i = 0; i < mins.size(); ++i)
         lives[i] = livesOf(mins[i]->enc);
 
-    std::vector<std::size_t> order(mins.size());
-    for (std::size_t i = 0; i < order.size(); ++i)
-        order[i] = i;
-    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+    std::vector<std::size_t> sorted(mins.size());
+    for (std::size_t i = 0; i < sorted.size(); ++i)
+        sorted[i] = i;
+    std::sort(sorted.begin(), sorted.end(), [&](std::size_t a, std::size_t b) {
         if (lives[a] != lives[b])
             return lives[a] < lives[b];
         return mins[a]->enc < mins[b]->enc;
     });
+
+    std::unordered_map<const Node*, std::size_t> slotOf;
+    slotOf.reserve(mins.size() * 2);
+    for (std::size_t i = 0; i < mins.size(); ++i)
+        slotOf.emplace(mins[i], i);
+    std::vector<std::size_t> order;
+    order.reserve(mins.size());
+    std::vector<char> state(mins.size(), 0);  // 0 = unvisited, 1 = on DFS stack, 2 = emitted
+    std::function<void(std::size_t)> visit = [&](std::size_t slot) {
+        if (state[slot] == 2)
+            return;
+        if (state[slot] == 1)
+            throw std::runtime_error("savefile: cycle among minimal nodes");
+        state[slot] = 1;
+        for (const Node::Edge& e : mins[slot]->edges)
+            for (const Node* comp : childComponents(e.node))
+                visit(slotOf.at(comp));
+        state[slot] = 2;
+        order.push_back(slot);
+    };
+    for (std::size_t slot : sorted)
+        visit(slot);
 
     std::unordered_map<const Node*, std::size_t> indexOf;
     indexOf.reserve(mins.size() * 2);
@@ -216,7 +242,7 @@ std::size_t writeMinimal(const GameGraph& g, std::vector<const Node*> mins, std:
             // holding (compCount << 1 | 1) followed by compCount deltas. A sum always has >= 2 parts,
             // so an odd descriptor never collides with a (>= 2, even) single-child delta.
             if (comps.size() == 1) {
-                const std::size_t ci = indexOf.at(comps[0]);  // < rank (strictly fewer lives)
+                const std::size_t ci = indexOf.at(comps[0]);  // < rank (topologically earlier)
                 putVarint(out, (rank - ci) << 1);
             } else {
                 putVarint(out, (comps.size() << 1) | 1);
