@@ -19,6 +19,11 @@ instead of Claude re-deriving it from memory files or grep each time.
 - Dead-region elimination (shrink+pop) is in `src/model/deadRegions.ts`. Main containment fix
   (regions embedded inside a living component) shipped 2026-09-12. See memory
   `project_dead_region_elimination.md` for current status and open bugs.
+- Dead-face collapse ANIMATIONS for `triangleDeadStep`/`parallelDeadStep` use deflate-in-place
+  (`src/model/faceDeflate.ts`, a Floater mean-value mesh embedding — injective, so no crossings for any
+  face shape or size, including a dead face that covers most of the sphere). Other collapse animators
+  (louse, quad, enclosed-triangle, bigon-tip, self-connected, triple-parallel) are unaudited and could be
+  ported onto the same `startDeflate`/`deflateTo` helpers. See memory `project_collapse_animation_crossings.md`.
 - Canonical position encoding: `src/model/encoding.ts`. All dead-region surgery is gated
   by a before/after encoding check.
 - Advanced Collections / genome registry: hand-authored data lives in ONE file, `src/data/collectionElements.json` (one object per

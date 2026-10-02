@@ -29,8 +29,10 @@ import { normalize, slerp, arcsCross, sphereAngle } from '../math/sphere';
 import { recomputeRegions } from './moves';
 import { cloneState, allocEdgeId } from './gameState';
 import { canonicalEncoding } from './encoding';
-import { canonSync } from '../engine/stalks';
+import { canonSync, canonReady } from '../engine/stalks';
 import { smallCircleSelfLoop } from './strokeSynthesis';
+import { stereoChart, buildFaceDeflation, deflatePoint, deflateArc, deflateTrack } from './faceDeflate';
+import type { FaceDeflation } from './faceDeflate';
 
 // Collapse-generated self-loops: when the concatenated/shrunk geometry feeding a new self-loop
 // is confined to a small neighbourhood, it's replaced with a genuine small circle (see
@@ -570,6 +572,129 @@ export function louseCollapseStep(
 }
 
 // ===========================================================================
+// Deflate-in-place animation (shared)
+// ===========================================================================
+//
+// A dead face with nothing inside it collapses by deflating in place (see
+// faceDeflate.ts): its boundary shrinks through nested curves onto a point
+// inside the face, each boundary vertex travelling along its own track, and
+// each vertex's external edge growing along the track its vertex has covered.
+// The deflation is a homeomorphism of the face onto part of itself and the
+// tracks lie in the part already vacated, so the face never crosses itself or
+// its own external edges, whichever side of the sphere the face is on (the
+// caller names the side by a point outside it). The external edges are only
+// EXTENDED each frame, never rebuilt, so smoothing keeps relaxing them (and
+// pulling the surrounding structure along) while the face deflates.
+
+/** Depth schedule: r = exp(-u) with u = U_STEP·k²/(k + EASE) at frame k — eases
+ * in, then shrinks the face by a constant factor per frame (≈ e^-U_STEP). */
+const DEFLATE_U_STEP = 0.1;
+const DEFLATE_EASE_FRAMES = 4;
+
+interface DeflateAnim {
+  def: FaceDeflation;
+  frame: number;
+  r: number; // current depth: 1 = original boundary, 0 = the centre point
+  /** Boundary edges: the deflation angles of their start and end in loop order, and
+   * whether the loop runs along the edge's own v1→v2 direction. */
+  edges: { id: EdgeId; theta0: number; theta1: number; forward: boolean }[];
+  /** Boundary vertices: their deflation angle and their one external edge. */
+  verts: { id: VertexId; theta: number; extId: EdgeId }[];
+}
+
+/** Snapshot a dead face for deflation. `loop` walks its boundary (each vertex with
+ * the edge leaving it toward the next vertex), `ext` gives each boundary vertex's
+ * one external edge, and `outside` is any point outside the face. Null if the
+ * face can't be meshed. */
+function startDeflate(
+  state: GameState,
+  loop: { vid: VertexId; eid: EdgeId }[],
+  ext: Map<VertexId, EdgeId>,
+  outside: SpherePoint,
+): DeflateAnim | null {
+  const pts: SpherePoint[] = [];
+  const spans: { id: EdgeId; start: number; end: number; forward: boolean }[] = [];
+  const vertStarts: { id: VertexId; idx: number }[] = [];
+  for (const { vid, eid } of loop) {
+    const e = state.edges.get(eid);
+    const v = state.vertices.get(vid);
+    if (!e || !v) return null;
+    const forward = e.v1 === vid;
+    const edgePts = forward ? e.points : [...e.points].reverse();
+    vertStarts.push({ id: vid, idx: pts.length });
+    spans.push({ id: eid, start: pts.length, end: pts.length + edgePts.length - 1, forward });
+    pts.push({ ...v.pos }, ...edgePts.slice(1, -1).map(p => ({ ...p })));
+  }
+  const def = buildFaceDeflation(pts, outside);
+  if (!def) return null;
+  // Angles increase along the loop; the closing edge ends back at the first point, a full turn on.
+  const theta = (i: number) => (i < pts.length ? def.thetas[i] : def.thetas[0] + 2 * Math.PI);
+  const edges = spans.map(s => ({ id: s.id, theta0: theta(s.start), theta1: theta(s.end), forward: s.forward }));
+  const verts: DeflateAnim['verts'] = [];
+  for (const { id, idx } of vertStarts) {
+    const extId = ext.get(id);
+    if (extId === undefined || !state.edges.has(extId)) return null;
+    verts.push({ id, theta: theta(idx), extId });
+  }
+  return { def, frame: 0, r: 1, edges, verts };
+}
+
+/** The depth for the next animation frame. */
+function nextDeflateDepth(anim: DeflateAnim): number {
+  anim.frame++;
+  const k = anim.frame;
+  return Math.exp(-DEFLATE_U_STEP * k * k / (k + DEFLATE_EASE_FRAMES));
+}
+
+/** Lay out the face's boundary vertices, boundary edges and external edges at depth `r`. */
+function deflateTo(state: GameState, anim: DeflateAnim, r: number): void {
+  const { def } = anim;
+  for (const v of anim.verts) {
+    const pos = deflatePoint(def, v.theta, r);
+    const step = deflateTrack(def, v.theta, anim.r, r);
+    step[step.length - 1] = pos;
+    const vx = state.vertices.get(v.id);
+    if (vx) vx.pos = { ...pos };
+    // Grow the external edge by the stretch its vertex just travelled (its old end
+    // point is the vertex's old position), keeping whatever shape smoothing gave the rest.
+    const e = state.edges.get(v.extId);
+    if (e) {
+      const toV = e.v2 === v.id ? e.points : [...e.points].reverse();
+      const pts = [...toV.slice(0, -1), ...step];
+      e.points = e.v2 === v.id ? pts : pts.reverse();
+    }
+  }
+  const ids = new Set<EdgeId>();
+  for (const be of anim.edges) {
+    const e = state.edges.get(be.id);
+    if (!e) continue;
+    ids.add(be.id);
+    const arc = deflateArc(def, be.theta0, be.theta1, r);
+    e.points = be.forward ? arc : arc.reverse();
+    const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
+    const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
+  }
+  // Pseudo-vertices ride their edge's midpoint (as smoothStep keeps them).
+  for (const v of state.vertices.values()) {
+    if (!v.isPseudo || v.pseudoEdgeId === undefined || !ids.has(v.pseudoEdgeId)) continue;
+    const e = state.edges.get(v.pseudoEdgeId)!;
+    v.pos = { ...e.points[Math.floor(e.points.length / 2)] };
+  }
+  anim.r = r;
+}
+
+/** Largest distance (radians) from the deflation centre to the face's current boundary. */
+function deflateRadius(state: GameState, anim: DeflateAnim): number {
+  let max = 0;
+  for (const be of anim.edges) {
+    const e = state.edges.get(be.id);
+    if (!e) continue;
+    for (const p of e.points) max = Math.max(max, sphereAngle(p, anim.def.center));
+  }
+  return max;
+}
+
+// ===========================================================================
 // Parallel-dead collapse (case 2)
 // ===========================================================================
 //
@@ -577,40 +702,30 @@ export function louseCollapseStep(
 // between P and Q — where both P and Q are fully dead (degree 3). P has exactly
 // one other edge (to X) and Q has exactly one other edge (to Y).
 //
-// Animation: P and Q reel toward each other ALONG one of the parallel edges
-// (the "primary"), so they trace out exactly the path the final X-Y edge will
-// follow. The external edges grow to follow them, the primary shrinks to the
-// stretch between them, and the other parallel edge(s) collapse onto it. (P and
-// Q can be far apart, with the geodesic between them cutting across live
-// content — their own bigon edge is the only path known to be clear.)
-// Surgery: delete P, Q, both parallel edges, and both external edges; create a
-// new X-Y edge whose points concatenate (reversed X-P edge) + (P-Q via one
-// parallel) + (Q-Y edge). The new edge is returned for resampling by the caller.
+// Animation: the dead bigon deflates in place (see "Deflate-in-place animation"
+// above): both parallel edges shrink through nested curves onto a point inside
+// the bigon, P and Q travelling along their own tracks with the external edges
+// growing behind them — the whole bigon folds in, whichever side of the sphere
+// it is on, with nothing crossing.
+// Surgery: once it is small, the bigon finishes deflating onto its centre; P,
+// Q, both parallel edges and both external edges are deleted and a new X-Y edge
+// is made from (X-P edge) + (Q-Y edge), which meet at the centre.
 
 export interface ParallelDeadCollapse {
   kind: 'parallel-dead';
   p: VertexId;
   q: VertexId;
-  primary: EdgeId;               // the parallel edge P and Q reel along; becomes the middle of the X-Y edge
-  primaryPath: SpherePoint[];    // its geometry at detection time, P-end first
-  // The other P↔Q edges (the bigon's second edge plus any extras), P-end first,
-  // each collapsing onto the primary and deleted on pop.
-  others: { id: EdgeId; path: SpherePoint[] }[];
-  // Each external edge's second point (the one after P's / Q's own), at detection:
-  // which way it leaves P / Q, to tell which side of the primary the dead bigon is on.
-  extNextP: SpherePoint;
-  extNextQ: SpherePoint;
-  gap: number;      // fraction of primaryPath still between P and Q: 1 at detection, 0 when met
-  advanced: number; // fraction of primaryPath P (and, mirrored, Q) has already travelled
+  /** The bigon's boundary walk: each vertex with the parallel edge leaving it. */
+  loop: { vid: VertexId; eid: EdgeId }[];
   edgeP: EdgeId;  // external edge incident to P (the side going to X)
   edgeQ: EdgeId;  // external edge incident to Q (the side going to Y)
   x: VertexId;   // external neighbour of P
   y: VertexId;   // external neighbour of Q
+  /** Deflation state, built on the first animation frame. */
+  deflate: DeflateAnim | null;
 }
 
-const PARALLEL_DEAD_SHRINK_STEP = 0.08; // fraction of the remaining gap closed per frame
-const PARALLEL_DEAD_SLIVER_WIDTH = 0.02; // max offset (radians) of a follower edge's sliver from the primary
-const PARALLEL_DEAD_POP_GAP     = 0.08; // pop once P and Q are this close (radians, along the primary)
+const PARALLEL_DEAD_POP_RADIUS = 0.05;
 
 /**
  * Scan for a dead bigon whose two endpoints are both fully dead (degree 3) and
@@ -685,99 +800,23 @@ export function detectParallelDead(state: GameState): ParallelDeadCollapse | nul
       if (!sharedFace || !sharedFace.isDead) continue;
     }
 
-    // Snapshot every P↔Q edge, P-end first: e0 is the primary, the rest (the
-    // bigon's other edge plus any additional P↔Q edges) collapse onto it.
-    // Pinned to P's and Q's current positions: an edge's end points can lag a
-    // vertex smoothing just nudged, and the first animation frame would then
-    // snap the vertex to the stale end point.
-    const pFirst = (e: { v1: VertexId; points: SpherePoint[] }) => {
-      const pts = (e.v1 === p ? e.points : [...e.points].reverse()).map(pt => ({ ...pt }));
-      pts[0] = { ...vp.pos };
-      pts[pts.length - 1] = { ...vq.pos };
-      return pts;
-    };
-    const leavesFirst = (eid: EdgeId, from: VertexId): SpherePoint => {
-      const e = state.edges.get(eid)!;
-      const pts = e.v1 === from ? e.points : [...e.points].reverse();
-      return { ...pts[Math.min(1, pts.length - 1)] };
-    };
-    const primaryPath = pFirst(state.edges.get(e0.edgeId)!);
-    const others: ParallelDeadCollapse['others'] = [];
-    for (const e of state.edges.values()) {
-      if (e.id === e0.edgeId) continue;
-      if ((e.v1 === p && e.v2 === q) || (e.v1 === q && e.v2 === p)) {
-        others.push({ id: e.id, path: pFirst(e) });
-      }
-    }
-
     return {
       kind: 'parallel-dead',
       p, q,
-      primary: e0.edgeId,
-      primaryPath,
-      others,
-      extNextP: leavesFirst(edgeP, p),
-      extNextQ: leavesFirst(edgeQ, q),
-      gap: 1, advanced: 0,
+      loop: [{ vid: p, eid: e0.edgeId }, { vid: q, eid: e1.edgeId }],
       edgeP, edgeQ,
       x, y,
+      deflate: null,
     };
   }
   return null;
 }
 
-/** +1 / -1: which side of the primary (at `origin`, heading toward `toPrimary`)
- * the dead bigon is on, as the sign of the primary's left normal there. Of the
- * three edges at P (or Q) — primary, other bigon edge, external edge — the dead
- * wedge is the angular sector between the primary and the other edge that does
- * NOT contain the external edge. */
-function deadSideSign(
-  origin: SpherePoint, toPrimary: SpherePoint, toOther: SpherePoint, toExt: SpherePoint,
-): 1 | -1 {
-  const tx = toPrimary.x - origin.x, ty = toPrimary.y - origin.y, tz = toPrimary.z - origin.z;
-  const T = normalize({ x: tx, y: ty, z: tz });
-  const N: SpherePoint = { x: origin.y * T.z - origin.z * T.y, y: origin.z * T.x - origin.x * T.z, z: origin.x * T.y - origin.y * T.x };
-  const angleOf = (pt: SpherePoint) => {
-    const vx = pt.x - origin.x, vy = pt.y - origin.y, vz = pt.z - origin.z;
-    const a = Math.atan2(vx * N.x + vy * N.y + vz * N.z, vx * T.x + vy * T.y + vz * T.z);
-    return a > 0 ? a : a + 2 * Math.PI;
-  };
-  // Counter-clockwise sector from the primary (angle 0) to the other edge.
-  return angleOf(toExt) < angleOf(toOther) ? -1 : 1;
-}
-
-/** A copy of `track` pushed sideways by up to PARALLEL_DEAD_SLIVER_WIDTH (less on a
- * short track), with the offset tapering to zero at both ends, to the side of the
- * track given by `sign` (see deadSideSign). The first and last points are unchanged. */
-function sliverAlongPrimary(track: SpherePoint[], sign: 1 | -1): SpherePoint[] {
-  const m = track.length - 1;
-  if (m < 1) return track.map(pt => ({ ...pt }));
-  const width = Math.min(PARALLEL_DEAD_SLIVER_WIDTH, 0.15 * pathAngularLength(track));
-  const normalAt = (i: number): SpherePoint => {
-    const a = track[Math.max(i - 1, 0)], b = track[Math.min(i + 1, m)], p = track[i];
-    const tx = b.x - a.x, ty = b.y - a.y, tz = b.z - a.z; // tangent
-    return normalize({ x: p.y * tz - p.z * ty, y: p.z * tx - p.x * tz, z: p.x * ty - p.y * tx });
-  };
-  return track.map((pt, i) => {
-    const k = sign * width * Math.sin(Math.PI * i / m);
-    const n = normalAt(i);
-    return normalize({ x: pt.x + n.x * k, y: pt.y + n.y * k, z: pt.z + n.z * k });
-  });
-}
-
-/** Angular length of a polyline. */
-function pathAngularLength(path: SpherePoint[]): number {
-  let len = 0;
-  for (let i = 1; i < path.length; i++) len += sphereAngle(path[i - 1], path[i]);
-  return len;
-}
-
 /**
- * One frame of parallel-dead collapse animation.
- * P and Q reel toward each other along the primary parallel edge (see the
- * section comment); once the stretch between them is shorter than
- * PARALLEL_DEAD_POP_GAP the topology surgery fires. Returns the new edge ID so
- * the caller can resample it.
+ * One frame of parallel-dead collapse: deflate the dead bigon one step; once it
+ * is smaller than PARALLEL_DEAD_POP_RADIUS, finish onto its centre and do the
+ * surgery (P and Q deleted, X-P and Q-Y joined into one X-Y edge). Returns the
+ * new edge ID so the caller can resample it.
  */
 export function parallelDeadStep(
   state: GameState,
@@ -786,143 +825,80 @@ export function parallelDeadStep(
   const vp = state.vertices.get(collapse.p);
   const vq = state.vertices.get(collapse.q);
   if (!vp || !vq) return { done: true, popAt: null };
-
-  const { primaryPath } = collapse;
-  const ep = state.edges.get(collapse.edgeP);
-  const eq = state.edges.get(collapse.edgeQ);
-  const e1 = state.edges.get(collapse.primary);
   // External edges can be deleted by eliminateIsolatedVertex if their far endpoint
   // was a dead degree-2 vertex that got spliced out — abort the collapse gracefully.
-  if (!ep || !eq || !e1) return { done: true, popAt: null };
+  if (!state.edges.has(collapse.edgeP) || !state.edges.has(collapse.edgeQ)) return { done: true, popAt: null };
 
-  const between = pathSlice(primaryPath, collapse.advanced, 1 - collapse.advanced);
-  if (pathAngularLength(between) < PARALLEL_DEAD_POP_GAP) {
-    const popAt = slerp(vp.pos, vq.pos, 0.5);
-
-    // Orient each segment in the direction needed for the X→Y path. ep and eq
-    // already include the stretches P and Q have travelled, so this reproduces
-    // X→P→(original primary)→Q→Y with no seams.
-    const xToPPts = ep.v1 === collapse.p ? [...ep.points].reverse() : [...ep.points];
-    const pToQPts = e1.v1 === collapse.p ? [...e1.points] : [...e1.points].reverse();
-    const qToYPts = eq.v1 === collapse.q ? [...eq.points] : [...eq.points].reverse();
-
-    // Concatenate: X→P + (P→Q without first point) + (Q→Y without first point).
-    const newPoints: SpherePoint[] = [
-      ...xToPPts,
-      ...pToQPts.slice(1),
-      ...qToYPts.slice(1),
-    ];
-
-    let newEid = -1;
-    const ok = commitIfEncodingPreserved(state, () => {
-      state.vertices.delete(collapse.p);
-      state.vertices.delete(collapse.q);
-      // Sweep for ALL edges incident to P or Q: covers the parallel edges, the
-      // external edges, and any further P↔Q edges that eliminateIsolatedVertex may
-      // have created during the animation (those wouldn't be in `others` since that
-      // was snapshotted at detection time).
-      for (const [eid, e] of [...state.edges]) {
-        if (e.v1 === collapse.p || e.v2 === collapse.p ||
-            e.v1 === collapse.q || e.v2 === collapse.q) {
-          state.edges.delete(eid);
-        }
-      }
-
-      newEid = allocEdgeId(state);
-      if (collapse.x === collapse.y) {
-        // X and Y are the same vertex — the concatenated path is a self-loop.
-        // Anchor both ends at X's position (they should already match, but the
-        // interior steps above may have nudged the endpoint copies apart).
-        const vx = state.vertices.get(collapse.x);
-        if (vx) {
-          newPoints[0] = { ...vx.pos };
-          newPoints[newPoints.length - 1] = { ...vx.pos };
-        }
-        // A near-collinear concatenated path (e.g. all three segments already shrunk thin by
-        // this frame's animation) has no lateral area for edgeRepellers() to bow into a circle.
-        // Replace it with a genuine small circle when the whole path is confined to a small
-        // neighbourhood; a real spread-out loop is left untouched (same pattern as the other
-        // self-loop sites above).
-        let selfLoopPoints = newPoints;
-        if (vx && maxPairwiseAngularDistance(newPoints) < SELF_LOOP_DEGENERATE_THRESHOLD) {
-          selfLoopPoints = smallCircleSelfLoop(vx.pos, newPoints[Math.min(1, newPoints.length - 1)], SELF_LOOP_SYNTH_RADIUS);
-        }
-        state.edges.set(newEid, {
-          id: newEid, v1: collapse.x, v2: collapse.x,
-          points: selfLoopPoints, leftRegion: -1, rightRegion: -1,
-        });
-      } else {
-        state.edges.set(newEid, {
-          id: newEid, v1: collapse.x, v2: collapse.y,
-          points: newPoints, leftRegion: -1, rightRegion: -1,
-        });
-      }
-
-      safeRecompute(state, 'parallelDeadStep');
-    });
-    if (ok) return { done: true, popAt, newEdgeId: newEid };
-    return { done: true, popAt: null };
-  }
-
-  if (collapse.gap === 1) {
-    // First frame: P and Q may have been nudged between detection and now; the
-    // snapshots (and with them the first animated positions) must start from
-    // where they actually are, or they snap back to where they were.
-    for (const path of [primaryPath, ...collapse.others.map(o => o.path)]) {
-      path[0] = { ...vp.pos };
-      path[path.length - 1] = { ...vq.pos };
+  if (!collapse.deflate) {
+    const vx = state.vertices.get(collapse.x);
+    const ext = new Map([[collapse.p, collapse.edgeP], [collapse.q, collapse.edgeQ]]);
+    collapse.deflate = vx ? startDeflate(state, collapse.loop, ext, vx.pos) : null;
+    if (!collapse.deflate) {
+      console.warn('[parallelDeadStep] could not build the deflation for', collapse.loop);
+      return { done: true, popAt: null };
     }
   }
+  const anim = collapse.deflate;
+  deflateTo(state, anim, nextDeflateDepth(anim));
+  // Hold (still shrinking) until the canon engine can vet the surgery.
+  if (deflateRadius(state, anim) >= PARALLEL_DEAD_POP_RADIUS || !canonReady()) return { done: false, popAt: null };
 
-  const prev = collapse.advanced;
-  collapse.gap *= 1 - PARALLEL_DEAD_SHRINK_STEP;
-  collapse.advanced = (1 - collapse.gap) / 2;
-  const next = collapse.advanced;
+  // Finish onto the centre: P, Q and the ends of both external edges arrive there.
+  deflateTo(state, anim, 0);
+  const popAt = { ...anim.def.center };
+  const ep = state.edges.get(collapse.edgeP)!;
+  const eq = state.edges.get(collapse.edgeQ)!;
+  // X→P (ending at the centre) + Q→Y (starting there, first point dropped).
+  const xToPPts = ep.v1 === collapse.p ? [...ep.points].reverse() : [...ep.points];
+  const qToYPts = eq.v1 === collapse.q ? [...eq.points] : [...eq.points].reverse();
+  const newPoints: SpherePoint[] = [...xToPPts.slice(0, -1), { ...popAt }, ...qToYPts.slice(1)];
 
-  vp.pos = pointAlongPath(primaryPath, next);
-  vq.pos = pointAlongPath(primaryPath, 1 - next);
+  let newEid = -1;
+  const ok = commitIfEncodingPreserved(state, () => {
+    state.vertices.delete(collapse.p);
+    state.vertices.delete(collapse.q);
+    // Sweep for ALL edges incident to P or Q: covers the parallel edges, the
+    // external edges, and any further P↔Q edges that eliminateIsolatedVertex may
+    // have created during the animation.
+    for (const [eid, e] of [...state.edges]) {
+      if (e.v1 === collapse.p || e.v2 === collapse.p ||
+          e.v1 === collapse.q || e.v2 === collapse.q) {
+        state.edges.delete(eid);
+      }
+    }
 
-  // Grow each external edge by the stretch its vertex just travelled, so the
-  // edge follows the vertex along the primary instead of stretching a chord.
-  // `stretch` runs from the vertex's old position to its new one; the edge's
-  // old end point (== the old position) is replaced by it.
-  const extend = (e: typeof ep, vid: VertexId, stretch: SpherePoint[]) => {
-    e.points = e.v2 === vid
-      ? [...e.points.slice(0, -1), ...stretch]
-      : [...[...stretch].reverse(), ...e.points.slice(1)];
-  };
-  extend(ep, collapse.p, pathSlice(primaryPath, prev, next));
-  extend(eq, collapse.q, pathSlice(primaryPath, 1 - next, 1 - prev).reverse());
+    newEid = allocEdgeId(state);
+    if (collapse.x === collapse.y) {
+      // X and Y are the same vertex — the concatenated path is a self-loop.
+      // Anchor both ends at X's position.
+      const vx = state.vertices.get(collapse.x);
+      if (vx) {
+        newPoints[0] = { ...vx.pos };
+        newPoints[newPoints.length - 1] = { ...vx.pos };
+      }
+      // A near-collinear concatenated path has no lateral area for edgeRepellers()
+      // to bow into a circle. Replace it with a genuine small circle when the whole
+      // path is confined to a small neighbourhood; a real spread-out loop is left
+      // untouched (same pattern as the other self-loop sites above).
+      let selfLoopPoints = newPoints;
+      if (vx && maxPairwiseAngularDistance(newPoints) < SELF_LOOP_DEGENERATE_THRESHOLD) {
+        selfLoopPoints = smallCircleSelfLoop(vx.pos, newPoints[Math.min(1, newPoints.length - 1)], SELF_LOOP_SYNTH_RADIUS);
+      }
+      state.edges.set(newEid, {
+        id: newEid, v1: collapse.x, v2: collapse.x,
+        points: selfLoopPoints, leftRegion: -1, rightRegion: -1,
+      });
+    } else {
+      state.edges.set(newEid, {
+        id: newEid, v1: collapse.x, v2: collapse.y,
+        points: newPoints, leftRegion: -1, rightRegion: -1,
+      });
+    }
 
-  // The primary shrinks to the stretch between P and Q.
-  const middle = pathSlice(primaryPath, next, 1 - next);
-  e1.points = e1.v1 === collapse.p ? middle : [...middle].reverse();
-
-  // Every other P↔Q edge is still attached to P and Q, so it follows them along
-  // the primary exactly as the external edges do — but on the dead side of the
-  // primary (the side its own body leaves P and Q toward), as a thin sliver
-  // pulled out from under its fixed body. Its body can be nowhere near the
-  // primary (the dead bigon can be a whole hemisphere wide), so the body is left
-  // where it is: dragging or flattening it risks crossing the primary or the
-  // external edges, while the slivers cannot — each lies between the primary and
-  // the body's own start/end, in the wedge where the dead region already is.
-  for (const other of collapse.others) {
-    const oe = state.edges.get(other.id);
-    if (!oe) continue;
-    const body = other.path;
-    const nb = body.length - 1;
-    // Slivers run from the vertex's ORIGINAL position (where the body attaches)
-    // to its current one; both come out vertex-last.
-    const np = primaryPath.length - 1;
-    const pSign = deadSideSign(primaryPath[0], primaryPath[Math.min(1, np)], body[Math.min(1, nb)], collapse.extNextP);
-    const qSign = deadSideSign(primaryPath[np], primaryPath[Math.max(np - 1, 0)], body[Math.max(nb - 1, 0)], collapse.extNextQ);
-    const pSliver = sliverAlongPrimary(pathSlice(primaryPath, 0, next), pSign);
-    const qSliver = sliverAlongPrimary(pathSlice(primaryPath, 1 - next, 1).reverse(), qSign);
-    const pts = [...[...pSliver].reverse(), ...body.slice(1, nb), ...qSliver].map(pt => ({ ...pt }));
-    oe.points = oe.v1 === collapse.p ? pts : [...pts].reverse();
-  }
-
-  return { done: false, popAt: null };
+    safeRecompute(state, 'parallelDeadStep');
+  });
+  if (ok) return { done: true, popAt, newEdgeId: newEid };
+  return { done: true, popAt: null };
 }
 
 // ===========================================================================
@@ -1060,12 +1036,12 @@ export function tripleParallelDeadStep(
 // all three vertices degree 3. Each vertex has exactly one external edge
 // (to some neighbour X, Y, Z).
 //
-// Animation: B and C slerp toward A (the lowest-ID of the three). A stays
-// fixed as the anchor.
+// Animation: the dead face deflates in place (see the shared section above).
 //
-// Surgery: delete B, C, all three triangle edges, and the external edges of
-// B and C; create new edges A→Y and A→Z from the re-routed external geometry.
-// A's own external edge (A→X) is left untouched.
+// Surgery: once the face is small, it finishes deflating onto its centre point;
+// A takes that point, B, C and the triangle's edges are deleted, and B's and
+// C's external edges (which have followed B and C onto the centre) become new
+// edges A→Y and A→Z. A's own external edge (A→X) is kept.
 
 export interface TriangleDeadCollapse {
   kind: 'triangle-dead';
@@ -1073,23 +1049,19 @@ export interface TriangleDeadCollapse {
   b: VertexId;                          // deleted on pop
   c: VertexId;                          // deleted on pop
   triangleEdges: [EdgeId, EdgeId, EdgeId];
-  edgeA: EdgeId;                        // external edge at A (kept, re-anchored)
+  /** The dead face's boundary walk: each vertex with the triangle edge leaving it. */
+  loop: { vid: VertexId; eid: EdgeId }[];
+  edgeA: EdgeId;                        // external edge at A (kept)
   edgeB: EdgeId;                        // external edge at B → becomes A–Y
   edgeC: EdgeId;                        // external edge at C → becomes A–Z
   x: VertexId;                          // external neighbour of A
   y: VertexId;                          // external neighbour of B
   z: VertexId;                          // external neighbour of C
-  // Antipodal steering is only needed when the direct collapse-to-centroid
-  // chords would actually cut across living structure (the majority-dead-
-  // region case, same as quadDeadStep's bcWaypoint/daWaypoint) — for a small,
-  // self-contained dead triangle the direct chords never leave the dead face,
-  // and forcing them through a distant antipodal point anyway sends the
-  // collapse the wrong way across the sphere. Null when no detour is needed.
-  steerTarget: SpherePoint | null;
+  /** Deflation state, built on the first animation frame. */
+  deflate: DeflateAnim | null;
 }
 
-const TRIANGLE_DEAD_SHRINK_STEP = 0.09;
-const TRIANGLE_DEAD_POP_RADIUS  = 0.05;
+const TRIANGLE_DEAD_POP_RADIUS = 0.05;
 
 /**
  * Scan for a dead triangular region (3 boundary entries, all degree-3 vertices,
@@ -1143,35 +1115,27 @@ export function detectTriangleDead(state: GameState): TriangleDeadCollapse | nul
     const [bId, cId] = sorted.slice(1) as [VertexId, VertexId];
     const extMap = new Map(vids.map((id, i) => [id, exts[i]!]));
 
-    // Decide once, at detection time, whether the direct collapse-to-centroid
-    // needs antipodal steering (see steerTarget doc on TriangleDeadCollapse).
-    const plainCentroid = normalize({
-      x: vs[0].pos.x + vs[1].pos.x + vs[2].pos.x,
-      y: vs[0].pos.y + vs[1].pos.y + vs[2].pos.y,
-      z: vs[0].pos.z + vs[1].pos.z + vs[2].pos.z,
-    });
-    const needsDetour = vs.some(v => chordCrossesLivingEdges(state, v.pos, plainCentroid, triEdgeSet));
-    const steerTarget = needsDetour ? occupiedCentroidAntipode(state, triVidSet) : null;
-
     return {
       kind: 'triangle-dead',
       a: aId, b: bId, c: cId,
       triangleEdges: triEdgeIds,
+      loop: realEntries.map(en => ({ vid: en.vertexId, eid: en.edgeId! })),
       edgeA: extMap.get(aId)!.eid,
       edgeB: extMap.get(bId)!.eid,
       edgeC: extMap.get(cId)!.eid,
       x: extMap.get(aId)!.nbr,
       y: extMap.get(bId)!.nbr,
-      steerTarget,
       z: extMap.get(cId)!.nbr,
+      deflate: null,
     };
   }
   return null;
 }
 
 /**
- * One frame of triangle-dead collapse. B and C slerp toward A; on pop, B and C
- * are deleted and their external edges are re-routed to A.
+ * One frame of triangle-dead collapse: deflate the dead face one step; once it
+ * is smaller than TRIANGLE_DEAD_POP_RADIUS, finish onto its centre and do the
+ * surgery (B and C deleted, their external edges re-rooted at A).
  */
 export function triangleDeadStep(
   state: GameState,
@@ -1181,86 +1145,60 @@ export function triangleDeadStep(
   const vb = state.vertices.get(collapse.b);
   const vc = state.vertices.get(collapse.c);
   if (!va || !vb || !vc) return { done: true, popAt: null };
-
-  // Collapse toward the plain triangle centroid, unless detection determined
-  // the direct chords would cut across living structure — in which case
-  // steerTarget (decided once, at detection time) routes around it instead.
-  // See steerTarget's doc on TriangleDeadCollapse.
-  const target = collapse.steerTarget
-    ?? normalize({
-      x: va.pos.x + vb.pos.x + vc.pos.x,
-      y: va.pos.y + vb.pos.y + vc.pos.y,
-      z: va.pos.z + vb.pos.z + vc.pos.z,
-    });
-
-  const da = sphereAngle(va.pos, target);
-  const db = sphereAngle(vb.pos, target);
-  const dc = sphereAngle(vc.pos, target);
-
-  if (da < TRIANGLE_DEAD_POP_RADIUS && db < TRIANGLE_DEAD_POP_RADIUS && dc < TRIANGLE_DEAD_POP_RADIUS) {
-    const popAt = { ...target };
-
-    // Build geometry for re-routed external edges (B→Y and C→Z become A→Y, A→Z).
-    // Guard: external edges can be removed by eliminateIsolatedVertex if their far
-    // endpoint was eliminated while the triangle was animating.
-    const eb = state.edges.get(collapse.edgeB);
-    const ec = state.edges.get(collapse.edgeC);
-    if (!eb || !ec) return { done: true, popAt: null };
-
-    const aToY = eb.v1 === collapse.b ? [...eb.points] : [...eb.points].reverse();
-    aToY[0] = { ...target };
-    const aToZ = ec.v1 === collapse.c ? [...ec.points] : [...ec.points].reverse();
-    aToZ[0] = { ...target };
-
-    const ok = commitIfEncodingPreserved(state, () => {
-      // Snap A to the centroid.
-      va.pos = { ...target };
-      // Delete B, C, and all edges incident to either — covers the three triangle
-      // edges, the external edges, and any extra edges that eliminateIsolatedVertex
-      // may have created adjacent to B or C during the animation.
-      state.vertices.delete(collapse.b);
-      state.vertices.delete(collapse.c);
-      for (const [eid, e] of [...state.edges]) {
-        if (e.v1 === collapse.b || e.v2 === collapse.b ||
-            e.v1 === collapse.c || e.v2 === collapse.c) {
-          state.edges.delete(eid);
-        }
-      }
-
-      // Create new A→Y and A→Z edges.
-      const newEidB = allocEdgeId(state);
-      state.edges.set(newEidB, { id: newEidB, v1: collapse.a, v2: collapse.y, points: aToY, leftRegion: -1, rightRegion: -1 });
-      const newEidC = allocEdgeId(state);
-      state.edges.set(newEidC, { id: newEidC, v1: collapse.a, v2: collapse.z, points: aToZ, leftRegion: -1, rightRegion: -1 });
-
-      safeRecompute(state, 'triangleDeadStep');
-    });
-    return { done: true, popAt: ok ? popAt : null };
+  // External edges can be removed by eliminateIsolatedVertex if their far
+  // endpoint was eliminated while the triangle was animating.
+  if (!state.edges.has(collapse.edgeA) || !state.edges.has(collapse.edgeB) || !state.edges.has(collapse.edgeC)) {
+    return { done: true, popAt: null };
   }
 
-  // Slerp all three toward the centroid.
-  va.pos = slerp(va.pos, target, TRIANGLE_DEAD_SHRINK_STEP);
-  vb.pos = slerp(vb.pos, target, TRIANGLE_DEAD_SHRINK_STEP);
-  vc.pos = slerp(vc.pos, target, TRIANGLE_DEAD_SHRINK_STEP);
-
-  // Slerp triangle edge interiors toward centroid; re-anchor all incident edges.
-  for (const eid of collapse.triangleEdges) {
-    const e = state.edges.get(eid);
-    if (!e) continue;
-    for (let i = 1; i < e.points.length - 1; i++) {
-      e.points[i] = slerp(e.points[i], target, TRIANGLE_DEAD_SHRINK_STEP);
+  if (!collapse.deflate) {
+    const vx = state.vertices.get(collapse.x);
+    const ext = new Map([[collapse.a, collapse.edgeA], [collapse.b, collapse.edgeB], [collapse.c, collapse.edgeC]]);
+    collapse.deflate = vx ? startDeflate(state, collapse.loop, ext, vx.pos) : null;
+    if (!collapse.deflate) {
+      console.warn('[triangleDeadStep] could not build the deflation for', collapse.loop);
+      return { done: true, popAt: null };
     }
-    const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
-    const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
   }
-  for (const eid of [collapse.edgeA, collapse.edgeB, collapse.edgeC]) {
-    const e = state.edges.get(eid);
-    if (!e) continue;
-    const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
-    const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
-  }
+  const anim = collapse.deflate;
+  deflateTo(state, anim, nextDeflateDepth(anim));
+  // Hold (still shrinking) until the canon engine can vet the surgery.
+  if (deflateRadius(state, anim) >= TRIANGLE_DEAD_POP_RADIUS || !canonReady()) return { done: false, popAt: null };
 
-  return { done: false, popAt: null };
+  // Finish onto the centre: every vertex and the end of every external edge
+  // arrive at it along their own tracks.
+  deflateTo(state, anim, 0);
+  const center = { ...anim.def.center };
+  const eb = state.edges.get(collapse.edgeB)!;
+  const ec = state.edges.get(collapse.edgeC)!;
+  const aToY = eb.v1 === collapse.b ? [...eb.points] : [...eb.points].reverse();
+  aToY[0] = { ...center };
+  const aToZ = ec.v1 === collapse.c ? [...ec.points] : [...ec.points].reverse();
+  aToZ[0] = { ...center };
+
+  const ok = commitIfEncodingPreserved(state, () => {
+    va.pos = { ...center };
+    // Delete B, C, and all edges incident to either — covers the three triangle
+    // edges, the external edges, and any extra edges that eliminateIsolatedVertex
+    // may have created adjacent to B or C during the animation.
+    state.vertices.delete(collapse.b);
+    state.vertices.delete(collapse.c);
+    for (const [eid, e] of [...state.edges]) {
+      if (e.v1 === collapse.b || e.v2 === collapse.b ||
+          e.v1 === collapse.c || e.v2 === collapse.c) {
+        state.edges.delete(eid);
+      }
+    }
+
+    // Create new A→Y and A→Z edges.
+    const newEidB = allocEdgeId(state);
+    state.edges.set(newEidB, { id: newEidB, v1: collapse.a, v2: collapse.y, points: aToY, leftRegion: -1, rightRegion: -1 });
+    const newEidC = allocEdgeId(state);
+    state.edges.set(newEidC, { id: newEidC, v1: collapse.a, v2: collapse.z, points: aToZ, leftRegion: -1, rightRegion: -1 });
+
+    safeRecompute(state, 'triangleDeadStep');
+  });
+  return { done: true, popAt: ok ? center : null };
 }
 
 // ===========================================================================
@@ -1475,34 +1413,6 @@ function deformPreservingOffset(
     });
   }
   return pts;
-}
-
-/** Stereographic chart of the sphere centred on (projected from) `pole`: `fwd`
- * maps a sphere point to the plane, `inv` maps back. The pole itself goes to
- * infinity, so it must lie outside whatever is being moved around in the chart. */
-function stereoChart(pole: SpherePoint): {
-  fwd: (p: SpherePoint) => { x: number; y: number };
-  inv: (q: { x: number; y: number }) => SpherePoint;
-} {
-  const R = normalize(pole);
-  const t: SpherePoint = Math.abs(R.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
-  const e1 = normalize({ x: R.y * t.z - R.z * t.y, y: R.z * t.x - R.x * t.z, z: R.x * t.y - R.y * t.x });
-  const e2: SpherePoint = { x: R.y * e1.z - R.z * e1.y, y: R.z * e1.x - R.x * e1.z, z: R.x * e1.y - R.y * e1.x };
-  const dot = (p: SpherePoint, q: SpherePoint) => p.x * q.x + p.y * q.y + p.z * q.z;
-  return {
-    fwd: p => {
-      const d = Math.max(1 - dot(p, R), 1e-9);
-      return { x: dot(p, e1) / d, y: dot(p, e2) / d };
-    },
-    inv: q => {
-      const r2 = q.x * q.x + q.y * q.y, d = r2 + 1, z = (r2 - 1) / d, k = 2 / d;
-      return normalize({
-        x: R.x * z + (e1.x * q.x + e2.x * q.y) * k,
-        y: R.y * z + (e1.y * q.x + e2.y * q.y) * k,
-        z: R.z * z + (e1.z * q.x + e2.z * q.y) * k,
-      });
-    },
-  };
 }
 
 /** Shrink a frozen path toward `anchor` by the factor `remaining`: a homothety about

@@ -179,6 +179,11 @@ export function preloadModule(): void {
  * fallback for that case (e.g. the pre-canon TS string compare) since load timing
  * isn't guaranteed, especially on the very first moves of a session.
  */
+/** True once canonSync() can answer (the module has finished loading). */
+export function canonReady(): boolean {
+  return !!resolvedMod;
+}
+
 export function canonSync(enc: string): string | null {
   if (!resolvedMod) return null;
   try {

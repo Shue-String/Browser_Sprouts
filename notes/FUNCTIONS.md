@@ -196,9 +196,9 @@ Tuning constants live in `src/model/tunables.ts` (see below), not inline in this
 | Detector | Step | Topology |
 |---|---|---|
 | `detectLouse(state)` | `louseCollapseStep(state, collapse)` | Theta-graph: 2 degree-3 vertices + 1 degree-2, 4 edges, 3 dead regions |
-| `detectParallelDead(state)` | `parallelDeadStep(state, collapse)` | Bigon: 2 degree-3 vertices connected by exactly 2 parallel edges, each with one degree-2 pendant |
+| `detectParallelDead(state)` | `parallelDeadStep(state, collapse)` | Bigon: 2 degree-3 vertices connected by exactly 2 parallel edges, each with one external edge. Animated by deflate-in-place (below); pop joins X-P + Q-Y into one X-Y edge (self-loop if X = Y) |
 | `detectTripleParallelDead(state)` | `tripleParallelDeadStep(state, collapse)` | N-parallel-edge generalization of the bigon case (3+ parallel edges between the two degree-3 vertices) |
-| `detectTriangleDead(state)` | `triangleDeadStep(state, collapse)` | Triangle: 3-vertex dead boundary, each vertex with one external edge |
+| `detectTriangleDead(state)` | `triangleDeadStep(state, collapse)` | Triangle: 3-vertex dead boundary, each vertex with one external edge. Animated by deflate-in-place (below); pop re-roots B/C external edges at A on the centre |
 | `detectQuadDead(state)` | `quadDeadStep(state, collapse)` | Quadrilateral: 4-vertex dead boundary; collapses to 2 new vertices + 5 edges |
 | `detectBigonTip(state)` | `bigonTipStep(state, collapse)` | Degree-2 vertex hanging off a degree-3 vertex where both edges go to the same neighbor |
 | `detectEnclosedTriangle(state)` | `enclosedTriangleStep(state, collapse)` | Triangle with one vertex also connected to external graph |
@@ -209,6 +209,13 @@ Each `Collapse` type above (`LouseCollapse`, `ParallelDeadCollapse`, `TriplePara
 `SelfConnectedDeadCollapse`) is also exported as an interface describing the detected shape
 passed from `detectX` into `xStep`.
 
+**Deflate-in-place** (shared by `parallelDeadStep` and `triangleDeadStep`; the dead face shrinks onto a point
+inside itself via `faceDeflate.ts`, external edges are EXTENDED each frame along their vertex's track so
+smoothing keeps relaxing the surrounding structure during the collapse): `startDeflate` (snapshot the face
+loop + external edges, build the map), `nextDeflateDepth` (eased depth schedule), `deflateTo` (lay out
+vertices/boundary edges/external-edge growth at depth r), `deflateRadius` (pop test). Pops hold until
+`canonReady()` so the encoding gate can always run.
+
 Key internal helpers: `occupiedCentroidAntipode` (steering waypoint away from the occupied side
 of the sphere, used by both `quadDeadStep` and `enclosedTriangleStep`), and a shared path-
 deformation group used by `quadDeadStep`/`enclosedTriangleStep` to retrace real (frozen-at-
@@ -216,6 +223,25 @@ detection) edges instead of slerping toward a fresh target each frame: `pointAlo
 a fractional position along a frozen path), `pathPrefix`/`pathSlice` (sub-ranges of a frozen path,
 for the still-unreeled portion), `deformPreservingOffset` (re-anchor a frozen path's shape to a
 live, possibly-waypoint-bent chord — see memory `project_dead_region_elimination.md`).
+
+---
+
+## `src/model/faceDeflate.ts` — Crossing-free "deflate in place" map for a dead face
+
+Meshes the face (stereographic chart with the pole outside it; ear clipping → constrained Delaunay →
+centroid refinement), then embeds the mesh onto a convex polygon inscribed in the unit circle with Floater
+mean-value weights (injective by Floater/Tutte for ANY face shape). Deflation at depth r = H⁻¹(r·polygon):
+nested curves, non-crossing tracks, and the face side is chosen by an `outside` point, never by area — so a
+dead face covering most of the sphere works like a small one. (A conformal/zipper map was tried first;
+crowding breaks it on thin sliver faces.)
+
+| Function | Description |
+|---|---|
+| `stereoChart(pole)` | Stereographic chart `{fwd, inv}` projecting from `pole` (also used by `deadRegions.ts`'s `shrinkTowardAnchor`) |
+| `buildFaceDeflation(loop, outside)` | Build the map for the face bounded by `loop` on the side away from `outside`; returns `thetas` (boundary angle per loop point) + `center`, or null if degenerate |
+| `deflatePoint(def, theta, r)` | Point at depth r on boundary point theta's track |
+| `deflateArc(def, theta0, theta1, r)` | Deflated boundary between two angles, traced EXACTLY through the piecewise-linear map (a point per mesh-edge crossing, so chords can't clip neighbouring tracks) |
+| `deflateTrack(def, theta, r0, r1)` | A boundary point's track between two depths, traced exactly |
 
 ---
 
@@ -500,6 +526,7 @@ by both drawing and dragging), `startReject`, `clearDrawState`.
 |---|---|
 | `preloadModule()` | Kick off loading the WASM module ahead of first use |
 | `canonSync(enc)` | Synchronous canonicalization (module must already be loaded) |
+| `canonReady()` | True once `canonSync` can answer (module loaded) |
 | `canonicalizeTrackedProvenanceSync(enc)` | Sync canonicalize that also returns per-token provenance (`TrackedProvenanceResult`) |
 | `analyze(enc)` | Full async position analysis → `AnalysisResult` (`AnalysisOk` or `AnalysisErr`) |
 | `analyzeFull(enc)` | Same as `analyze` but forces the full (non-quick) analysis path |
