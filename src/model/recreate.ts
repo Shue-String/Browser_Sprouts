@@ -18,7 +18,7 @@ import { cloneState } from './gameState';
 import { applyMove } from './moves';
 import { computeMoveCode } from './moveCode';
 import { recomputeSpotLabels, labelForFromMap, spotGroupForFromMap } from './vertexLabels';
-import { candidateStrokes, strokeCrossesEdges } from './strokeSynthesis';
+import { candidateStrokeStream, strokeCrossesEdges } from './strokeSynthesis';
 import type { ResolvedMove } from './moveCodeParse';
 
 /**
@@ -34,7 +34,7 @@ export function synthesizeMove(
   checkCrossings = false,
   useLabels = false,
 ): SpherePoint[] | null {
-  for (const stroke of candidateStrokes(state, parsed)) {
+  for (const stroke of candidateStrokeStream(state, parsed)) {
     if (checkCrossings && strokeCrossesEdges(state, stroke, undefined, parsed.lo, parsed.hi)) continue;
     if (strokeReproduces(state, parsed, stroke, useLabels)) return stroke;
   }
@@ -58,7 +58,6 @@ export function strokeReproduces(state: GameState, parsed: ResolvedMove, stroke:
   } catch {
     return false;
   }
-  let code: string;
   try {
     let labelFor: ((vid: VertexId) => VertexId) | undefined;
     let spotGroupFor: ReturnType<typeof spotGroupForFromMap> | undefined;
@@ -67,11 +66,31 @@ export function strokeReproduces(state: GameState, parsed: ResolvedMove, stroke:
       labelFor = labelForFromMap(afterLabels);
       spotGroupFor = spotGroupForFromMap(afterLabels);
     }
-    code = computeMoveCode(before, parsed.lo, parsed.hi, work, labelFor, spotGroupFor);
+    return moveCodeMatches(before, work, parsed.lo, parsed.hi, parsed.token, labelFor, spotGroupFor);
   } catch {
     return false;
   }
-  return code === parsed.token;
+}
+
+/**
+ * True if the move (before -> after) records as `token`. A self-loop at a bare spot splits its
+ * face into two interchangeable faces and the recorded bracket depends on which one the region
+ * ordering lists first (stroke direction), so it matches if EITHER side's bracket does. Not at an
+ * appendage tip: there the tail sits in one face, the two sides are different positions, and the
+ * bracket always names the face bounded by the loop alone (see findEnclosedSideRegion).
+ */
+function moveCodeMatches(
+  before: GameState,
+  after: GameState,
+  lo: VertexId,
+  hi: VertexId,
+  token: string,
+  labelFor?: (vid: VertexId) => VertexId,
+  spotGroupFor?: ReturnType<typeof spotGroupForFromMap>,
+): boolean {
+  if (computeMoveCode(before, lo, hi, after, labelFor, spotGroupFor) === token) return true;
+  return lo === hi && (before.vertices.get(lo)?.degree ?? 0) === 0
+    && computeMoveCode(before, lo, hi, after, labelFor, spotGroupFor, true) === token;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +275,7 @@ export function appliedMoveMatches(
       labelFor = labelForFromMap(afterLabels);
       spotGroupFor = spotGroupForFromMap(afterLabels);
     }
-    return computeMoveCode(before, v1, v2, after, labelFor, spotGroupFor) === token;
+    return moveCodeMatches(before, after, v1, v2, token, labelFor, spotGroupFor);
   } catch {
     return false;
   }

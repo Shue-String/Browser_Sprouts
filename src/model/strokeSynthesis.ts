@@ -21,6 +21,7 @@ import { compWithBoth } from './moveCode';
 import { buildSubregionHighlight } from './subregionHighlight';
 import { buildVoronoiGraph } from './voronoiGraph';
 import { computeJunctionVoronoiPath } from './voronoiJunctionPath';
+import { routedCandidates } from './moveRouter';
 
 const SAMPLES = 24; // points per synthesized stroke arc
 
@@ -35,23 +36,43 @@ const add = (a: V3, b: V3): V3 => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z })
 const scale = (a: V3, s: number): V3 => ({ x: a.x * s, y: a.y * s, z: a.z * s });
 
 /**
- * Ordered list of candidate strokes to try for `parsed`, best-guess first.
- * The orchestrator verifies each against the target token and uses the first
- * that reproduces it. Returns [] when no candidate can be proposed (→ the
- * controller falls back to manual draw).
+ * Every candidate stroke for `parsed` (see candidateStrokeStream), as an array — for callers
+ * that genuinely need them all (e.g. Recreate's pause-mode display). Callers that stop at the
+ * first stroke that verifies should iterate candidateStrokeStream instead, so the expensive
+ * groups further down are never built.
  */
 export function candidateStrokes(state: GameState, parsed: ResolvedMove): SpherePoint[][] {
+  return [...candidateStrokeStream(state, parsed)];
+}
+
+/**
+ * Candidate strokes to try for `parsed`, best-guess first, generated LAZILY: each group is built
+ * only when iteration reaches it. The orchestrator verifies each against the target and uses the
+ * first that reproduces it, and most moves are reproduced by the plain geodesic / small loop at
+ * the front — so the router's face meshes (40–125 ms each) and the legacy junction-graph Voronoi
+ * fallback are only built when the cheap candidates have already failed. Yields nothing when no
+ * candidate can be proposed (→ the controller falls back to manual draw).
+ */
+export function* candidateStrokeStream(state: GameState, parsed: ResolvedMove): Generator<SpherePoint[]> {
   const a = state.vertices.get(parsed.lo)?.pos;
   const b = state.vertices.get(parsed.hi)?.pos;
-  if (!a || !b) return [];
+  if (!a || !b) return;
+
+  // Topological router (moveRouter.ts): one stroke per reading of the move, each correct by
+  // construction for its reading — so for anything that has to separate boundaries it goes
+  // first. A move with nothing to enclose keeps its plain geodesic / round loop in front, which
+  // looks nicer whenever it happens to be legal.
+  const trivial = !parsed.brackets || parsed.brackets.length === 0;
+  const enclosing = !!parsed.brackets && parsed.brackets.length > 0;
 
   if (parsed.lo === parsed.hi) {
-    const candidates: SpherePoint[][] = [];
-    if (parsed.brackets && parsed.brackets.length > 0) {
-      for (const c of targetedSelfLoopCandidates(state, parsed)) candidates.push(c);
-      for (const c of voronoiSelfLoopArcs(state, parsed)) candidates.push(c);
+    if (trivial) yield* selfLoopCandidates(a);
+    yield* routedCandidates(state, parsed);
+    if (enclosing) {
+      yield* targetedSelfLoopCandidates(state, parsed);
+      yield* voronoiSelfLoopArcs(state, parsed);
     }
-    for (const c of selfLoopCandidates(a)) candidates.push(c);
+    if (!trivial) yield* selfLoopCandidates(a);
     // Last resort: when the vertex sits in a crowded tangent space, none of the
     // above (which sweep out to radius 0.9) may clear existing geometry. Tiny
     // loops squeezed right up against the vertex are far more likely to miss
@@ -59,37 +80,34 @@ export function candidateStrokes(state: GameState, parsed: ResolvedMove): Sphere
     // loop open into free space once the move commits (see smooth.ts's
     // repulsion zones) — so they're a reasonable-looking result even though
     // they start out nearly degenerate.
-    for (const c of tinySelfLoopCandidates(a)) candidates.push(c);
+    yield* tinySelfLoopCandidates(a);
     // Deepest fallback: the same junction-graph Voronoi routing used for
     // complicated enclosures (see main.ts's Recreate fallback), which the
     // simpler curve attempts above can't reach when the region has no other
     // boundary to bow around.
-    if (parsed.brackets && parsed.brackets.length > 0) {
+    if (enclosing) {
       const c = junctionVoronoiArc(state, parsed);
-      if (c) candidates.push(c);
+      if (c) yield c;
     }
-    return candidates;
+    return;
   }
 
-  // For enclosure moves, prepend Voronoi-boundary arcs — they trace the natural
-  // separation curve between the enclosed components and the rest of the region,
-  // giving the verify loop a topologically-guided candidate before falling back
-  // to the generic bowed arcs.
-  const candidates: SpherePoint[][] = [];
-  if (parsed.brackets && parsed.brackets.length > 0) {
-    for (const c of voronoiBoundaryArcs(state, parsed)) candidates.push(c);
-  }
-  for (const c of arcCandidates(a, b)) candidates.push(c);
-  for (const c of enclosureCandidates(state, parsed)) candidates.push(c);
+  if (trivial) yield geodesic(a, b);
+  yield* routedCandidates(state, parsed);
+  // For enclosure moves, Voronoi-boundary arcs trace the natural separation curve between the
+  // enclosed components and the rest of the region — a topologically-guided candidate before
+  // the generic bowed arcs.
+  if (enclosing) yield* voronoiBoundaryArcs(state, parsed);
+  yield* arcCandidates(a, b).slice(trivial ? 1 : 0); // [0] is the geodesic
+  yield* enclosureCandidates(state, parsed);
   // Deepest fallback: route through the junction-graph Voronoi system (the
   // same one used for complicated enclosures) when nothing simpler verified —
   // this is the only path that understands topology in regions with no other
   // boundary to bow the basic curves around.
-  if (parsed.brackets && parsed.brackets.length > 0) {
+  if (enclosing) {
     const c = junctionVoronoiArc(state, parsed);
-    if (c) candidates.push(c);
+    if (c) yield c;
   }
-  return candidates;
 }
 
 /**

@@ -19,6 +19,11 @@
  *   Example: 4_5 means "vertex 4, the occurrence after which vertex 5 follows."
  *   Self-loop joints: both subscripts are included, sorted ascending.
  *
+ * Self-loop brackets:
+ *   At an appendage tip (the vertex already has an edge), [s,…] lists the boundaries in the face
+ *   bounded by the loop alone — not the face the tail lands in. At a bare spot the two faces are
+ *   interchangeable, so either side's list describes the same position.
+ *
  * lo = min(v1,v2), hi = max(v1,v2).  Moves are joined with "/" in main.ts.
  */
 
@@ -36,6 +41,7 @@ export function computeMoveCode(
   after: GameState,
   labelFor?: (vid: VertexId) => VertexId,
   spotGroupFor?: (vid: VertexId) => SpotGroupInfo | null,
+  selfLoopOtherSide = false,
 ): string {
   const disp = labelFor ?? ((vid: VertexId) => vid);
   // lo/hi ordering must be decided by the DISPLAYED value (label), not the raw
@@ -107,7 +113,7 @@ export function computeMoveCode(
   if (otherVerts.size === 0) return `${base}[]`;
 
   // Always build the [s,…] bracket for enclosures.
-  const brackets = buildBrackets(regionR, mainComp, lo, hi, before, after, loSub, hiSub, spotGroupFor, disp);
+  const brackets = buildBrackets(regionR, mainComp, lo, hi, before, after, loSub, hiSub, spotGroupFor, disp, selfLoopOtherSide);
 
   // The (m) prefix is only needed when both lo and hi are membranes sharing the
   // same "other" region — i.e. they together span exactly two regions, and we
@@ -169,12 +175,13 @@ function buildBrackets(
   hiSub: VertexId | null,
   spotGroupFor?: (vid: VertexId) => SpotGroupInfo | null,
   labelFor?: (vid: VertexId) => VertexId,
+  selfLoopOtherSide = false,
 ): string {
   const disp = labelFor ?? ((vid: VertexId) => vid);
   const subBounds = regionR.boundaries.filter(b => b !== mainComp);
   if (subBounds.length === 0) return '[]';
 
-  const loToHiReg = findEnclosedSideRegion(regionR, mainComp, lo, hi, before, after, loSub, hiSub);
+  const loToHiReg = findEnclosedSideRegion(regionR, mainComp, lo, hi, before, after, loSub, hiSub, selfLoopOtherSide);
   if (!loToHiReg) return '[]';
 
   const loToHiVids = new Set<VertexId>();
@@ -210,14 +217,17 @@ function buildBrackets(
   entries.push(...spotGroups.values());
   entries.sort((a, b) => a.sortKey - b.sortKey);
 
-  // Self-loop special case: a simple closed curve on a sphere has no
+  // Self-loop at a bare spot: a simple closed curve on a sphere has no
   // intrinsic "inside" — the two faces it creates are interchangeable, so
   // "encloses everything else in R" and "encloses nothing" describe the same
   // move. When every other component in R ended up on the recorded side,
   // normalize to the empty bracket: that's what a trivial small loop (the
   // default/easiest candidate stroke) actually produces, so recording it
   // this way keeps the token replayable by that same natural candidate.
-  if (lo === hi && subBounds.length > 0 && entries.length === subBounds.length) return '[]';
+  // Not at an appendage tip: there the tail marks one face, and "everything
+  // with the loop" vs "nothing with the loop" are different positions.
+  const bareSpot = (before.vertices.get(lo)?.degree ?? 0) === 0;
+  if (lo === hi && bareSpot && subBounds.length > 0 && entries.length === subBounds.length) return '[]';
 
   return `[${entries.map(e => e.text).join(',')}]`;
 }
@@ -296,6 +306,7 @@ export function findEnclosedSideRegion(
   after: GameState,
   loSub: VertexId | null,
   hiSub: VertexId | null,
+  selfLoopOtherSide = false,
 ): Region | null {
   const subBounds = regionR.boundaries.filter(b => b !== mainComp);
   const w = findNewVertex(before, after);
@@ -309,8 +320,20 @@ export function findEnclosedSideRegion(
   let loToHiReg: Region | null = null;
 
   if (lo === hi) {
-    // Self-loop: forwardArc is meaningless. The "enclosed" side is whichever new
-    // region contains vertices from the original region's sub-boundaries.
+    // Self-loop at an appendage tip (the vertex already has its tail edge): the tail lands in
+    // exactly one of the two new faces, so they're NOT interchangeable — the bracket must say
+    // which one it lists. Convention: the face bounded by the loop alone (its walk through W is
+    // just lo, W — the [W, lo, W] pattern, vs [W, lo, tail] on the other face). This is also the
+    // side moveRouter treats as the loop's inside.
+    if ((before.vertices.get(lo)?.degree ?? 0) > 0) {
+      const loopAlone = newRegsWithW.find(r => r.boundaries.some(b =>
+        b.entries.some(e => e.vertexId === w) &&
+        b.entries.every(e => e.vertexId === lo || e.vertexId === w || after.vertices.get(e.vertexId)?.isPseudo)));
+      if (loopAlone) return loopAlone;
+    }
+    // Self-loop at a bare spot: the two faces are interchangeable on the sphere (each is the
+    // loop plus some of the other boundaries), so either side's bracket names the same position.
+    // Report the one holding sub-boundary vertices (first in region order).
     const subVerts = new Set<VertexId>();
     for (const sub of subBounds)
       for (const e of sub.entries) subVerts.add(e.vertexId);
@@ -320,6 +343,9 @@ export function findEnclosedSideRegion(
       }
     }
     if (loToHiReg === null) loToHiReg = newRegsWithW[0] ?? null;
+    // "First in region order" depends on stroke direction, so a bare-spot loop can record either
+    // side's bracket; Recreate's matcher asks for the other one when the first doesn't match.
+    if (selfLoopOtherSide && newRegsWithW.length === 2) loToHiReg = newRegsWithW.find(r => r !== loToHiReg) ?? loToHiReg;
   } else {
     if (hiSub !== null) {
       for (const r of newRegsWithW) {

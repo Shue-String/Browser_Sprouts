@@ -34,7 +34,7 @@ export function edgePtsForEntry(entry: BoundaryEntry, edge: Edge): SpherePoint[]
   }
 }
 import { normalize } from '../math/sphere';
-import { pointInPolygon, signedArea } from '../math/intersect';
+import { signedArea } from '../math/intersect';
 import { allocVertexId, allocEdgeId } from './gameState';
 import { beginTrace, trace, snapshotRegions, recordMove } from '../debug/moveLog';
 import { canonicalEncoding } from './encoding';
@@ -128,9 +128,9 @@ interface Cycle {
   poly: CanvasPoint[];   // projected boundary polygon (2D tie-break area only — never used for containment)
   area: number;          // |signed area| of poly
   rep: CanvasPoint;      // a representative interior-ish point (poly centroid)
-  leftInside: boolean;   // is a probe just LEFT of the walk inside the polygon?
+  leftInside: boolean;   // is the face (LEFT of the walk) the side without the projection pole?
   entries: BoundaryEntry[]; // this cycle's boundary entries (same as entriesFromDarts(darts, ...))
-  loop3: SpherePoint[];     // the cycle's raw 3D boundary loop (boundarySphereLoop(entries, state))
+  loop3: SpherePoint[];     // the cycle's raw 3D boundary loop, in walk direction (loopFromDarts)
   repPoint: SpherePoint | null; // a real (non-pseudo) vertex of this cycle's component — see containingFace
 }
 
@@ -478,7 +478,8 @@ export function recomputeRegions(
   // change the combinatorics). Use a CAMERA-INDEPENDENT, pole-safe stereographic
   // projection whose pole points away from every vertex, so no edge passes near
   // the projection singularity and all point-in-polygon tests are well-conditioned.
-  const proj = makeSafeProjection(state);
+  const pole = safeProjectionPole(state);
+  const proj = makeSafeProjection(state, pole);
 
   // --- Splice plan for the new edge's endpoint darts (region-membership fix). ---
   // A move's stroke is validated to never cross an existing edge, so the entire
@@ -602,12 +603,17 @@ export function recomputeRegions(
     const oldDarts = list.filter(di => !newEdgeIdSet.has(darts[di].edge.id));
     const newDarts = list.filter(di => newEdgeIdSet.has(darts[di].edge.id));
     oldDarts.sort((a, b) => darts[a].angle - darts[b].angle);
-    newDarts.sort((a, b) => darts[a].angle - darts[b].angle);
     let insertAt = oldDarts.length;
     if (slot.afterEdgeId !== null) {
       const pos = oldDarts.findIndex(di => darts[di].edge.id === slot.afterEdgeId);
       if (pos >= 0) insertAt = pos + 1;
     }
+    // A self-loop splices BOTH its darts into the one slot. Order them by CCW offset from the
+    // dart they follow, not by raw bearing: bearings wrap at ±π, and when the pair straddles
+    // that cut relative to the slot a raw sort swaps them, turning the loop's faces inside out.
+    const ref = oldDarts.length > 0 ? darts[oldDarts[(insertAt - 1 + oldDarts.length) % oldDarts.length]].angle : 0;
+    const ccwFromRef = (di: number): number => ((darts[di].angle - ref) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+    newDarts.sort((a, b) => ccwFromRef(a) - ccwFromRef(b));
     list.length = 0;
     list.push(...oldDarts.slice(0, insertAt), ...newDarts, ...oldDarts.slice(insertAt));
   }
@@ -673,43 +679,15 @@ export function recomputeRegions(
     } while (cur !== s && !visited.has(cur));
 
     const poly = polyFromDarts(seq, darts, proj, pseudoIds);
-    const leftInside = probeLeftInside(seq, darts, poly, proj, pseudoIds);
-    // Placeholder — replaced below with a probe-based point once leftInside is
-    // final (see the degenerate-self-loop correction, which can still flip it).
     const rep = poly.length ? poly[0] : { px: 0, py: 0 };
     const entries = entriesFromDarts(seq, darts, pseudoIds);
-    const loop3 = boundarySphereLoop(entries, state);
+    const loop3 = loopFromDarts(seq, darts);
+    // Bounded (in the safe projection) ⇔ the face — the LEFT side of the walk — is the side
+    // WITHOUT the projection pole. Asked sphere-natively of the cycle's own 3D loop, this is
+    // exact for a cycle of any size; the old 2D probe vote (fixed ~3px probes) misread loops
+    // that project to a few pixels, e.g. a small self-loop at a pendant tip.
+    const leftInside = loop3.length >= 2 ? !loopsNearestFeature([loop3], pole).inside : true;
     cycles.push({ darts: seq, comp: find(darts[s].origin), poly, area: Math.abs(signedArea(poly)), rep, leftInside, entries, loop3, repPoint: realVertexPos(seq) });
-  }
-
-  // --- Degenerate self-loop correction. A lone self-loop bisects whatever face
-  //     it's drawn in into exactly two cycles: a tiny (often monogon) loop-alone
-  //     cycle and the remainder. Those two MUST be exactly complementary — one
-  //     outer, one bounded — since they trace the same physical curve from
-  //     opposite sides. But probeLeftInside's vote for the monogon rests on a
-  //     single dart (the self-loop's own), while the remainder's vote is a
-  //     majority over every other dart in the component; the monogon's lone
-  //     vote can come out wrong and agree with the remainder's instead of
-  //     opposing it. When a component resolves to exactly two cycles that
-  //     agree — a contradiction — trust the cycle backed by more darts and
-  //     flip the other, rather than falling through to the global fallback
-  //     below (which picks an arbitrary side and can misclassify the true
-  //     outer face as bounded, orphaning any untouched spot into its own
-  //     spurious subposition).
-  const cyclesByComp = new Map<number, number[]>();
-  cycles.forEach((c, i) => {
-    let arr = cyclesByComp.get(c.comp);
-    if (!arr) { arr = []; cyclesByComp.set(c.comp, arr); }
-    arr.push(i);
-  });
-  for (const idxs of cyclesByComp.values()) {
-    if (idxs.length !== 2) continue;
-    const [i, j] = idxs;
-    if (cycles[i].leftInside !== cycles[j].leftInside) continue; // already complementary
-    const weaker = cycles[i].darts.length <= cycles[j].darts.length ? i : j;
-    cycles[weaker].leftInside = !cycles[weaker].leftInside;
-    trace(`recompute: forced complementary leftInside for degenerate 2-cycle component ` +
-      `(comp=${cycles[i].comp}), flipped cycle ${weaker}`);
   }
 
   // --- Classify each cycle as a bounded face vs its component's exterior cycle.
@@ -961,7 +939,30 @@ export function polyFromEntries(
  * handedness tests are well-conditioned regardless of how the view is twisted.
  * Output scale is arbitrary — every consumer is scale-invariant.
  */
-export function makeSafeProjection(state: GameState): (p: SpherePoint) => CanvasPoint {
+export function makeSafeProjection(state: GameState, pole: SpherePoint = safeProjectionPole(state)): (p: SpherePoint) => CanvasPoint {
+  const verts = [...state.vertices.values()];
+  const up: V3 = Math.abs(pole.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+  const u = normalize({ x: up.x - dot(up, pole) * pole.x, y: up.y - dot(up, pole) * pole.y, z: up.z - dot(up, pole) * pole.z }) as V3;
+  const ww = cross(pole, u);
+  const raw = (p: SpherePoint): CanvasPoint => {
+    const dz = dot(p as V3, pole);
+    const den = Math.max(1 - dz, 1e-6);
+    return { px: dot(p as V3, u) / den, py: dot(p as V3, ww) / den };
+  };
+  // Scale to a pixel-like magnitude (consumers are scale-invariant; this just keeps
+  // the numbers readable in traces).
+  let maxR = 1e-6;
+  for (const v of verts) { const c = raw(v.pos); maxR = Math.max(maxR, Math.hypot(c.px, c.py)); }
+  const scale = 300 / maxR;
+  return (p: SpherePoint): CanvasPoint => { const c = raw(p); return { px: c.px * scale, py: c.py * scale }; };
+}
+
+/**
+ * The safe projection's pole: of 64 well-spread candidate directions, the one farthest from
+ * every vertex. It's the "point at infinity" of makeSafeProjection, so recomputeRegions also
+ * uses it to decide which side of each face cycle is bounded.
+ */
+export function safeProjectionPole(state: GameState): SpherePoint {
   const verts = [...state.vertices.values()];
   const N = 64;
   const ga = Math.PI * (3 - Math.sqrt(5));
@@ -976,66 +977,33 @@ export function makeSafeProjection(state: GameState): (p: SpherePoint) => Canvas
     for (const v of verts) { const d = dot(c, v.pos as V3); if (d > maxDot) maxDot = d; }
     if (maxDot < bestMaxDot) { bestMaxDot = maxDot; pole = c; }
   }
-  const up: V3 = Math.abs(pole.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
-  const u = normalize({ x: up.x - dot(up, pole) * pole.x, y: up.y - dot(up, pole) * pole.y, z: up.z - dot(up, pole) * pole.z }) as V3;
-  const ww = cross(pole, u);
-  const raw = (p: SpherePoint): CanvasPoint => {
-    const dz = dot(p as V3, pole);
-    const den = Math.max(1 - dz, 1e-6);
-    return { px: dot(p as V3, u) / den, py: dot(p as V3, ww) / den };
-  };
-  // Scale to a pixel-like magnitude so the fixed probe/offset sizes used by the
-  // classification (probeLeftInside, ~3px) are small relative to the geometry.
-  let maxR = 1e-6;
-  for (const v of verts) { const c = raw(v.pos); maxR = Math.max(maxR, Math.hypot(c.px, c.py)); }
-  const scale = 300 / maxR;
-  return (p: SpherePoint): CanvasPoint => { const c = raw(p); return { px: c.px * scale, py: c.py * scale }; };
+  return pole;
 }
 
 /**
- * Decide whether the cycle's interior lies on the LEFT of its walk, by probing a
- * point just left of EVERY dart's midpoint and taking a majority vote.
- *
- * A single probe (the old behaviour) is fragile: one midpoint sitting near
- * another boundary, in a concave pinch, or on a near-degenerate edge flips the
- * whole cycle's bounded/exterior classification — and through the handedness
- * vote, potentially the encoding. Voting over all edges makes the result a
- * stable function of the cycle's shape rather than of one arbitrary edge.
+ * A face cycle's raw 3D loop, following each dart's curve in WALK direction (face on the left).
+ * Unlike boundarySphereLoop over the cycle's entries, this gets a true self-loop edge (v1 === v2,
+ * from dead-region collapse — not split by a pseudo-vertex) right: its two darts traverse the same
+ * points in opposite directions, which an entry's vertexId alone can't tell apart. The dart
+ * builder pushes each edge's forward dart(s) before their twins, so a dart runs along
+ * edge.points exactly when idx < twin; a pseudo-split dart covers the half on its own side.
  */
-function probeLeftInside(
-  seq: number[],
-  darts: Dart[],
-  poly: CanvasPoint[],
-  project: (p: SpherePoint) => CanvasPoint,
-  pseudoIds: Set<VertexId>,
-): boolean {
-  const PROBE = 3;
-  let inVotes = 0, outVotes = 0;
+function loopFromDarts(seq: number[], darts: Dart[]): SpherePoint[] {
+  const loop: SpherePoint[] = [];
   for (const di of seq) {
     const d = darts[di];
-    if (pseudoIds.has(d.origin)) continue; // pseudo-vertex dart: no geometry to probe
-    const pts = d.origin === d.edge.v1 ? d.edge.points : [...d.edge.points].reverse();
-    if (pts.length < 2) continue;
-    const mi = Math.floor(pts.length / 2);
-    const A = project(pts[Math.max(0, mi - 1)]);
-    const B = project(pts[Math.min(pts.length - 1, mi + 1)]);
-    let tx = B.px - A.px, ty = B.py - A.py;
-    const L = Math.hypot(tx, ty);
-    if (L < 1e-6) continue;
-    tx /= L; ty /= L;
-    const M = project(pts[mi]);
-    // For the reverse dart of a self-loop (both endpoints the same vertex), the
-    // "interior left" of the forward dart is the exterior of the reverse dart.
-    // Flip the probe direction so the two self-loop darts get opposite leftInside
-    // votes and the face classifier can distinguish inner from outer.
-    const isSelfLoopReverse = d.edge.v1 === d.edge.v2 && d.idx > d.twin;
-    // left = (ty, -tx) in canvas (y-down) space; right = (-ty, tx).
-    const probeX = M.px + (isSelfLoopReverse ? -ty : ty) * PROBE;
-    const probeY = M.py + (isSelfLoopReverse ?  tx : -tx) * PROBE;
-    if (pointInPolygon(poly, { px: probeX, py: probeY })) inVotes++;
-    else outVotes++;
+    const pts = d.edge.points;
+    const mid = Math.floor(pts.length / 2);
+    const fwd = d.idx < d.twin;
+    const ordered = fwd ? pts : [...pts].reverse();
+    const fromPseudo = d.origin !== d.edge.v1 && d.origin !== d.edge.v2;
+    const toPseudo = d.head !== d.edge.v1 && d.head !== d.edge.v2;
+    const run = toPseudo ? ordered.slice(0, (fwd ? mid : pts.length - 1 - mid) + 1)
+      : fromPseudo ? ordered.slice(fwd ? mid : pts.length - 1 - mid)
+      : ordered;
+    for (let j = 0; j < run.length - 1; j++) loop.push(run[j]);
   }
-  return inVotes > outVotes;
+  return loop;
 }
 
 /** Assign 'only'/'firstVisit'/'secondVisit' to a boundary by vertex repetition. */

@@ -28,6 +28,14 @@ Internal helpers are listed only when they're large enough to be worth knowing.
 
 ---
 
+## `src/math/sphereDelaunay.ts` — Spherical Delaunay triangulation
+
+| Function | Description |
+|---|---|
+| `sphericalDelaunay(pts)` | Delaunay triangles (+ circumcenters) of points on the unit sphere, as their 3D convex hull: incremental, Morton-ordered insertion with a walking locator (~O(n log n); 20k points ≈ 0.2 s). Visible region grown connected from the located face; a point whose horizon isn't one simple cycle is skipped, so near-cocircular input can't fold the surface. Callers jitter exactly cocircular sets (see moveRouter's `jittered`) |
+
+---
+
 ## `src/math/intersect.ts` — 2D intersection helpers (canvas coordinates)
 
 | Function | Description |
@@ -95,10 +103,14 @@ Pseudo-vertex fields (parallel-edge orientation fix; see memory `reference_pseud
 | `stablePt(pts, startIdx, dir)` | Pick a numerically stable reference point along a polyline for tangent/bearing math |
 | `recomputeRegions(state)` | Rebuild all regions/boundaries/subpositions from the planar embedding via rotation system; classify vertices; assign edge left/right regions; inserts pseudo-vertices (see `types.ts` notes) |
 | `polyFromEntries(...)` | Build a sphere-point polygon from a boundary's entries |
-| `makeSafeProjection(state)` | Pick a camera-free projection safe from antipodal singularities |
+| `makeSafeProjection(state, pole?)` | Camera-free stereographic projection from `safeProjectionPole` (2D area tie-breaks only) |
+| `safeProjectionPole(state)` | The direction farthest from every vertex — the projection's point at infinity; `recomputeRegions` also uses it to decide which side of each face cycle is bounded |
 
 Key internal helpers: `entriesFromDarts` (dart cycle → boundary), `assignSides` (mark
-`only`/`firstVisit`/`secondVisit`), `probeLeftInside` (point-in-polygon left-of-edge test),
+`only`/`firstVisit`/`secondVisit`), `loopFromDarts` (a face cycle's 3D loop in walk direction —
+unlike `boundarySphereLoop`/`edgePtsForEntry`, gets a raw self-loop edge's reverse dart right),
+cycle handedness = `!loopsNearestFeature([loop3], pole).inside` (exact; replaced the 2D
+`probeLeftInside` vote 2026-10-03, which misread loops projecting to a few pixels),
 `outerCycleFace` / `globalOuterId` (find the outer face), `buildSubpositions`
 (group regions into subpositions by connected component via edge `leftRegion`/`rightRegion`
 adjacency), `classifyVertexByDegree` (degree-only cache update; authoritative classification
@@ -114,7 +126,7 @@ is `classifyVertexFull` in encoding.ts).
 | `encodePosition(state)` | Full encoding: returns `EncodingResult { text, vertexSymbols, charInfo, ... }` |
 | `encodePositionDecompressed(state)` | Encoding variant without the compact bracket/⊕ compression passes, for display/debugging |
 | `classifyVertexFull(vid, state)` | Authoritative region-aware vertex classification (Spot/Appendage/Scab/Membrane/Joint/Dead) |
-| `resolveMoveVertices(state, move)` | Resolve a `MoveInfo` move descriptor to concrete `ResolvedMoveVertices` against a given state |
+| `resolveMoveVertices(state, move)` | Resolve a `MoveInfo` move descriptor to concrete `ResolvedMoveVertices` against a given state. First tries `resolveViaProvenance` (exact: the engine's own `canonicalizeTrackedProvenance` of the decompressed encoding, used for any component canon spells identically decompressed); otherwise the TS re-derivation, with engine component → live subposition matched by each subposition's own canon (`liveComponentIndex`) |
 
 Internal pipeline: `assignMembraneLetters` → `buildVertexSymbols` → `buildRegionReprs` →
 `applyAllCompressions` (DisaPoint, HollowPoint, Triplet, SplitPoint passes) →
@@ -129,7 +141,7 @@ Internal pipeline: `assignMembraneLetters` → `buildVertexSymbols` → `buildRe
 | `computeMoveCode(before, v1, v2, after)` | Encode a single move as a string (loXhi format; parallel-lens move uses the `[]` suffix, with optional split/enclosure brackets) |
 | `findNewVertex(before, after)` | Locate the midpoint vertex a move created, by diffing two states |
 | `findMoveRegion(...)` | Locate the region a move's stroke passed through |
-| `findEnclosedSideRegion(...)` | Locate the region enclosed on one side of an enclosure-style move |
+| `findEnclosedSideRegion(...)` | Locate the region enclosed on one side of an enclosure-style move. Self-loop at an appendage tip: always the face bounded by the loop alone (the tail's face is a different position); at a bare spot: first face holding sub-boundaries (faces interchangeable) |
 | `computeEnclosureSideColoring(...)` | Build the two-side region coloring used for enclosure move-code brackets |
 | `computeEnclosureCoverage(...)` | Determine which vertices/regions an enclosure move's bracket covers |
 | `compWithBoth(r, lo, hi)` | Find the boundary of region `r` that touches both `lo` and `hi` |
@@ -155,12 +167,15 @@ resolved to concrete vertex IDs), `ParsedSequence`.
 
 | Function | Description |
 |---|---|
-| `resetActivityTimer(holdMs?)` | Reset the force-winddown idle timer (keeps physics running for `holdMs` after activity) |
+| `resetActivityTimer(holdMs?)` | Reset the force-winddown idle timer (keeps physics running for `holdMs` after activity, then a 3 s fade to zero). Armed on move commit, drag, and save load — an un-armed timer means full forces forever |
 | `getForceScale()` | Current force multiplier, ramped down by the winddown timer once idle |
 | `smoothStep(state, shrinkDead?, extraSkip?)` | One frame of smoothing+repulsion. Returns true if still animating, false if settled |
 | `edgeRepellers(state)` | Returns invisible repeller points for parallel edges (one midpoint each) and self-loop edges (1/3 and 2/3 points). Used by both the repulsion step and the renderer's debug overlay |
 | `smoothStepDrag(state, drag)` | Smoothing step during vertex drag; rolls back if the drag would create a crossing |
-| `resampleEdge(e)` | Resample edge to a point count proportional to arc length |
+| `resampleEdge(e, index)` (internal) | Resample edge to a point count proportional to arc length. A result that newly crosses another edge is retried at 2x/4x points, else the old points are kept (chords across a tight bend used to slice neighbouring edges) |
+| `resampleAllEdges(state)` | Guarded resample of every edge — use instead of looping `resampleEdge` |
+| `pointMoveCrosses(index, e, i, next)` (internal) | Crossing guard for interior edge-point moves (redistribute, Laplacian, sample repulsion/tightening); rejects a move only if it creates a crossing the current position doesn't already have |
+| `SegmentIndex` (internal class) | Uniform 3D grid of edge segments (padded by arc sagitta) behind the crossing guards, so a query tests only nearby segments; built per phase, `refresh(e)` after an edge's points move, the edge being moved is scanned directly. Without it the guard made smoothStep ~6x slower (quadratic in points) |
 
 Tuning constants live in `src/model/tunables.ts` (see below), not inline in this file anymore.
 
@@ -245,11 +260,32 @@ crowding breaks it on thin sliver faces.)
 
 ---
 
+## `src/model/moveRouter.ts` — Topological move router (side-aware Voronoi bisector)
+
+Draws a stroke for a fully specified move, correct by construction. Seeds sampled along every
+boundary dart of the face, offset INTO it (so the two sides of an edge are distinct seeds), plus
+tight corner arcs and spot rings → spherical Delaunay mesh refined with medial circumcenters and an
+open-space lattice, cut to in-face triangles → seeds labeled IN (a→c arc + `withArc` boundaries) /
+OUT, interior points by nearest seed → corridors relabeled until each side is one piece → the
+IN/OUT frontier traced through the mesh (zero crossing of dIN−dOUT) → coarse topology-preserving
+smoothing. Joins (two different boundaries) are a clearance-weighted shortest path instead.
+
+| Function | Description |
+|---|---|
+| `routedCandidates(state, parsed)` | One stroke per reading of a `ResolvedMove` (each live face holding both endpoints × each corner of a joint endpoint × the bracketed boundaries on either side of the lo→hi arc); the caller verifies |
+| `routeSpecsFor(state, parsed)` | Those readings as `RouteSpec`s grouped by face (for debug tools) |
+| `faceMeshFor(state, region)` | Memoized `buildFaceMesh` (keyed by a whole-drawing fingerprint + the face's boundary walk) |
+| `buildFaceMesh(state, region)` | Build a face's `FaceMesh` (move-independent: every corner with free valence gets a full arc) |
+| `routeOnMesh(mesh, spec, diag?)` | Route one `RouteSpec` (`split` a→c with `withArc`, `a===c` for a self-loop; or `join`). `diag` gets labels/failure reason/partial trace |
+
+---
+
 ## `src/model/strokeSynthesis.ts` — Synthesizing a drawable stroke for a move
 
 | Function | Description |
 |---|---|
-| `candidateStrokes(state, parsed)` | Generate candidate sphere-point strokes reproducing a parsed move (for Recreate/preview) |
+| `candidateStrokeStream(state, parsed)` | LAZY generator of candidate sphere-point strokes reproducing a parsed move (for Recreate/preview); each group is built only when iteration reaches it. Order: plain geodesic / round loop first when nothing must be enclosed, then `routedCandidates`, then the legacy bowed/Voronoi candidates. First-hit callers (synthesizeMove, Recreate no-pause, PB hover/precompute) iterate this — simple moves then never build router meshes (~100 ms → <5 ms per move) |
+| `candidateStrokes(state, parsed)` | `[...candidateStrokeStream()]` — for callers needing every candidate (Recreate pause-mode display, debug, scripts) |
 | `smallCircleSelfLoop(v, hint, radius, sampleCount?)` | Synthesize a small-circle self-loop stroke at vertex `v`, biased toward `hint` |
 | `enclosureCandidates(state, parsed)` | Candidate strokes specifically for enclosure-style moves |
 | `strokeCrossesEdges(...)` | Test whether a candidate stroke crosses any existing edge (validity check) |
@@ -698,7 +734,7 @@ Key internal functions (selected):
 - `afterMoveCommitted(v1, v2)` — post-move pipeline: encode, label, log, update Move Sequence bar, schedule tracked check
 - `scheduleTrackedCheck()` / `runPendingTrackedCheck()` — debounce and run the engine-vs-geometry check after a move
 - `resyncTrackedFromHistory()` — rebuild engine tracking state by replaying move history (after undo/load)
-- `precomputeChildrenMoves(targets)` / `synthesizeVerifiedMove(target)` — Position Browser move-preview stroke synthesis
+- `precomputeChildrenMoves(targets)` / `synthesizeVerifiedMove(target)` — Position Browser move-preview stroke synthesis. The background pass only runs while the board is at rest (`layoutQuiet`: no Recreate, no collapse, no drag, last smoothStep under settleEpsilon); a new position's children wait in `pendingChildTargets` and `maybeStartPrecompute` (called every frame) starts/resumes it; it yields per candidate and parks itself if the board moves. A hover checks the cache first, else computes its own child on demand. (Running it during motion rebuilt router face meshes per child — ~4 fps and multi-second freezes during Recreate.)
 - `runRecreate(seq)` — replay a parsed Move Sequence into the current position
 - `promptManual(parsed, moveNum)` / `promptCandidates(parsed, moveNum)` / `verifyManualMove(v1, v2)` — manual (user-drawn) Recreate flow
 - `undoLast(recordRedo?)` / `redoLast()` / `pushHistorySnapshot()` — undo/redo stack
@@ -817,3 +853,16 @@ never hand-edit a `.generated.hpp` or JSON marked generated.
 | `checkGeneratedHeaders.cjs` | CI-style check: fails if any generated file above is stale relative to its JSON source; wired into `npm run build` |
 | `renameGenomes.cjs` | Rename Advanced Collections/genome families across both JSON sources and regenerate everything derived from them in one pass (`node scripts/renameGenomes.cjs <mapping.json> [--dry-run] [--skip-native]`) — built as a standing tool since family renames have happened multiple times (see `project_advanced_collections.md`, `project_genome_renaming_tool.md`) |
 | `filterLives.cjs` | Quick filter pass over `master_meta.json` for encodings with life count 5-7 containing a DisaPoint — pure-JS port, no WASM needed |
+
+## `scripts/route/*.ts` — Stroke-synthesis test tools (Node; bundle with esbuild from the repo root)
+
+| Script | Purpose |
+|---|---|
+| `routeHarness.ts` | Plays random games and measures, per engine child, whether `pipeline` (`candidateStrokes`), `new` (router alone) or `enum` (every router reading, independent of `resolveMoveVertices`) reaches it — exact decompressed-canon oracle. Dumps a failing child/position for `routeDebug.ts` |
+| `routeDebug.ts` | Renders one dumped case to PNG per reading: walls, face mesh, IN/OUT labels, mixed boundary chords, routed stroke or failed trace, and what the stroke actually produces (`CLEAN=1` for walls + stroke only) |
+| `rasterPng.ts` | Dependency-free RGB raster + PNG encoder used by `routeDebug.ts` |
+| `recreateReplay.ts` | Headless Recreate (same candidateStrokes→strokeReproduces→applyMove→relax loop as `runRecreate`); on a step with no reproducing stroke prints the code every candidate produces. Env: `TRACE=<move>` (which smoothing phase first creates a crossing), `SAVE=<file>` (per-move canon vs the save's own history), `REGIONS=<move>`, `NORELAX=1` |
+| `failDiag.ts` | Dumps one `failureSaves/*.json` position, flags each undrawable child `TWIN`/`NON-TWIN` (DisaPoint twin = a drawable child shares its compact canon), and per-spec router failures. Env: `MESH=<region id>` (seed counts per corner), `ENDS=1`, `DECOMP=1` (analyze the decompressed text like the app) |
+| `saveMoveCodes.ts` | Re-derives each saved move's code (both self-loop faces) from a save's history — shows when a recorded token no longer matches its own move |
+| `failureSaves.ts` | Plays random games and writes a loadable save (with undo history) for every position where some engine child can't be drawn, tested exactly as Load rebuilds it, plus `REPORT.md` listing the failing children, the hover's endpoint translation, what strokes between those endpoints produce instead, and whether Recreate replays the game's own move sequence. Args `[games=25] [maxSpots=7] [seeds=4,5] [outDir=failureSaves]`; files are named `fail-s<seed>-g<game>-m<move>.json` |
+| `recreateSweep.ts` | Record/replay sweep: random router-played games, each move code recorded as live play does (`LABELS=1` for labelled codes), replayed through Recreate's `synthesizeMove`, comparing the CANON after every move (a token can match while the position diverges). Per-game faithful / DIVERGED / stuck + move kind; `SHOW=1` regions at the first divergence, `DUMP=g:m` move-region analysis. Args `<games> <maxSpots> <seed>` |

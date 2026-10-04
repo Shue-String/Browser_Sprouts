@@ -10,10 +10,11 @@ import type { ResolvedMove } from './model/moveCodeParse';
 import { synthesizeMove, appliedMoveMatches, computeRecreateHints, strokeReproduces } from './model/recreate';
 import type { RecreateHints } from './model/recreate';
 import { resolveBracketEntry, resolveMoveEndpoints, resolveParensEntry } from './model/vertexLabels';
-import { strokeCrossesEdges, candidateStrokes, candidateSelfLoopArcsWithSeeds } from './model/strokeSynthesis';
+import { strokeCrossesEdges, candidateStrokes, candidateStrokeStream, candidateSelfLoopArcsWithSeeds } from './model/strokeSynthesis';
+import { allRoutedMoves } from './model/moveRouter';
 import { moveLog } from './debug/moveLog';
 import { DEBUG } from './debug/flags';
-import { smoothStep, smoothStepDrag, resampleEdge, lastMaxMovement, resetActivityTimer } from './model/smooth';
+import { smoothStep, smoothStepDrag, resampleAllEdges, lastMaxMovement, resetActivityTimer } from './model/smooth';
 import { tunables, TUNABLE_SPECS, loadTunables, saveTunables, resetTunables } from './model/tunables';
 import { deadRegionStep, eliminateIsolatedVertex, detectLouse, louseCollapseStep, detectParallelDead, parallelDeadStep, detectTripleParallelDead, tripleParallelDeadStep, detectTriangleDead, triangleDeadStep, detectQuadDead, quadDeadStep, scabAloneCollapse, detectBigonTip, bigonTipStep, detectEnclosedTriangle, enclosedTriangleStep, detectSelfConnectedDead, selfConnectedDeadStep } from './model/deadRegions';
 import type { LouseCollapse, ParallelDeadCollapse, TripleParallelDeadCollapse, TriangleDeadCollapse, QuadDeadCollapse, BigonTipCollapse, EnclosedTriangleCollapse, SelfConnectedDeadCollapse } from './model/deadRegions';
@@ -63,6 +64,14 @@ let isWide = false;
 // The last live-position encoding the panel was auto-navigated to — used to only re-navigate
 // when the game position actually changes, rather than every animation frame (which would
 // stomp on manual browsing/typing in the address bar).
+/**
+ * The live position as the Position Browser should analyse it: the DECOMPRESSED encoding. A
+ * compressed DisaPoint ('3') re-expands inside the engine one of two ways, and the board may hold
+ * the other twin — the engine's move list would then describe a sibling position, whose children
+ * no stroke on this drawing can reach. The decompressed text pins the exact twin, so move indices
+ * and the hover oracle line up with the board (resolveMoveVertices already assumes this form).
+ */
+function liveAnalysisText(s: GameState): string { return encodePositionDecompressed(s).text || 'N'; } // '' = no live spots; the engine spells that 'N'
 let lastNotifiedLiveEnc: string | null = null;
 
 // ---------------------------------------------------------------------------
@@ -148,48 +157,105 @@ let movePreviewFailRing: number[] | null = null;
 let movePreviewFailCandidates: { stroke: SpherePoint[]; legal: boolean }[] | null = null;
 let movePreviewToken = 0;
 
-// Cross-check cache for the "misidentified sibling" case: some enclosure moves get drawn as a
-// circled/failed ring not because no valid stroke exists, but because the candidate strokes we
-// can synthesize for THAT move's own endpoints land on a different (also-listed) child instead.
-// When that happens the position they DID land on is real and useful — it's some other child's
-// target, just reached via the wrong-looking pair of vertices. So instead of only ever checking a
-// hovered move's candidates against its own target, precomputeChildrenMoves tries every
-// move-bearing child's candidates up front and records every resulting canon it actually reaches
-// (first stroke wins), keyed by that resulting canon rather than by which child it was tried for.
-// synthesizeVerifiedMove then falls back to this cache when a target's own candidates all miss.
+// Background stroke cache for the Position Browser's children, keyed by the canon each stroke
+// actually reaches (first stroke wins). Two passes per position: each child's own resolved
+// candidates (stopping once its own target is reached), then — for children still uncovered,
+// e.g. ones resolveMoveVertices can't translate, or that land on a sibling's target — every
+// reading the topological router can draw (moveRouter.ts allRoutedMoves), until each child has a
+// stroke. Published as it fills; synthesizeVerifiedMove checks it before computing anything.
+//
+// The pass only runs while the board is STILL (see layoutQuiet): routing builds face meshes that
+// are cached per exact drawing, so running it while physics moves the board rebuilt them for every
+// child and starved the frame loop (~4 fps, multi-second freezes during Recreate). While the board
+// moves, a hover computes its own child on demand instead. A new position's children wait in
+// pendingChildTargets until the layout has come to rest (friction stops it a few seconds after a
+// move); a disturbance mid-pass parks the rest of the batch until the next rest.
 let childrenBatchGen = 0;
+let pendingChildTargets: MovePreviewTarget[] | null = null;
+
+/** Nothing on the board is moving or about to: no Recreate playback, no collapse animation, no
+ *  vertex drag (smoothStepDrag doesn't report movement), and the last physics step moved less than
+ *  the settle threshold. */
+function layoutQuiet(): boolean {
+  return !recreateActive && !pendingCollapse && !input.isDragging() && lastMaxMovement <= tunables.settleEpsilon;
+}
+
+/** Start (or resume) the parked children pass if the board is at rest. Called every frame. */
+function maybeStartPrecompute(): void {
+  if (!pendingChildTargets || !layoutQuiet()) return;
+  const targets = pendingChildTargets;
+  pendingChildTargets = null;
+  void precomputeChildrenMoves(targets);
+}
+
+/**
+ * Canonical identity of a trial position, comparable with canon() of an engine child's enc. Uses
+ * the DECOMPRESSED encoding (see synthesizeVerifiedMove), and maps the encoder's empty string for
+ * a fully dead position to the engine's own spelling of it, "N".
+ */
+async function trialCanonOf(trial: GameState): Promise<string> {
+  const text = encodePositionDecompressed(trial).text;
+  return text === '' ? 'N' : canonEncoding(text);
+}
 let attemptedResultCanons = new Map<string, { v1: number; v2: number; stroke: SpherePoint[] }>();
 
 async function precomputeChildrenMoves(targets: MovePreviewTarget[]): Promise<void> {
   const myGen = ++childrenBatchGen;
-  const results = new Map<string, { v1: number; v2: number; stroke: SpherePoint[] }>();
+  // Same map across a parked/resumed pass for one position (onChildrenBatch starts a fresh one):
+  // a stroke found before a disturbance is still re-checked for crossings when used.
+  const results = attemptedResultCanons;
+  // Each verification routes/applies real strokes, and the canon awaits resolve as microtasks,
+  // which alone never let input or a newer batch in — so yield a macrotask between steps. A newer
+  // batch ends this one; the board starting to move again parks it until the next rest.
+  const yieldOk = async (): Promise<boolean> => {
+    await new Promise(r => setTimeout(r, 0));
+    if (myGen !== childrenBatchGen) return false;
+    if (!layoutQuiet()) { pendingChildTargets = targets; return false; }
+    return true;
+  };
+  const tryStroke = async (v1: number, v2: number, stroke: SpherePoint[]): Promise<string | null> => {
+    if (strokeCrossesEdges(state, stroke, undefined, v1, v2)) return null;
+    const trial = cloneState(state);
+    try {
+      applyMove(trial, { v1, v2, stroke });
+    } catch {
+      return null;
+    }
+    const reached = await trialCanonOf(trial);
+    if (!results.has(reached)) results.set(reached, { v1, v2, stroke });
+    return reached;
+  };
+
+  const wanted = new Set<string>();
+  for (const t of targets) wanted.add(await canonEncoding(t.targetEnc));
   for (const t of targets) {
+    if (!(await yieldOk())) return;
     const resolved = resolveMoveVertices(state, t.move);
     if (!resolved) continue;
+    const target = await canonEncoding(t.targetEnc);
+    if (results.has(target)) continue;
     const parsed: ResolvedMove = {
       token: '', checkEncoding: null, lo: resolved.v1, hi: resolved.v2, loSub: null, hiSub: null,
       parallel: false, parens: null, brackets: resolved.brackets ?? null,
     };
-    for (const stroke of candidateStrokes(state, parsed)) {
-      if (myGen !== childrenBatchGen) return; // superseded by a newer batch (position changed)
-      if (strokeCrossesEdges(state, stroke, undefined, resolved.v1, resolved.v2)) continue;
-      const trial = cloneState(state);
-      try {
-        applyMove(trial, { v1: resolved.v1, v2: resolved.v2, stroke });
-      } catch {
-        continue;
-      }
-      const trialCanon = await canonEncoding(encodePosition(trial).text);
-      if (!results.has(trialCanon)) results.set(trialCanon, { v1: resolved.v1, v2: resolved.v2, stroke });
+    for (const stroke of candidateStrokeStream(state, parsed)) {
+      if (!(await yieldOk())) return;
+      if ((await tryStroke(resolved.v1, resolved.v2, stroke)) === target) break;
     }
   }
-  if (myGen !== childrenBatchGen) return;
-  attemptedResultCanons = results;
+  const covered = (): boolean => [...wanted].every(c => results.has(c));
+  for (const mv of allRoutedMoves(state)) {
+    if (covered() || !(await yieldOk())) return;
+    await tryStroke(mv.v1, mv.v2, mv.stroke);
+  }
 }
 
 setMoveCallbacks({
   onChildrenBatch(targets: MovePreviewTarget[]) {
-    void precomputeChildrenMoves(targets);
+    childrenBatchGen++; // ends any pass still running for the previous position
+    attemptedResultCanons = new Map();
+    pendingChildTargets = targets;
+    maybeStartPrecompute();
   },
   onPreview(target: MovePreviewTarget | null) {
     const myToken = ++movePreviewToken;
@@ -245,7 +311,10 @@ type SynthesizeResult =
  * move just because it was the first candidate offered. Verification goes through the WASM
  * canon() (not a raw string compare against encodePosition().text) because the engine's child
  * `enc` is ASCII/bracketless while the live encoder's text is bracketed/unicode-⊕ — canon() is
- * the one function both sides already agree parses to the same canonical identity.
+ * the one function both sides already agree parses to the same canonical identity. The trial
+ * side must be the DECOMPRESSED encoding: encodePosition's DisaPoint compression ('3') is lossy
+ * (e.g. "2,A|0,0,A" and "2A|0,0,A" both compress to "0,0,3" and canon re-expands it one way),
+ * so a child on the other side of that ambiguity could never verify.
  *
  * When the endpoints resolve but no candidate verifies (e.g. the mask/bracket-set requires a
  * routing candidateStrokes can't propose), the caller still knows *which* two vertices the move
@@ -254,8 +323,17 @@ type SynthesizeResult =
  * not, so the caller can optionally show what was auto-checked and rejected.
  */
 async function synthesizeVerifiedMove(target: MovePreviewTarget): Promise<SynthesizeResult> {
+  // A stroke from the background cache (see precomputeChildrenMoves) — re-checked against the
+  // current drawing, since layout physics may have moved things since it was verified. Checked
+  // first: when the pass has covered this child, the hover is instant.
+  const cached = async (): Promise<SynthesizeResult | null> => {
+    const hit = attemptedResultCanons.get(await canonEncoding(target.targetEnc));
+    return hit && !strokeCrossesEdges(state, hit.stroke, undefined, hit.v1, hit.v2) ? { kind: 'found', ...hit } : null;
+  };
+  const early = await cached();
+  if (early) return early;
   const resolved = resolveMoveVertices(state, target.move);
-  if (!resolved) return { kind: 'unresolved' };
+  if (!resolved) return (await cached()) ?? { kind: 'unresolved' };
   const parsed: ResolvedMove = {
     token: '', checkEncoding: null, lo: resolved.v1, hi: resolved.v2, loSub: null, hiSub: null,
     parallel: false, parens: null, brackets: resolved.brackets ?? null,
@@ -269,7 +347,7 @@ async function synthesizeVerifiedMove(target: MovePreviewTarget): Promise<Synthe
   // sensitive.
   const targetCanon = await canonEncoding(target.targetEnc);
   const candidates: { stroke: SpherePoint[]; legal: boolean }[] = [];
-  for (const stroke of candidateStrokes(state, parsed)) {
+  for (const stroke of candidateStrokeStream(state, parsed)) {
     const legal = !strokeCrossesEdges(state, stroke, undefined, resolved.v1, resolved.v2);
     candidates.push({ stroke, legal });
     if (!legal) continue;
@@ -279,16 +357,14 @@ async function synthesizeVerifiedMove(target: MovePreviewTarget): Promise<Synthe
     } catch {
       continue;
     }
-    const trialCanon = await canonEncoding(encodePosition(trial).text);
+    const trialCanon = await trialCanonOf(trial);
     if (trialCanon === targetCanon) {
       return { kind: 'found', v1: resolved.v1, v2: resolved.v2, stroke };
     }
   }
-  // None of this move's own candidates reach it directly — check whether some other listed
-  // child's attempted stroke happened to land here anyway (see precomputeChildrenMoves above).
-  const crossHit = attemptedResultCanons.get(targetCanon);
-  if (crossHit) return { kind: 'found', ...crossHit };
-  return { kind: 'unreachable', v1: resolved.v1, v2: resolved.v2, candidates };
+  // None of this move's own candidates reach it directly — the background pass may have found a
+  // stroke for it anyway (see precomputeChildrenMoves above).
+  return (await cached()) ?? { kind: 'unreachable', v1: resolved.v1, v2: resolved.v2, candidates };
 }
 
 function fitCanvas(): void {
@@ -765,7 +841,7 @@ function afterMoveCommitted(v1: number, v2: number, stroke: SpherePoint[]): void
   // A genuinely new move branches off wherever we are now — any redo tail is no longer reachable.
   redoStack.length = 0;
   // Resample all edges so point counts reflect current geometry
-  for (const e of state.edges.values()) resampleEdge(e);
+  resampleAllEdges(state);
   // Record move code (pre-move state is the last history snapshot)
   const top = history[history.length - 1];
   const prevState = top?.state;
@@ -905,8 +981,8 @@ function runPendingTrackedCheck(): void {
  * the engine isn't built yet (canon() returns '').
  */
 function recordGameplayEdge(prev: GameState, next: GameState): void {
-  const prevEnc = encodePosition(prev).text;
-  const nextEnc = encodePosition(next).text;
+  const prevEnc = liveAnalysisText(prev); // same decompressed form the Position Browser keys on
+  const nextEnc = liveAnalysisText(next);
   void Promise.all([canonEncoding(prevEnc), canonEncoding(nextEnc)]).then(([p, n]) => {
     if (p && n && p !== n) recordEdge(p, n);
   });
@@ -1112,7 +1188,7 @@ ttreeOverlay.addEventListener('click', e => {
 // the wide layout would otherwise show as a persistent side panel.
 browserBtn.addEventListener('click', e => {
   e.stopPropagation();
-  openPositionBrowser(encodePosition(state).text);
+  openPositionBrowser(liveAnalysisText(state));
 });
 
 // ---------------------------------------------------------------------------
@@ -1239,6 +1315,10 @@ function loadGameState(save: SaveFileV2): void {
   updateTurnIndicator();
   fitCanvas();
   renderer.resize();
+  // A loaded board settles like a freshly committed move: full forces for the hold, then the
+  // friction fade to a stop. Without this the winddown timer kept whatever state it was in —
+  // never armed in a fresh session (full forces forever), or long expired (no settling at all).
+  resetActivityTimer(3000);
   wake();
 
   // Saved pending moves predate range-brackets support (a mid-recreate save
@@ -1581,7 +1661,7 @@ setSyncCallbacks({
 // so the arrows' enabled state and the panel content refresh immediately.
 onSyncModeChange(() => {
   if (isSyncMode()) {
-    lastNotifiedLiveEnc = encodePosition(state).text;
+    lastNotifiedLiveEnc = liveAnalysisText(state);
     void notifyLivePosition(lastNotifiedLiveEnc);
   }
   updateMoveSeq();
@@ -1683,7 +1763,7 @@ function syncLayoutMode(): void {
       bottomBar.classList.remove('visible');
       bottomBarText.textContent = '';
       ensureBrowserWired();
-      lastNotifiedLiveEnc = encodePosition(state).text;
+      lastNotifiedLiveEnc = liveAnalysisText(state);
       void notifyLivePosition(lastNotifiedLiveEnc);
       // Re-populate the tracked panel now that it has a home again.
       updateTrackedPanel(trackedCheckEnabled ? { mismatch: tracked.isDesynced } : null);
@@ -2017,7 +2097,7 @@ function setupManualPause(
     const v2Pos = state.vertices.get(parsed.hi)?.pos;
     const voronoiResult = computeJunctionVoronoiPath(vData, v1Pos, v2Pos);
     lastVoronoiFakeCgrId = voronoiResult?.fakeCgrNodeId ?? null;
-    proposedArc = voronoiResult ? voronoiResult.pts : (candidateStrokes(state, parsed)[0] ?? null);
+    proposedArc = voronoiResult ? voronoiResult.pts : (candidateStrokeStream(state, parsed).next().value ?? null);
     if (voronoiResult) {
       const { nodeIds, seg2Start, seg3Start } = voronoiResult;
       const parts = nodeIds.map((id, i) => {
@@ -2032,7 +2112,7 @@ function setupManualPause(
   } else {
     voronoiPathBar.classList.remove('visible');
     // Blue hint arc: first Voronoi-guided candidate (may not verify, still useful visually).
-    proposedArc = pauseRecreations ? (candidateStrokes(state, parsed)[0] ?? null) : null;
+    proposedArc = pauseRecreations ? (candidateStrokeStream(state, parsed).next().value ?? null) : null;
   }
   wake();
   showBanner(`Move ${moveNum}: connect the circled vertices`);
@@ -2061,38 +2141,35 @@ function resumePausedMove(parsed: ResolvedMove): void {
  * for the user to press Enter. Returns the first legal stroke, or null if none.
  */
 function promptCandidates(parsed: ResolvedMove, moveNum: number): Promise<SpherePoint[] | null> {
-  const all = candidateStrokes(state, parsed);
-  if (all.length === 0) return Promise.resolve(null);
+  const isLegal = (stroke: SpherePoint[]): boolean =>
+    !strokeCrossesEdges(state, stroke, undefined, parsed.lo, parsed.hi) && strokeReproduces(state, parsed, stroke, recreateUseLabels);
 
-  let firstLegal: SpherePoint[] | null = null;
-  let legalCount = 0;
-  const evaluated = all.map(stroke => {
-    const crosses = strokeCrossesEdges(state, stroke, undefined, parsed.lo, parsed.hi);
-    const legal = !crosses && strokeReproduces(state, parsed, stroke, recreateUseLabels);
-    if (legal && !firstLegal) firstLegal = stroke;
-    if (legal) legalCount++;
-    return { stroke, legal };
-  });
-
-  // When not pausing, auto-commit the first legal candidate with no display.
+  // When not pausing, auto-commit the first legal candidate with no display. Walk the LAZY stream:
+  // most moves verify on the plain geodesic / small loop at its front, and stopping there means the
+  // router's face meshes and the legacy Voronoi candidates are never built for them.
   if (!pauseRecreations) {
-    if (firstLegal) return Promise.resolve(firstLegal);
+    let any = false;
+    for (const stroke of candidateStrokeStream(state, parsed)) {
+      any = true;
+      if (isLegal(stroke)) return Promise.resolve(stroke);
+    }
+    if (!any) return Promise.resolve(null);
 
-    const crossResults = evaluated.map(({ stroke }) => {
-      const crosses = strokeCrossesEdges(state, stroke, undefined, parsed.lo, parsed.hi);
-      const reproduces = strokeReproduces(state, parsed, stroke, recreateUseLabels);
-      return { crosses, reproduces };
-    });
     if (DEBUG.recreate) {
+      const evaluated = candidateStrokes(state, parsed).map(stroke => ({ stroke }));
+      const crossResults = evaluated.map(({ stroke }) => ({
+        crosses: strokeCrossesEdges(state, stroke, undefined, parsed.lo, parsed.hi),
+        reproduces: strokeReproduces(state, parsed, stroke, recreateUseLabels),
+      }));
       console.log(`[Move ${moveNum}] token="${parsed.token}" lo=${parsed.lo} hi=${parsed.hi} brackets=${JSON.stringify(parsed.brackets)}`);
       console.log(`[Move ${moveNum}] candidates: ${evaluated.length} total, ${crossResults.filter(r => !r.crosses).length} pass crossing, ${crossResults.filter(r => r.reproduces).length} pass strokeReproduces, ${crossResults.filter(r => !r.crosses && r.reproduces).length} pass both`);
     }
 
-    // Retry all candidates skipping the crossing check (voronoi arcs can
-    // trigger false-positive crossings near existing edges).
-    for (let i = 0; i < evaluated.length; i++) {
-      if (crossResults[i].reproduces) return Promise.resolve(evaluated[i].stroke);
-    }
+    // The fallbacks below are only ever taken without a crossing: a stroke that crosses an existing
+    // edge is never a legal move, and committing one leaves a broken drawing (and usually a wrong
+    // position) behind — far better to drop to manual drawing.
+    const legalFallback = (stroke: SpherePoint[]): boolean =>
+      !strokeCrossesEdges(state, stroke, undefined, parsed.lo, parsed.hi) && strokeReproduces(state, parsed, stroke, recreateUseLabels);
 
     // Final fallback for non-self-loop enclosures: try the full Voronoi path.
     if (parsed.brackets && parsed.brackets.length > 0 && parsed.lo !== parsed.hi) {
@@ -2102,8 +2179,8 @@ function promptCandidates(parsed: ResolvedMove, moveNum: number): Promise<Sphere
         const v1Pos = state.vertices.get(parsed.lo)?.pos;
         const v2Pos = state.vertices.get(parsed.hi)?.pos;
         const voronoiResult = computeJunctionVoronoiPath(vData, v1Pos, v2Pos);
-        const vReproduces = voronoiResult ? strokeReproduces(state, parsed, voronoiResult.pts, recreateUseLabels) : false;
-        if (DEBUG.recreate) console.log(`[Move ${moveNum}] voronoi fallback: path=${!!voronoiResult} reproduces=${vReproduces}`);
+        const vReproduces = voronoiResult ? legalFallback(voronoiResult.pts) : false;
+        if (DEBUG.recreate) console.log(`[Move ${moveNum}] voronoi fallback: path=${!!voronoiResult} legal=${vReproduces}`);
         if (vReproduces) return Promise.resolve(voronoiResult!.pts);
       } else if (DEBUG.recreate) {
         console.log(`[Move ${moveNum}] voronoi fallback: buildSubregionHighlight returned null`);
@@ -2119,14 +2196,14 @@ function promptCandidates(parsed: ResolvedMove, moveNum: number): Promise<Sphere
         const { extraSeeds } = vData;
         const vPos = state.vertices.get(parsed.lo)?.pos;
         const voronoiResult = computeJunctionVoronoiPath(vData, vPos, vPos);
-        const vReproduces = voronoiResult ? strokeReproduces(state, parsed, voronoiResult.pts, recreateUseLabels) : false;
-        if (DEBUG.recreate) console.log(`[Move ${moveNum}] self-loop voronoi path: path=${!!voronoiResult} extraSeeds=${extraSeeds.length} reproduces=${vReproduces}`);
+        const vReproduces = voronoiResult ? legalFallback(voronoiResult.pts) : false;
+        if (DEBUG.recreate) console.log(`[Move ${moveNum}] self-loop voronoi path: path=${!!voronoiResult} extraSeeds=${extraSeeds.length} legal=${vReproduces}`);
         if (vReproduces) return Promise.resolve(voronoiResult!.pts);
         // Also try with extra seeds in the voronoiSelfLoopArcs.
         if (extraSeeds.length > 0) {
           const newCandidates = candidateSelfLoopArcsWithSeeds(state, parsed, extraSeeds);
           for (const stroke of newCandidates) {
-            if (strokeReproduces(state, parsed, stroke, recreateUseLabels)) return Promise.resolve(stroke);
+            if (legalFallback(stroke)) return Promise.resolve(stroke);
           }
           if (DEBUG.recreate) console.log(`[Move ${moveNum}] self-loop voronoi fallback: none reproduced`);
         }
@@ -2138,6 +2215,16 @@ function promptCandidates(parsed: ResolvedMove, moveNum: number): Promise<Sphere
   }
 
   // Pause mode: show all candidates and wait for Enter.
+  const all = candidateStrokes(state, parsed);
+  if (all.length === 0) return Promise.resolve(null);
+  let firstLegal: SpherePoint[] | null = null;
+  let legalCount = 0;
+  const evaluated = all.map(stroke => {
+    const legal = isLegal(stroke);
+    if (legal && !firstLegal) firstLegal = stroke;
+    if (legal) legalCount++;
+    return { stroke, legal };
+  });
   candidatePreviewList = evaluated;
   wake();
   const total = all.length;
@@ -2576,6 +2663,7 @@ function frameBody(now: number): void {
     // Pass collapseSkip so smooth doesn't repel or redistribute the collapsing vertices.
     const collapseSkip = pendingCollapse ? collapseVertices(pendingCollapse) : undefined;
     if (smoothStep(state, shrinkCheckbox.checked, collapseSkip)) anyMoving = true;
+    maybeStartPrecompute(); // the Position Browser's children pass waits for the board to come to rest
 
     // Collapse dead-region scabs before eliminateIsolatedVertex so the scab vertex
     // is in livingVertexSet (protected) when the isolation check runs.
@@ -2612,7 +2700,7 @@ function frameBody(now: number): void {
       }
       // Splicing may have created new collapse opportunities (e.g. parallel edges).
       if (anyIsoElim) {
-        for (const e of state.edges.values()) resampleEdge(e);
+        resampleAllEdges(state);
         checkForCollapses();
       }
 
@@ -2622,7 +2710,7 @@ function frameBody(now: number): void {
       if (deadMoving) anyMoving = true;
       if (popped) {
         logCollapse('deadRegionStep (general)');
-        for (const e of state.edges.values()) resampleEdge(e);
+        resampleAllEdges(state);
         for (const c of popCentroids) popAnims.push({ pos: c, start: now });
         checkForCollapses();
       }
@@ -2637,7 +2725,7 @@ function frameBody(now: number): void {
         if (done) {
           logCollapse('louseCollapseStep');
           if (popAt) popAnims.push({ pos: popAt, start: now });
-          for (const e of state.edges.values()) resampleEdge(e);
+          resampleAllEdges(state);
           pendingCollapse = null;
           checkForCollapses();
         }
@@ -2646,7 +2734,7 @@ function frameBody(now: number): void {
         if (done) {
           logCollapse('parallelDeadStep');
           if (popAt) popAnims.push({ pos: popAt, start: now });
-          for (const e of state.edges.values()) resampleEdge(e);
+          resampleAllEdges(state);
           pendingCollapse = null;
           checkForCollapses();
         }
@@ -2655,7 +2743,7 @@ function frameBody(now: number): void {
         if (done) {
           logCollapse('tripleParallelDeadStep');
           if (popAt) popAnims.push({ pos: popAt, start: now });
-          for (const e of state.edges.values()) resampleEdge(e);
+          resampleAllEdges(state);
           pendingCollapse = null;
           checkForCollapses();
         }
@@ -2664,7 +2752,7 @@ function frameBody(now: number): void {
         if (done) {
           logCollapse('triangleDeadStep');
           if (popAt) popAnims.push({ pos: popAt, start: now });
-          for (const e of state.edges.values()) resampleEdge(e);
+          resampleAllEdges(state);
           pendingCollapse = null;
           checkForCollapses();
         }
@@ -2673,7 +2761,7 @@ function frameBody(now: number): void {
         if (done) {
           logCollapse('quadDeadStep');
           if (popAt) popAnims.push({ pos: popAt, start: now });
-          for (const e of state.edges.values()) resampleEdge(e);
+          resampleAllEdges(state);
           pendingCollapse = null;
           checkForCollapses();
         }
@@ -2682,7 +2770,7 @@ function frameBody(now: number): void {
         if (done) {
           logCollapse('enclosedTriangleStep');
           if (popAt) popAnims.push({ pos: popAt, start: now });
-          for (const e of state.edges.values()) resampleEdge(e);
+          resampleAllEdges(state);
           pendingCollapse = null;
           checkForCollapses();
         }
@@ -2691,7 +2779,7 @@ function frameBody(now: number): void {
         if (done) {
           logCollapse('bigonTipStep');
           if (popAt) popAnims.push({ pos: popAt, start: now });
-          for (const e of state.edges.values()) resampleEdge(e);
+          resampleAllEdges(state);
           pendingCollapse = null;
           checkForCollapses();
         }
@@ -2700,7 +2788,7 @@ function frameBody(now: number): void {
         if (done) {
           logCollapse(`selfConnectedDeadStep (${pc.symmetric ? 'case B symmetric' : 'case A'})`);
           if (popAt) popAnims.push({ pos: popAt, start: now });
-          for (const e of state.edges.values()) resampleEdge(e);
+          resampleAllEdges(state);
           pendingCollapse = null;
           checkForCollapses();
         }
@@ -2798,9 +2886,12 @@ function frameBody(now: number): void {
         });
         // Auto-follow the live game only in Sync mode; free-browse leaves the panel where the user
         // navigated. Only re-navigate when the live position actually changed (not every frame).
-        if (isSyncMode() && enc.text !== lastNotifiedLiveEnc) {
-          lastNotifiedLiveEnc = enc.text;
-          void notifyLivePosition(enc.text);
+        if (isSyncMode()) {
+          const analysisText = liveAnalysisText(state);
+          if (analysisText !== lastNotifiedLiveEnc) {
+            lastNotifiedLiveEnc = analysisText;
+            void notifyLivePosition(analysisText);
+          }
         }
         // Keep the back/forward arrows' enabled state in step with the game's undo/redo stacks.
         updateNavButtons();

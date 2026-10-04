@@ -46,25 +46,52 @@ instead of Claude re-deriving it from memory files or grep each time.
 ## Open TODOs
 - `eliminateIsolatedVertex` (`src/model/deadRegions.ts`) has a known self-crossing edge case still
   open. See `project_dead_region_elimination.md` for specifics.
-- 2D `pointInPolygon` containment call sites not yet migrated to the spherical winding-number
-  pattern: `src/model/moveCode.ts`'s `computeEnclosureCoverage` (~line 456, a debug helper) and
-  `src/model/moves.ts`'s `probeLeftInside` (~line 1001, decides a cycle's interior-left handedness
-  during `recomputeRegions` face classification — majority vote over projected per-dart probes).
-  `src/render/renderer.ts`'s three containment sites (`computeScabArc`, `renderRegionDiagnostic`,
-  `screenOuterRegion`) were the last ones there and got migrated 2026-09-27 — see
-  `feedback_sphere_native_containment.md`.
+- 2D `pointInPolygon` containment call site not yet migrated to the sphere-native pattern:
+  `src/model/moveCode.ts`'s `computeEnclosureCoverage` (~line 456, a debug helper).
+  `src/model/moves.ts`'s `probeLeftInside` was replaced 2026-10-03 by an exact pole test (see the
+  move router section). `src/render/renderer.ts`'s three containment sites were migrated
+  2026-09-27 — see `feedback_sphere_native_containment.md`.
+- `edgePtsForEntry` / `boundarySphereLoop` can't tell a raw self-loop edge's (v1 === v2, from
+  dead-region collapse) two darts apart — both come back in forward order, so containment for the
+  face on the reverse side reads the complement near that loop. `recomputeRegions` now builds its
+  own loops with `loopFromDarts`; other callers (renderer, `regionContainsPointNearest`) don't.
 - Quick-canon re-canonicalization efficiency: re-verify from scratch, focused on the move-menu-cache
   question. See `project_quickcanon_recanonicalization_perf.md`.
 - Optimal-play game trees: fetch unrestricted `maxMoves` for 12/16-spot starts. Not urgent. See
   `project_optimal_play_game_trees.md`.
 
-## Voronoi junction naming/pathfinding
+## Move router (stroke synthesis) — `src/model/moveRouter.ts`
 
-Full detail (current architecture, naming rules, live path algorithm) is in Claude auto-memory
-`reference_junction_naming.md` — this file no longer keeps its own copy since the details there
-move faster than this doc gets updated. `src/voronoiTest.ts` / `voronoiTest.html` is the standalone
-graph viewer for it (open via `npm run dev` → `http://localhost:5173/voronoiTest.html`, NOT by
-double-clicking the file — `file://` blocks ES modules).
+Since 2026-10-03 `candidateStrokes` puts the topological router first for anything that must
+enclose something: a side-aware Voronoi bisector over seeds offset into the face from every dart
+(see the FUNCTIONS.md entry). Test it headlessly with `scripts/route/routeHarness.ts` (coverage of
+engine children) and `scripts/route/routeDebug.ts` (PNG of one case). Measured on 25 random games
+up to 7 spots, exact oracle: per-child candidates reach 87.8–93.8% of engine children depending on
+the game set (79.2% before); the router can draw ~96% of distinct children when every reading is
+enumerated, which the Position Browser's background pass (`precomputeChildrenMoves` →
+`allRoutedMoves`) now does, so hover coverage is ~96–97%. Remaining misses: positions whose drawing
+has crossed edges (layout physics bug), and Recreate token issues (see auto-memory
+`project_move_router.md`).
+
+2026-10-04 follow-ups (all measured with `failureSaves.ts 25 7 4,5`, undrawable children 4.0% -> 0.9%):
+- `moveRouter.ts` `wallsAt`: corner-vs-own-wall match tolerance 1e-6 (joint endpoints differ in the last bit; acos made that 2e-8 and a joint's own edges looked foreign, leaving the corner with no seeds).
+- `smooth.ts`: interior edge-point moves and resampling are crossing-guarded (see FUNCTIONS.md `pointMoveCrosses`, `resampleAllEdges`) — the layout physics was the source of the "crossing edges" failure group.
+- `moveCode.ts`/`recreate.ts`: self-loop brackets. At a BARE SPOT (degree 0) the loop's two faces are interchangeable, so Recreate accepts either face's bracket (`selfLoopOtherSide`) and "everything enclosed" normalizes to `[]`. At an APPENDAGE TIP (degree 1) they are not — the tail lands in one face — so the bracket always lists the face bounded by the loop alone (`[W, v, W]` vs `[W, v, tail]`), with no other-side matching or `[]` normalization. Before 2026-10-04 appendage loops recorded whichever face came first, so old sequences with them can replay to a different (canon-unequal) position.
+- `main.ts` `promptCandidates`: Recreate's no-pause fallbacks never commit a crossing stroke (they used to retry "skipping the crossing check"); with no legal candidate the move goes to manual drawing.
+- `main.ts` `liveAnalysisText`: the Position Browser analyses the DECOMPRESSED live encoding, so a compressed DisaPoint can't expand to the wrong twin (the DisaPoint-twin failure group).
+
+Fixed alongside, because the router exposed them:
+- `main.ts` hover verification compared the lossy COMPRESSED encoding (DisaPoint `3` canonicalizes
+  back one way: `2,A|0,0,A` vs `2A|0,0,A`), and the encoder's `""` for a dead position vs the
+  engine's `N` — now `trialCanonOf` (decompressed, `""`→`N`).
+- `resolveMoveVertices` ordered components unlike the engine (wrong vertices in most multi-
+  subposition games) — now exact via provenance, with canon-matched components as fallback.
+- `recomputeRegions`: a self-loop's two new darts were ordered by raw bearing, which flips across
+  the ±π cut (loop faces inside out); and cycle handedness came from a 2D probe vote.
+
+The older vertex-seeded Voronoi system (`voronoiGraph.ts`, `voronoiJunctionPath.ts`, junction
+naming, `voronoiTest.html`, the paused-Recreate Voronoi overlay) is still in place as a fallback and
+debug view; history in auto-memory `reference_junction_naming.md`.
 
 ## Gotchas
 - The in-app preview (`requestAnimationFrame`) is throttled to ~0 in a backgrounded page.

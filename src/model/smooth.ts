@@ -86,8 +86,10 @@ export function smoothStep(state: GameState, shrinkDead = false, extraSkip?: Set
     ? new Set([...deadSkip, ...extraSkip])
     : deadSkip;
   const forceScale = getForceScale();
+  const allEdges = [...state.edges.values()];
+  const index = new SegmentIndex(allEdges);
 
-  for (const e of state.edges.values()) {
+  for (const e of allEdges) {
     if (e.points.length < 3) continue;
     if (skip.has(e.v1) && skip.has(e.v2)) continue; // fully-dead or collapsing edge
     if (edgeOvercrowded(e)) {
@@ -96,11 +98,13 @@ export function smoothStep(state: GameState, shrinkDead = false, extraSkip?: Set
       // arc length needs. Packed that tightly, redistributePoints/laplacianSmooth
       // can't converge the point count down — they just reshuffle existing points.
       // Recompute the point count the same way a move commit does.
-      resampleEdge(e);
+      resampleEdge(e, index);
       continue;
     }
-    redistributePoints(e.points);
-    laplacianSmooth(e.points, 1, tunables.laplacianStrength * forceScale);
+    const mayMove = (i: number, next: SpherePoint): boolean => !pointMoveCrosses(index, e, i, next);
+    redistributePoints(e.points, mayMove);
+    laplacianSmooth(e.points, 1, tunables.laplacianStrength * forceScale, mayMove);
+    index.refresh(e);
   }
   repulsionStep(state, undefined, skip, skip.size > 0, forceScale);
 
@@ -346,6 +350,139 @@ function wouldCrossAnyEdge(
   return false;
 }
 
+/** Chord distance (squared) between two points — cheap broad-phase for arc-vs-arc tests. */
+const chord2 = (a: SpherePoint, b: SpherePoint): number => (a.x-b.x)**2 + (a.y-b.y)**2 + (a.z-b.z)**2;
+const SAME_POINT2 = 1e-12; // two end points this close are the same shared vertex
+
+/** True if arc a0->a1 properly crosses arc b0->b1 (touching at a shared end point doesn't count). */
+function arcsProperlyCross(a0: SpherePoint, a1: SpherePoint, b0: SpherePoint, b1: SpherePoint): boolean {
+  // Cheap exact reject: a crossing point X has |a0-X| + |X-b0| <= arc(A) + arc(B) <= (π/2)(|A| + |B|)
+  // in chord length, and (|A| + |B|)² <= 2(|A|² + |B|²) — so beyond 2·(π/2)²·(|A|² + |B|²) they can't meet.
+  if (chord2(a0, b0) > 4.94 * (chord2(a0, a1) + chord2(b0, b1))) return false;
+  if (chord2(a0, b0) < SAME_POINT2 || chord2(a0, b1) < SAME_POINT2 || chord2(a1, b0) < SAME_POINT2 || chord2(a1, b1) < SAME_POINT2) return false;
+  if (!arcsCross(a0, a1, b0, b1)) return false;
+  // arcsCross also fires for the antipodal ghost; the real crossing has both midpoints on its side.
+  return (a0.x + a1.x)*(b0.x + b1.x) + (a0.y + a1.y)*(b0.y + b1.y) + (a0.z + a1.z)*(b0.z + b1.z) > 0;
+}
+
+/**
+ * Uniform 3D grid over edge segments, so a crossing query tests only the segments near it rather
+ * than every segment on the board (which made each smoothStep quadratic in the point count).
+ * A segment is filed under every cell its bounding box overlaps, padded by how far the great-circle
+ * arc bulges past its chord; a query arc looks in the cells of its own padded box, so two arcs that
+ * meet always share a cell. Segment end points are read live from edge.points, but which cells an
+ * edge is filed under is only as current as its last refresh() — callers refresh an edge after
+ * moving its points, and a query skips the edge being moved and scans that one directly.
+ */
+class SegmentIndex {
+  private static readonly H = 0.1;        // cell size; segments are ~1/pointsPerRadian long
+  private static readonly MAX_CELLS = 512; // a segment spanning more goes on the always-checked list
+  private cells = new Map<number, { e: Edge; k: number; mark: number }[]>();
+  private oversize: { e: Edge; k: number; mark: number }[] = [];
+  private keysOf = new Map<Edge, number[]>();
+  private stamp = 0;
+
+  constructor(edges: Edge[]) { for (const e of edges) this.add(e); }
+
+  /** Re-file `e` after its points moved or were replaced. */
+  refresh(e: Edge): void {
+    for (const key of this.keysOf.get(e) ?? []) {
+      const cell = this.cells.get(key);
+      if (cell) this.cells.set(key, cell.filter(r => r.e !== e));
+    }
+    this.oversize = this.oversize.filter(r => r.e !== e);
+    this.add(e);
+  }
+
+  /**
+   * True if arc a0->a1 properly crosses a segment of any edge other than `self`, or — when `ownSkip`
+   * is given — a segment k of `self` itself for which ownSkip(k) is false.
+   */
+  hits(a0: SpherePoint, a1: SpherePoint, self: Edge, ownSkip?: (k: number) => boolean): boolean {
+    const mark = ++this.stamp;
+    const test = (cell: { e: Edge; k: number; mark: number }[]): boolean => {
+      for (const r of cell) {
+        if (r.mark === mark || r.e === self) continue;
+        r.mark = mark;
+        const q = r.e.points;
+        if (r.k + 1 < q.length && arcsProperlyCross(a0, a1, q[r.k], q[r.k + 1])) return true;
+      }
+      return false;
+    };
+    if (test(this.oversize)) return true;
+    const [x0, x1, y0, y1, z0, z1] = SegmentIndex.box(a0, a1);
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > this.cells.size) {
+      for (const cell of this.cells.values()) if (test(cell)) return true;
+    } else {
+      for (let ix = x0; ix <= x1; ix++)
+        for (let iy = y0; iy <= y1; iy++)
+          for (let iz = z0; iz <= z1; iz++) {
+            const cell = this.cells.get(SegmentIndex.key(ix, iy, iz));
+            if (cell && test(cell)) return true;
+          }
+    }
+    if (ownSkip) {
+      const q = self.points;
+      for (let k = 0; k + 1 < q.length; k++) if (!ownSkip(k) && arcsProperlyCross(a0, a1, q[k], q[k + 1])) return true;
+    }
+    return false;
+  }
+
+  private add(e: Edge): void {
+    const keys: number[] = [];
+    for (let k = 0; k + 1 < e.points.length; k++) {
+      const rec = { e, k, mark: 0 };
+      const [x0, x1, y0, y1, z0, z1] = SegmentIndex.box(e.points[k], e.points[k + 1]);
+      if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > SegmentIndex.MAX_CELLS) { this.oversize.push(rec); continue; }
+      for (let ix = x0; ix <= x1; ix++)
+        for (let iy = y0; iy <= y1; iy++)
+          for (let iz = z0; iz <= z1; iz++) {
+            const key = SegmentIndex.key(ix, iy, iz);
+            let cell = this.cells.get(key);
+            if (!cell) { cell = []; this.cells.set(key, cell); }
+            cell.push(rec);
+            keys.push(key);
+          }
+    }
+    this.keysOf.set(e, keys);
+  }
+
+  private static key(ix: number, iy: number, iz: number): number { return (ix * 64 + iy) * 64 + iz; }
+
+  /** Cell-index box of the arc p->q: its chord's bounding box grown by the arc's sagitta. */
+  private static box(p: SpherePoint, q: SpherePoint): number[] {
+    const pad = 1 - Math.sqrt(Math.max(0, 1 - chord2(p, q) / 4)) + 1e-9;
+    const idx = (c: number): number => Math.floor((c + 1.5) / SegmentIndex.H);
+    return [
+      idx(Math.min(p.x, q.x) - pad), idx(Math.max(p.x, q.x) + pad),
+      idx(Math.min(p.y, q.y) - pad), idx(Math.max(p.y, q.y) + pad),
+      idx(Math.min(p.z, q.z) - pad), idx(Math.max(p.z, q.z) + pad),
+    ];
+  }
+}
+
+/**
+ * True if sliding interior point `i` of `e` to `next` would make either of its two segments cross
+ * another edge (or a non-adjacent segment of its own edge) that the segments at its CURRENT
+ * position don't already cross. Edge points move every frame (redistribution, Laplacian smoothing,
+ * repulsion, tightening) and without this check a smoothing pass can shorten a loop straight
+ * through an obstacle — vertex moves are guarded by wouldCrossAnyEdge, but interior points
+ * weren't. Segments that merely touch at a shared end point (edges meeting at a vertex) don't count.
+ */
+function pointMoveCrosses(index: SegmentIndex, e: Edge, i: number, next: SpherePoint): boolean {
+  const pts = e.points;
+  const crossesAny = (p: SpherePoint): boolean =>
+    index.hits(pts[i - 1], p, e, k => Math.abs(k - (i - 1)) <= 1) ||
+    index.hits(p, pts[i + 1], e, k => Math.abs(k - i) <= 1);
+  return crossesAny(next) && !crossesAny(pts[i]);
+}
+
+/** True if any segment of `pts` (a candidate polyline for edge `e`) crosses another edge. */
+function polylineCrossesOthers(index: SegmentIndex, e: Edge, pts: SpherePoint[]): boolean {
+  for (let k = 0; k + 1 < pts.length; k++) if (index.hits(pts[k], pts[k + 1], e)) return true;
+  return false;
+}
+
 /**
  * Per-frame repulsion step:
  *   1. Repel true vertices from all other vertices + parallel midpoints +
@@ -466,6 +603,7 @@ function repulsionStep(state: GameState, drag?: DragTarget, skip?: Set<VertexId>
 
   // 3. Repel interior sample points.
   //    Each edge's own midpoint is excluded — it must not repel itself.
+  const index = new SegmentIndex(allEdges); // after the re-anchoring above
   for (const e of state.edges.values()) {
     if (skip && skip.has(e.v1) && skip.has(e.v2)) continue; // fully-dead edge, collapsing
     const edgeMidpoints = midpoints
@@ -491,10 +629,11 @@ function repulsionStep(state: GameState, drag?: DragTarget, skip?: Set<VertexId>
       }
       // ---
 
-      if (p !== orig) {
+      if (p !== orig && !pointMoveCrosses(index, e, i, p)) {
         e.points[i] = p;
       }
     }
+    index.refresh(e);
   }
 
   // Sync pseudo-vertex positions to their edge's current arc midpoint so they
@@ -624,21 +763,41 @@ function edgeOvercrowded(e: Edge): boolean {
 }
 
 /**
+ * Resample every edge (see resampleEdge), each one checked against the others as it goes.
+ */
+export function resampleAllEdges(state: GameState): void {
+  const allEdges = [...state.edges.values()];
+  const index = new SegmentIndex(allEdges);
+  for (const e of allEdges) resampleEdge(e, index);
+}
+
+/**
  * Resample an edge to a point count proportional to its arc length.
  * Replaces e.points in-place; endpoints are preserved exactly.
+ *
+ * Resampling puts new points on the old polyline, so each new chord cuts the corner it spans — on
+ * a long segment hugging a tight bend (a loop wrapped round a lens tip) that chord can slice
+ * across a neighbouring edge. A result that newly crosses another edge is retried with twice, then
+ * four times, the points (chords hug the curve more closely), and the edge is left as it was if
+ * even that crosses. Re-files the edge in `index` when its points change.
  */
-export function resampleEdge(e: Edge): void {
-  const pts = e.points;
-  if (pts.length < 2) return;
-
-  // Compute total arc length
-  let arcLen = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const dot = Math.max(-1, Math.min(1, pts[i-1].x*pts[i].x + pts[i-1].y*pts[i].y + pts[i-1].z*pts[i].z));
-    arcLen += Math.acos(dot);
+function resampleEdge(e: Edge, index: SegmentIndex): void {
+  const old = e.points;
+  if (old.length < 2) return;
+  const ideal = Math.max(1, Math.round(polylineLength(old) * tunables.pointsPerRadian));
+  const crossedBefore = polylineCrossesOthers(index, e, old);
+  for (const factor of [1, 2, 4]) {
+    const next = resampledPoints(old, ideal * factor);
+    if (crossedBefore || !polylineCrossesOthers(index, e, next)) {
+      e.points = next;
+      index.refresh(e);
+      return;
+    }
   }
+}
 
-  const interiorCount = Math.max(1, Math.round(arcLen * tunables.pointsPerRadian));
+function resampledPoints(pts: SpherePoint[], interiorCount: number): SpherePoint[] {
+  const arcLen = polylineLength(pts);
   const totalCount = interiorCount + 2; // + 2 endpoints
 
   // Build cumulative arc lengths for interpolation
@@ -659,14 +818,14 @@ export function resampleEdge(e: Edge): void {
   }
   newPts.push({ ...pts[pts.length - 1] });
 
-  e.points = newPts;
+  return newPts;
 }
 
 // ---------------------------------------------------------------------------
 // Arc-length redistribution
 // ---------------------------------------------------------------------------
 
-function redistributePoints(pts: SpherePoint[]): boolean {
+function redistributePoints(pts: SpherePoint[], mayMove?: (i: number, next: SpherePoint) => boolean): boolean {
   const n = pts.length;
   const arcLen = [0];
   for (let i = 1; i < n; i++) {
@@ -690,6 +849,7 @@ function redistributePoints(pts: SpherePoint[]): boolean {
   let moved = false;
   for (let i = 1; i < n - 1; i++) {
     const dot = Math.max(-1, Math.min(1, pts[i].x*result[i].x + pts[i].y*result[i].y + pts[i].z*result[i].z));
+    if (mayMove && !mayMove(i, result[i])) continue;
     if (Math.acos(dot) > tunables.settleEpsilon) moved = true;
     pts[i] = result[i];
   }
@@ -700,13 +860,14 @@ function redistributePoints(pts: SpherePoint[]): boolean {
 // Geodesic Laplacian smoothing
 // ---------------------------------------------------------------------------
 
-function laplacianSmooth(pts: SpherePoint[], iterations: number, strength: number): boolean {
+function laplacianSmooth(pts: SpherePoint[], iterations: number, strength: number, mayMove?: (i: number, next: SpherePoint) => boolean): boolean {
   const n = pts.length;
   let moved = false;
   for (let iter = 0; iter < iterations; iter++) {
     for (let i = 1; i < n - 1; i++) {
       const mid = slerp(pts[i-1], pts[i+1], 0.5);
       const next = slerp(pts[i], mid, strength);
+      if (mayMove && !mayMove(i, next)) continue;
       const dot = Math.max(-1, Math.min(1, pts[i].x*next.x + pts[i].y*next.y + pts[i].z*next.z));
       if (Math.acos(dot) > tunables.settleEpsilon) moved = true;
       pts[i] = next;

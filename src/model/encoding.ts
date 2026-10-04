@@ -28,7 +28,7 @@
 
 import type { GameState, VertexId, RegionId, EdgeId } from './types';
 import { VertexType } from './types';
-import { MoveKind, type MoveInfo } from '../engine/stalks';
+import { MoveKind, canonSync, canonicalizeTrackedProvenanceSync, type MoveInfo } from '../engine/stalks';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -1015,7 +1015,9 @@ function resolveDecompressedRegion(
 
   const subposCount = state.subpositions.length;
   const orderedSubpos = orderedActiveRegions(reprsCompressed, subposCount);
-  const regions = orderedSubpos[component];
+  const tsComponent = liveComponentIndex(orderedSubpos, component);
+  if (tsComponent === null) return null;
+  const regions = orderedSubpos[tsComponent];
   if (!regions) return null;
   const target = regions[regionFinalIdx];
   if (!target) return null;
@@ -1049,6 +1051,104 @@ function resolveDecompressedRegion(
 }
 
 /**
+ * Exact resolution through the engine's own canonicalization: canonicalize our DECOMPRESSED
+ * encoding with provenance (each canonical token traced back to the live vertex — and outgoing
+ * edge, i.e. corner — it came from), and read the move's indices straight off that structure.
+ * Valid for a component exactly when the engine's canon of the position spells that component
+ * the same way decompressed — canon applies some pseudo-point compressions (e.g. AB|AB -> 4) but
+ * not others (DisaPoint 3, which our compressed encoding does apply, collapsing regions the
+ * engine keeps apart), and a move's indices live in canon's spelling. Returns undefined (caller
+ * falls back) when that doesn't hold or the WASM engine isn't loaded; null for bad indices.
+ */
+function resolveViaProvenance(state: GameState, move: MoveInfo): ResolvedMoveVertices | null | undefined {
+  const dec = encodePositionDecompressed(state);
+  const tracked = canonicalizeTrackedProvenanceSync(dec.text);
+  const whole = canonSync(dec.text);
+  if (!tracked || whole === null) return undefined;
+  // tracked.src indexes the input's tokens in parse order, which skips punctuation.
+  const tokens = dec.text.split('')
+    .map((ch, i) => ({ ch, info: dec.charInfo[i] }))
+    .filter(({ ch }) => !'[]|, ⊕'.includes(ch))
+    .map(({ info }) => info);
+  let si = 0;
+  const comps = tracked.enc.split('+').map(text => ({
+    text,
+    regions: text === 'N' ? [] : text.split('|').map(rt => rt.split(',').map(bt => [...bt].map(() => tokens[tracked.src[si++]]))),
+  }));
+  const target = whole.split('+')[move.component];
+  if (target === undefined) return null;
+  // Pair canon's component with the same-spelled decompressed one (the k-th of equal twins).
+  const rank = whole.split('+').slice(0, move.component).filter(c => c === target).length;
+  const matches = comps.filter(c => c.text === target);
+  const comp = matches[rank];
+  if (!comp) return undefined;
+  const region = comp.regions[move.region];
+  if (!region) return null;
+  const vid = (t: { vertexIds: VertexId[] } | undefined): VertexId | undefined => t?.vertexIds[0];
+  if (move.kind === MoveKind.Enclosure) {
+    const boundary = region[move.boundary];
+    const t1 = boundary?.[move.i], t2 = boundary?.[move.j];
+    const v1 = vid(t1), v2 = vid(t2);
+    if (v1 === undefined || v2 === undefined) return null;
+    // Same mask convention as below: bit k (k-th other boundary, skipping move.boundary)
+    // clear = that boundary stays on the L (lo->hi arc) side.
+    const brackets: VertexId[] = [];
+    let bit = 0;
+    for (let bi = 0; bi < region.length; bi++) {
+      if (bi === move.boundary) continue;
+      if (!((move.mask >> bit) & 1)) {
+        const min = Math.min(...region[bi].flatMap(t => t.vertexIds));
+        if (Number.isFinite(min)) brackets.push(min);
+      }
+      bit++;
+    }
+    return { v1, v2, edgeId1: t1!.edgeId, edgeId2: t2!.edgeId, brackets };
+  }
+  const t1 = region[move.b1]?.[move.i], t2 = region[move.b2]?.[move.j];
+  const v1 = vid(t1), v2 = vid(t2);
+  if (v1 === undefined || v2 === undefined) return null;
+  return { v1, v2, edgeId1: t1!.edgeId, edgeId2: t2!.edgeId };
+}
+
+/**
+ * Which of our subpositions (orderedActiveRegions order) is the engine's canonical component
+ * `component`. The two orders differ — the engine sorts components its own way, and even our
+ * serializer breaks ties by content where orderedActiveRegions doesn't — so match by identity
+ * instead: canonicalize each subposition on its own (components are independent, so this is
+ * exactly its slice of the whole position's canon) and pair equal strings, in order, so
+ * interchangeable twin subpositions still map one-to-one. Null if the WASM engine isn't
+ * loaded yet or nothing matches.
+ */
+function liveComponentIndex(
+  orderedSubpos: Array<Array<{ origIdx: number; repr: RegionRepr }>>,
+  component: number,
+): number | null {
+  const ownCanon = orderedSubpos.map(regions => {
+    const text = regions.map(({ repr }) =>
+      repr.boundaries
+        .map(tokens => canonicalizeWithOffset(tokens).tokens)
+        .sort((a, b) => boundaryKey(a).localeCompare(boundaryKey(b)))
+        .map(tokens => tokens.map(t => t.symbol).join(''))
+        .join(','),
+    ).join('|');
+    return canonSync(`[${text}]`);
+  });
+  if (ownCanon.some(c => c === null)) return null;
+  const whole = canonSync(ownCanon.map(c => `[${c}]`).join(' ⊕ '));
+  const engineComponents = whole ? whole.split('+') : [];
+  const target = engineComponents[component];
+  if (target === undefined) return null;
+  // The k-th engine component with this string pairs with the k-th of ours.
+  const rank = engineComponents.slice(0, component).filter(c => c === target).length;
+  let seen = 0;
+  for (let k = 0; k < ownCanon.length; k++) {
+    if (ownCanon[k] !== target) continue;
+    if (seen++ === rank) return k;
+  }
+  return null;
+}
+
+/**
  * Translate an engine MoveInfo (component/region/boundary/i/j indices, on the
  * decompressed canonical position derived from `state`'s current encoding)
  * into the live VertexIds it refers to, so the caller can synthesize/play the
@@ -1058,6 +1158,8 @@ function resolveDecompressedRegion(
  */
 export function resolveMoveVertices(state: GameState, move: MoveInfo): ResolvedMoveVertices | null {
   if (move.kind === MoveKind.InteriorPseudo) return null; // no drawable endpoint pair
+  const exact = resolveViaProvenance(state, move);
+  if (exact !== undefined) return exact;
 
   if (move.kind === MoveKind.Enclosure) {
     const region = resolveDecompressedRegion(state, move.component, move.region);
