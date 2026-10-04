@@ -14,7 +14,9 @@
 // already lettered from C) and toLatexSymbols (alpha/oplus/brace escaping) -- nothing is
 // re-implemented here. The TS is bundled on the fly with esbuild, so no build step is needed first.
 //
-// Usage: node scripts/exportCollectionsLatex.cjs [--from 2] [--to 10] [--out notes/collections_S2-S10.tex] [--pdf]
+// Usage: node scripts/exportCollectionsLatex.cjs [--from 2] [--to 10] [--out notes/collections_S2-S10.tex] [--pdf] [--tiny 8]
+//   --tiny COLS: instead of the two-column layout, set each base collection (no +1 offset) in tiny
+//   type flowed through COLS newspaper columns -- for seeing a huge collection (S_1) on a few pages.
 //   --pdf: also compile the result with pdflatex (cleans up its aux/log files).
 const fs = require('fs');
 const os = require('os');
@@ -27,7 +29,8 @@ const args = process.argv.slice(2);
 const opt = (name, dflt) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : dflt; };
 const from = Number(opt('from', 2));
 const to = Number(opt('to', 10));
-const outPath = path.resolve(ROOT, opt('out', `notes/collections_S${from}-S${to}.tex`));
+const tinyCols = Number(opt('tiny', 0));
+const outPath =path.resolve(ROOT, opt('out', `notes/collections_S${from}-S${to}.tex`));
 const BS = String.fromCharCode(92); // LaTeX backslash
 
 // Bundle the real app modules (no DOM is touched at import time) into a throwaway CJS file.
@@ -66,16 +69,22 @@ function column(name) {
 const colSpec = `>{${BS}raggedright${BS}arraybackslash}p{.47${BS}textwidth}`;
 const lines = [
   String.raw`\documentclass{article}
-\usepackage[margin=1in]{geometry}
-\usepackage{amsmath,amssymb,array,longtable}
+\usepackage[margin=${tinyCols ? '0.4in' : '1in'}]{geometry}
+\usepackage{amsmath,amssymb,array,longtable,multicol}
 \setlength{\parindent}{0pt}
 \begin{document}`,
-  `${BS}section*{Collections ${math(`S_${from}`)} through ${math(`S_${to}`)}}`,
+  ...(tinyCols ? [] : [`${BS}section*{Collections ${math(`S_${from}`)} through ${math(`S_${to}`)}}`,
   String.raw`Each collection's name is followed by its genome $(R,D,\{L\},\{Z\},[T])$; its elements are listed below, with the shared rep (bold) first. The left column is the collection itself; the right column is its $\oplus 1$ offset (superscript $1$) when that has elements, started level with the left. A superscript on a T-gene name is likewise its $\oplus$ offset. Membrane letters begin at C.
-`,
+`]),
 ];
 
 for (let n = from; n <= to; n++) {
+  if (tinyCols) {
+    lines.push(`${BS}begin{multicols}{${tinyCols}}${BS}tiny${BS}raggedright`, `${header(`S_${n}`)}${BS}${BS}`);
+    for (const c of column(`S_${n}`)) lines.push(`${c}${BS}${BS}`);
+    lines.push(`${BS}end{multicols}`, '');
+    continue;
+  }
   const base = `S_${n}`;
   const offset = `${base}⊕1`;
   const left = column(base);
