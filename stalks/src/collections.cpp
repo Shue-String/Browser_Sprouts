@@ -9,8 +9,10 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <map>
 #include <optional>
+#include <sstream>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -785,7 +787,7 @@ MultiRepTemplate parseRepTemplate(const std::string& enc) {
     return {std::move(regions), std::move(internalPairings)};
 }
 
-MultiRepTemplate repTemplate(const char* repEncoding) { return parseRepTemplate(repEncoding); }
+MultiRepTemplate repTemplate(const std::string& repEncoding) { return parseRepTemplate(repEncoding); }
 // ---------------------------------------------------------------------------
 
 // Apply a matched multi-region swap: replace EVERY region in `sideRegions` with the rep's OWN
@@ -936,6 +938,24 @@ std::vector<std::string> detachableMultiCritLeftSideKeys(const Position& p) {
     return out;
 }
 
+#ifdef STALKS_COLLECTION_ELEMENTS_JSON
+const json::Value& collectionElementsJson() {
+    static const json::Value kDoc = [] {
+        const std::string path = STALKS_COLLECTION_ELEMENTS_JSON;
+        std::ifstream in(path, std::ios::binary);
+        if (!in) throw std::runtime_error("collectionElementsJson: cannot open " + path);
+        std::ostringstream buf;
+        buf << in.rdbuf();
+        try {
+            return json::parse(buf.str());
+        } catch (const std::runtime_error& e) {
+            throw std::runtime_error("collectionElementsJson: " + path + ": " + e.what());
+        }
+    }();
+    return kDoc;
+}
+#endif
+
 bool collectionsEnabled() {
     const char* v = std::getenv("STALKS_COLLECTIONS");
     return v && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
@@ -950,20 +970,12 @@ namespace {
 // One authored roster group: a collection's name, its Pairing-Theorem offset, and its member
 // left-side encodings exactly as written (pre-canonicalization). Single source of truth for BOTH
 // the internal matching maps below (registry()/doubleCritRegistry()) AND the public
-// allCollectionRosters() introspection API (see collections.hpp) -- so a roster edited here can
-// never drift from what the Collect pane's Collections panel displays (regenerated via
-// tools/dump_collections_roster.cpp).
+// allCollectionRosters() introspection API (see collections.hpp). Both this and the Collect pane's
+// Collections panel read src/data/collectionElements.json, so they can never drift apart.
 struct RosterGroup {
-    const char* name;
+    std::string name;
     int offset;
-    // A std::initializer_list's OWN backing array is a temporary whose lifetime is NOT extended
-    // when it's nested inside another object stored long-term (a static const std::vector<
-    // RosterGroup>, here) -- only binding it directly to a variable/reference does that. A
-    // std::vector, unlike initializer_list, copies its elements into owned storage, so it's safe
-    // to keep around. (The const char* pointees themselves are fine either way -- string literals
-    // have static storage duration; it was only the initializer_list's pointer+size VIEW that
-    // would have gone dangling.)
-    std::vector<const char*> elements;
+    std::vector<std::string> elements;
 };
 
 // A family of collections sharing one swap target ("rep"): a boundary template (e.g. a single
@@ -975,7 +987,7 @@ struct RosterGroup {
 // from what applyCritSwap actually produces, and it's also what allCollectionRosters() reports
 // for the Collect pane's Collections panel.
 struct CritFamily {
-    const char* repEncoding;
+    std::string repEncoding;
     std::vector<RosterGroup> groups;
 };
 
@@ -1030,13 +1042,55 @@ struct CritFamily {
 // rep is genuinely multi-region and has no single-region sibling to borrow from -- see
 // collectionElements.json's "multi" section notes for each family's specific history.
 //
-// Every registered element's provenance (date added, verification method, why a candidate was
-// rejected/removed, cross-references) for all three functions below lives in
-// src/data/collectionElements.json's per-family/per-group "notes" fields, not here -- see that
-// file, and scripts/genCollectionElementsHeader.cjs which reshapes it into the #include below
-// (same role genGenomeDefsHeader.cjs plays for collectionElements.json's genomes). Edit the JSON, re-run
-// the script, rebuild.
+// Every registered element (and its provenance: date added, verification method, why a candidate
+// was rejected/removed, cross-references) lives in src/data/collectionElements.json, not here.
+// Native builds read that file at runtime (collectionElementsJson), so an edit takes effect on the
+// next run with no rebuild. The WASM build has no filesystem path, so it compiles the same data
+// in from collection_elements.generated.hpp (scripts/genCollectionElementsHeader.cjs -- re-run it
+// and rebuild WASM after editing the JSON).
+#ifdef STALKS_COLLECTION_ELEMENTS_JSON
+// The collections having a `section` ("single"/"double"/"multi") list, one family each, in JSON
+// order: rep = the collection's rep, groups = the offsets that have that section (named "S_n" at
+// offset 0, "S_n⊕k" otherwise) -- the same flattening scripts/collectionsJson.cjs's flatFamilies
+// does for the generated header.
+std::vector<CritFamily> loadFamilies(const std::string& section) {
+    std::vector<CritFamily> out;
+    for (const auto& c : json::asArray(json::member(collectionElementsJson(), "collections", "root"), "collections")) {
+        const std::string& name = json::asString(json::member(c, "name", "collection"), "collection.name");
+        CritFamily fam{json::asString(json::member(c, "rep", name), name + ".rep"), {}};
+        for (const auto& o : json::asArray(json::member(c, "offsets", name), name + ".offsets")) {
+            const json::Value* sec = o.find(section);
+            if (!sec) continue;
+            const int offset = json::asInt(json::member(o, "offset", name), name + ".offset");
+            const std::string groupName = offset == 0 ? name : name + "\xE2\x8A\x95" + std::to_string(offset);
+            const std::string where = groupName + "." + section;
+            RosterGroup g{groupName, offset, {}};
+            for (const auto& e : json::asArray(json::member(*sec, "elements", where), where + ".elements"))
+                g.elements.push_back(json::asString(json::member(e, "encoding", where), where + ".encoding"));
+            fam.groups.push_back(std::move(g));
+        }
+        if (!fam.groups.empty()) out.push_back(std::move(fam));
+    }
+    return out;
+}
+
+const std::vector<CritFamily>& singleCritFamilies() {
+    static const std::vector<CritFamily> families = loadFamilies("single");
+    return families;
+}
+
+const std::vector<CritFamily>& doubleCritFamilies() {
+    static const std::vector<CritFamily> families = loadFamilies("double");
+    return families;
+}
+
+const std::vector<CritFamily>& multiCritFamilies() {
+    static const std::vector<CritFamily> families = loadFamilies("multi");
+    return families;
+}
+#else
 #include "collection_elements.generated.hpp"
+#endif
 
 // leftSideKey -> {offset, head}, built from singleCritFamilies() (canonicalized through the same
 // leftSideKey path as extraction, so the keys line up by construction). Fails loudly (rather than
@@ -1063,7 +1117,7 @@ const std::map<std::string, CritMatch>& registry() {
                 throw std::logic_error("collections registry: family rep must be single-region: '" +
                                         std::string(fam.repEncoding) + "'");
             for (const auto& g : fam.groups)
-                for (const char* e : g.elements) {
+                for (const std::string& e : g.elements) {
                     const std::string key = leftSideKey(e);
                     if (!m.emplace(key, CritMatch{g.offset, head, e}).second)
                         throw std::logic_error("collections registry: duplicate left-side key '" +
@@ -1086,7 +1140,7 @@ const std::map<std::string, CritMatch>& multiRegistry() {
         for (const auto& fam : multiCritFamilies()) {
             const MultiRepTemplate head = repTemplate(fam.repEncoding);
             for (const auto& g : fam.groups)
-                for (const char* e : g.elements) {
+                for (const std::string& e : g.elements) {
                     const std::string key = multiLeftSideKey(e);
                     if (!m.emplace(key, CritMatch{g.offset, head, e}).second)
                         throw std::logic_error(
@@ -1111,7 +1165,7 @@ const std::map<std::string, CritMatch>& doubleCritRegistry() {
                     "collections doubleCritRegistry: family rep must be single-region: '" +
                     std::string(fam.repEncoding) + "'");
             for (const auto& g : fam.groups)
-                for (const char* e : g.elements) {
+                for (const std::string& e : g.elements) {
                     const std::string key = leftSideKey(e);
                     if (!m.emplace(key, CritMatch{g.offset, head, e}).second)
                         throw std::logic_error("collections doubleCritRegistry: duplicate left-side key '" +
@@ -1557,8 +1611,14 @@ std::map<std::string, long long>& quickReductionCountsMutable() {
     return counts;
 }
 
+std::vector<std::string>& quickReductionSequenceMutable() {
+    static std::vector<std::string> sequence;
+    return sequence;
+}
+
 void recordQuickReduction(const std::string& key) {
     ++quickReductionCountsMutable()[key];
+    quickReductionSequenceMutable().push_back(key);
 }
 
 // Testing-only leave-one-out hook -- see collections.hpp's setExcludedRegistryKey doc comment.
@@ -1751,6 +1811,8 @@ bool stepMultiRegion(Position& cur, int& offset) {
         std::string bestSer, bestKey;
         Position bestPos;
         int bestOff = 0;
+        const std::string curSer = serialize(cur);
+        const std::string curDisaSer = serialize(applyDisaPoints(cur));
         for (std::size_t ci = 0; ci < cur.components.size(); ++ci) {
             const Component& comp = cur.components[ci];
             for (const auto& cand : enumerateMultiCrits(comp)) {
@@ -1764,6 +1826,17 @@ bool stepMultiRegion(Position& cur, int& offset) {
                     applyMultiCritSwap(comp, cand.regions, cand.slot, it->second.head);
                 Position canon = normalizeQuick(np);
                 std::string s = serialize(canon);
+                // A swap whose result is the position we already have is a no-op, not progress:
+                // accepting it re-matches the same element forever (observed 2026-10-07 on
+                // "2A|2B|2CDE|A,EDBC", where S_159's "2ABC|3BAaC" kept rewriting to an identical
+                // string and hung the n=7 quick-graph build). A genuine no-op has offset 0, so
+                // skipping loses no reduction. Compared modulo DisaPoint compression: `cur` may be
+                // compressed (after step 6) while the swap result is always decompressed, so a rep
+                // that lands on an equal position (S_80's "3A|37a8A" vs element "3A|37A8a" in a
+                // symmetric host: "3A|3B|37A8B" <-> "2A|2B|2C|AD|BE|7D8CE") only matches textually
+                // after compressing both.
+                if (s == curSer || serialize(applyDisaPoints(canon)) == curDisaSer)
+                    continue;
                 if (!found || s < bestSer) {
                     found = true;
                     bestSer = std::move(s);
@@ -1796,6 +1869,11 @@ std::set<std::string> registeredDoubleCritKeys() {
 
 void resetQuickReductionCounts() {
     quickReductionCountsMutable().clear();
+    quickReductionSequenceMutable().clear();
+}
+
+const std::vector<std::string>& quickReductionSequence() {
+    return quickReductionSequenceMutable();
 }
 
 const std::map<std::string, long long>& quickReductionCounts() {
@@ -1810,8 +1888,41 @@ QuickCanonResult quickCanon(const Position& p) {
     Position cur = normalizeQuick(p);
     int offset = 0;
 
+    // Cycle guard. The steps below are each value-preserving, but they are not jointly monotone:
+    // a multi-region element can swap to a rep that step 6 (DisaPoint compression) turns straight
+    // back into the element's own left side (observed 2026-10-07: "3A|3B|37A8B" <-> "2A|2B|2C|AD|
+    // BE|7D8CE" via the multi-region element "3A|37A8a", offset 0, hanging the n=7 quick-graph build). Real
+    // reduction chains are short, so only start remembering outer-pass states after
+    // kCycleWatchAfter passes (keeps the common path free of extra serialization). Once a state
+    // repeats, every state on the cycle is equivalent, so return the smallest serialization on it
+    // -- deterministic regardless of which cycle state the input entered at. Offsets must cancel
+    // around the cycle; if they don't the registry is inconsistent, so fail loudly.
+    constexpr int kCycleWatchAfter = 16;
+    struct Visited {
+        std::string ser;
+        Position pos;
+        int offset;
+    };
+    std::vector<Visited> history;
+    int pass = 0;
+
     while (true) {
         bool changed = false;
+
+        if (++pass > kCycleWatchAfter) {
+            std::string ser = serialize(cur);
+            const auto hit = std::find_if(history.begin(), history.end(),
+                                          [&](const Visited& v) { return v.ser == ser; });
+            if (hit != history.end()) {
+                if (hit->offset != offset)
+                    throw std::logic_error("quickCanon: reduction cycle with non-cancelling offset at " + ser);
+                const auto best = std::min_element(hit, history.end(), [](const Visited& a, const Visited& b) {
+                    return a.ser < b.ser;
+                });
+                return {applyDisaPoints(best->pos), best->offset};  // end in step 6's compressed form, like a normal exit
+            }
+            history.push_back({std::move(ser), cur, offset});
+        }
 
         // Steps 1-4 are region-local (see the section doc comment above): none of their
         // enumerate*/apply* functions require `cur` to already be in canonical form to find or

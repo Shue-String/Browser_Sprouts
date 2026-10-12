@@ -378,8 +378,8 @@ void testGraphMovetypeEdges() {
     // (not just all-zero -- genuinely empty, so the common case pays nothing extra).
     {
         GameGraph g(3);
-        for (const auto& node : g.nodes())
-            CHECK(node.childMoveTypes.empty());
+        CHECK(std::all_of(g.nodes().begin(), g.nodes().end(),
+                          [](const Node& node) { return node.childMoveTypes.empty(); }));
     }
 }
 
@@ -1411,6 +1411,17 @@ void testCanon() {
     }
 }
 
+// Hand-checked single-crit left sides from the original S_1 (offset 0) and S_1⊕1 (offset 1)
+// rosters, used by testCollections' disjointness check (testRegistry checks every element). Kept as
+// authored rather than re-synced with the registry: as of 2026-10-07, "22,2a", "1,3a", "22,3a",
+// "2,3a", "2,3,a", "37a8", "3,2a" and "0,3a" are no longer registered, and "12,a" is now S_12's rep.
+const std::vector<std::string> KNOWN_GOOD_S1 = {
+    "2a", "2,a", "0,a", "2,2,2,a", "12,a", "5,2a", "23,2a", "2,2,3,a",
+    "13a", "23,3a", "22,2a", "2,3,3,a", "1,3a", "3,23,a", "22,3a", "17a8"};
+const std::vector<std::string> KNOWN_GOOD_S1_PLUS_1 = {
+    "1a", "1,a", "5a", "5,a", "2,2a", "22a", "2,2,a", "27a8",
+    "2,3a", "23a", "2,3,a", "37a8", "3,2a", "0,2a", "0,3a"};
+
 // Collections / quick-canon, step 1: the left-side authoring parser and the
 // marked-graph canonicalizer (leftSideKey). Exercised standalone -- no crit-finder yet.
 void testCollections() {
@@ -1441,28 +1452,23 @@ void testCollections() {
     checkThrows([] { leftSideKey("29"); }, "agnostic membrane rejected");
     checkThrows([] { leftSideKey("2|a"); }, "region separator rejected");
 
-    // --- S1 / S2 rosters: the two collections must have DISJOINT key sets. A shared key would
-    // map to conflicting offsets (0 vs 1) -- an unsound registry. Within a collection, universal
-    // congruity may legitimately merge boundary-partition variants, so intra-collection
-    // collisions are expected and fine; only a cross-collection clash is a bug. --------------
-    const std::vector<std::string> s1 = {
-        "2a", "2,a", "0,a", "2,2,2,a", "12,a", "5,2a", "23,2a", "2,2,3,a",
-        "13a", "23,3a", "22,2a", "2,3,3,a", "1,3a", "3,23,a", "22,3a", "17a8"};
-    const std::vector<std::string> s2 = {
-        "1a", "1,a", "5a", "5,a", "2,2a", "22a", "2,2,a", "27a8",
-        "2,3a", "23a", "2,3,a", "37a8", "3,2a", "0,2a", "0,3a"};
-    std::set<std::string> s1keys, s2keys;
-    for (const auto& e : s1)
+    // --- known-good S_1 / S_1⊕1 shapes: the two lists must have DISJOINT key sets. A shared key
+    // would map to conflicting offsets (0 vs 1) -- an unsound registry. Within a collection,
+    // universal congruity may legitimately merge boundary-partition variants, so intra-collection
+    // collisions are expected and fine; only a cross-collection clash is a bug. The registry as a
+    // whole is checked end to end by testRegistry. ---------------------------------------------
+    std::set<std::string> s1keys, s1plus1keys;
+    for (const auto& e : KNOWN_GOOD_S1)
         s1keys.insert(leftSideKey(e));
-    for (const auto& e : s2)
-        s2keys.insert(leftSideKey(e));
+    for (const auto& e : KNOWN_GOOD_S1_PLUS_1)
+        s1plus1keys.insert(leftSideKey(e));
     bool disjoint = true;
     for (const auto& k : s1keys)
-        if (s2keys.count(k)) {
+        if (s1plus1keys.count(k)) {
             disjoint = false;
-            std::cout << "  S1/S2 key clash on '" << k << "'\n";
+            std::cout << "  S_1/S_1⊕1 key clash on '" << k << "'\n";
         }
-    report(disjoint, "S1 and S2 collection key sets are disjoint");
+    report(disjoint, "known-good S_1 and S_1⊕1 key sets are disjoint");
 
     // --- step 2: crit-finder + left-side extraction (leaf regions) --------------------------
     auto keySet = [](const std::string& enc) {
@@ -1571,10 +1577,10 @@ void testCollections() {
     // A single-region 2-crit chunk is found and, for an S3 element, reduced to the shared rep
     // [2βα/. [2,βα/ (two boundaries) and [2βα/ (one boundary) are both S3, so both collapse to one
     // rep with equal offset. The lone hosts [12α/ are each individually NOT in any single-region
-    // collection, but as of the 2026-08-21 S_2 multi-region element "12C|2Ca" (CSV-sourced,
+    // collection, but as of the 2026-08-21 multi-region element "12C|2Ca" (S_1⊕1; CSV-sourced,
     // user-confirmed), the bridge chunk {host, this region's OTHER host} now ALSO matches
     // "12C|2Ca" (offset 1) -- e.g. cutting membrane A here leaves {region0's "2,B" part, region2
-    // "12B"} as a 2-region chunk matching that shape. So the total offset is S3's 0 XOR S_2
+    // "12B"} as a 2-region chunk matching that shape. So the total offset is S3's 0 XOR S_1⊕1
     // multi's 1 = 1, not S3's bare 0 as before this element existed. Verified sound: zero
     // quick-nimber mismatches through the n=5 sweep (17,252 minimal positions) with this element
     // active, so this is a genuine additional reduction, not a regression -- see
@@ -1584,8 +1590,101 @@ void testCollections() {
         const auto b = quickCanon(parsePosition("[2AB|12A|12B]"));
         checkEq(ser(a.rep), ser(b.rep), "S3 double-crit: [2,βα/ and [2βα/ share one rep");
         checkEqInt(a.offset, b.offset, "S3 double-crit: partitions share one offset");
-        checkEqInt(a.offset, 1, "S3 double-crit + S_2 multi (12C|2Ca) combine to offset 1");
+        checkEqInt(a.offset, 1, "S3 double-crit + S_1⊕1 multi (12C|2Ca) combine to offset 1");
     }
+}
+
+// The whole live registry (allCollectionRosters -- every single-crit, double-crit and multi-region
+// element), each element quick-canonicalized as a standalone position with its crit(s) as special
+// points:
+//   (a) Membership: it lands on its OWN collection's rep with its registered offset. Checked through
+//       the real matcher rather than by comparing keys, so an element filed under the wrong
+//       collection or offset fails here even when no two keys collide.
+//   (b) No nested left side: with the element's own entry excluded (setExcludedRegistryKey), NO
+//       reduction fires on it -- every element, S_1/S_1⊕1 included. If one does, the element holds a
+//       nested chunk some other rule reduces -- either it is redundant (the other rule reaches the
+//       same rep anyway) or it competes with that rule, and the fixpoint depends on which fires first.
+//       Only that FIRST reduction (quickReductionSequence().front()) is about the element itself;
+//       whatever fires after it is the already-reduced result continuing on toward the rep.
+void testRegistry() {
+    using namespace stalks;
+
+    // An offset-1 sibling ("S_1⊕1") has no rep of its own; it shares its base collection's.
+    auto baseName = [](const std::string& name) { return name.substr(0, name.find("\xE2\x8A\x95")); };
+    const auto rosters = allCollectionRosters();
+    std::map<std::string, std::string> repOf;
+    bool repsAgree = true;
+    for (const auto& r : rosters) {
+        if (r.rep.empty())
+            continue;
+        const auto [it, fresh] = repOf.emplace(baseName(r.name), r.rep);
+        if (!fresh && it->second != r.rep) {
+            repsAgree = false;
+            std::cout << "  " << r.name << " rep '" << r.rep << "' != '" << it->second << "'\n";
+        }
+    }
+    report(repsAgree, "every collection's rosters agree on one rep");
+
+    // Only these collections may be rep-only (no elements at either offset) -- the set as it stood
+    // before 5db4d1d's unjustified-element cleanup emptied 80 more.
+    const std::set<std::string> repOnlyAllowed = {"S_2",  "S_16", "S_29", "S_33",
+                                                  "S_34", "S_39", "S_69", "S_70"};
+    std::map<std::string, std::size_t> elementCount;
+    for (const auto& r : rosters)
+        elementCount[baseName(r.name)] += r.elements.size();
+    std::vector<std::string> repOnly;
+    for (const auto& [name, n] : elementCount)
+        if (n == 0 && !repOnlyAllowed.count(name))
+            repOnly.push_back(name);
+    if (!repOnly.empty()) {
+        std::cout << "  rep-only collections not on the allowed list (" << repOnly.size() << "):";
+        for (const auto& name : repOnly)
+            std::cout << " " << name;
+        std::cout << "\n";
+    }
+    report(repOnly.empty(), "only the allowed collections are rep-only");
+
+    std::map<std::string, QuickCanonResult> repMemo;
+    int elements = 0, misfiled = 0, nested = 0, nestedChecked = 0;
+    for (const auto& r : rosters) {
+        const auto rep = repOf.find(baseName(r.name));
+        for (const auto& e : r.elements) {
+            ++elements;
+            const Position p = parsePosition("[" + e + "]");
+            if (rep == repOf.end()) {
+                ++misfiled;
+                std::cout << "  " << r.name << " has no rep (element " << e << ")\n";
+                continue;
+            }
+            auto memo = repMemo.find(rep->second);
+            if (memo == repMemo.end())
+                memo = repMemo.emplace(rep->second, quickCanon(parsePosition("[" + rep->second + "]"))).first;
+            const QuickCanonResult& want = memo->second;
+            const QuickCanonResult got = quickCanon(p);
+            if (ser(got.rep) != ser(want.rep) || (got.offset ^ want.offset) != r.offset) {
+                ++misfiled;
+                std::cout << "  " << r.name << " element " << e << " -> " << ser(got.rep) << " offset "
+                          << got.offset << ", but its rep " << rep->second << " -> " << ser(want.rep)
+                          << " offset " << want.offset << " (registered offset " << r.offset << ")\n";
+            }
+
+            ++nestedChecked;
+            setExcludedRegistryKey("[" + e + "/");
+            resetQuickReductionCounts();
+            (void)quickCanon(p);
+            setExcludedRegistryKey("");
+            if (!quickReductionSequence().empty()) {
+                ++nested;
+                std::cout << "  " << r.name << " element " << e << " has a nested left side reduced by "
+                          << quickReductionSequence().front() << "\n";
+            }
+        }
+    }
+    resetQuickReductionCounts();
+    report(misfiled == 0, "every registered element (" + std::to_string(elements) +
+                              ") reduces to its own collection's rep and offset");
+    report(nested == 0, "no registered element has a nested reducible left side (" +
+                            std::to_string(nestedChecked) + " checked)");
 }
 
 // The core soundness check for the whole collections layer: quick-canon must preserve the Grundy
@@ -1648,10 +1747,10 @@ void testSpecialPointCollections() {
 }
 
 // The multi-region-TARGET swap machinery (2026-08-27): unlike every earlier multiCritFamilies()
-// entry, S_11/S_11⊕1 (rep "4A|Aa") and S_16 (rep "3CD|CDa") have a rep that is ITSELF multi-region,
+// entry, S_6/S_6⊕1 (rep "4C|Ca") and S_10 (rep "3CD|CDa") have a rep that is ITSELF multi-region,
 // so applyMultiCritSwap must emit N new regions (matching the rep's own region count) instead of
-// always collapsing a match down to one -- and wire the rep's own internal membrane (S_11/S_11⊕1's
-// A, S_16's C/D) fresh across those new regions. Exercises both crit kinds: a real membrane host
+// always collapsing a match down to one -- and wire the rep's own internal membrane (S_6/S_6⊕1's
+// C, S_10's C/D) fresh across those new regions. Exercises both crit kinds: a real membrane host
 // pairing (queried against GameGraph::Exact by hand -- see query_position --graph-ensure-only
 // for the ad-hoc method) and a special point (ALPHA, checked directly here the
 // same way testSpecialPointCollections does). Nimbers below were cross-checked against
@@ -1661,65 +1760,65 @@ void testMultiRegionRepTarget() {
 
     auto qc = [](const std::string& enc) { return quickCanon(parsePosition(enc)); };
 
-    // S_11's rep "4A|Aa" and its second element "2AB|ABa", crit as a real special point (alpha):
+    // S_6's rep "4C|Ca" and its second element "2CD|CDa", crit as a real special point (alpha):
     // both exact nimber 3 (query_position --graph-ensure-only), offset 0.
     {
-        const auto rep = qc("4A|Aa");
-        const auto elem = qc("2AB|ABa");
-        checkEqInt(rep.offset, 0, "S_11 rep alpha-crit: offset 0");
-        checkEq(ser(elem.rep), ser(rep.rep), "S_11 2nd element (alpha crit) reduces to the rep");
-        checkEqInt(elem.offset, 0, "S_11 2nd element (alpha crit): offset 0");
+        const auto rep = qc("4C|Ca");
+        const auto elem = qc("2CD|CDa");
+        checkEqInt(rep.offset, 0, "S_6 rep alpha-crit: offset 0");
+        checkEq(ser(elem.rep), ser(rep.rep), "S_6 2nd element (alpha crit) reduces to the rep");
+        checkEqInt(elem.offset, 0, "S_6 2nd element (alpha crit): offset 0");
     }
-    // S_11⊕1 (Pairing-Theorem sibling of S_11, offset 1 -- named plain "S_11⊕1", not a standalone
+    // S_6⊕1 (Pairing-Theorem sibling of S_6, offset 1 -- named plain "S_6⊕1", not a standalone
     // collection, per user confirmation 2026-08-27): both known elements, alpha crit, exact
-    // nimber 2 = 3^1 (query_position --graph-ensure-only), and neither reduces to S_11's own rep
+    // nimber 2 = 3^1 (query_position --graph-ensure-only), and neither reduces to S_6's own rep
     // (each is its own stable quick-canon fixpoint).
     {
-        const auto rep = qc("4A|Aa");
-        const auto e1 = qc("5AB|ABa");
-        const auto e2 = qc("ABa|37AB8");
-        checkEq(ser(e1.rep), ser(rep.rep), "S_11⊕1 element 1 (alpha crit) reduces to S_11's rep shape");
-        checkEqInt(e1.offset, 1, "S_11⊕1 element 1 (alpha crit): offset 1");
-        checkEq(ser(e2.rep), ser(rep.rep), "S_11⊕1 element 2 (alpha crit) reduces to S_11's rep shape");
-        checkEqInt(e2.offset, 1, "S_11⊕1 element 2 (alpha crit): offset 1");
+        const auto rep = qc("4C|Ca");
+        const auto e1 = qc("5CD|CDa");
+        const auto e2 = qc("CDa|37CD8");
+        checkEq(ser(e1.rep), ser(rep.rep), "S_6⊕1 element 1 (alpha crit) reduces to S_6's rep shape");
+        checkEqInt(e1.offset, 1, "S_6⊕1 element 1 (alpha crit): offset 1");
+        checkEq(ser(e2.rep), ser(rep.rep), "S_6⊕1 element 2 (alpha crit) reduces to S_6's rep shape");
+        checkEqInt(e2.offset, 1, "S_6⊕1 element 2 (alpha crit): offset 1");
     }
-    // S_16's rep "3CD|CDa" (3 regions collapsing to the rep's 2) and its two elements, alpha crit:
+    // S_10's rep "3CD|CDa" (3 regions collapsing to the rep's 2) and its two elements, alpha crit:
     // all exact nimber 4 (query_position --graph-ensure-only), offset 0.
     {
         const auto rep = qc("3CD|CDa");
         const auto e1 = qc("4C|CD|Da");
         const auto e2 = qc("2CD|CDE|Ea");
-        checkEqInt(rep.offset, 0, "S_16 rep alpha-crit: offset 0");
-        checkEq(ser(e1.rep), ser(rep.rep), "S_16 element 1 (alpha crit) reduces to the rep");
-        checkEqInt(e1.offset, 0, "S_16 element 1 (alpha crit): offset 0");
-        checkEq(ser(e2.rep), ser(rep.rep), "S_16 element 2 (alpha crit) reduces to the rep");
-        checkEqInt(e2.offset, 0, "S_16 element 2 (alpha crit): offset 0");
+        checkEqInt(rep.offset, 0, "S_10 rep alpha-crit: offset 0");
+        checkEq(ser(e1.rep), ser(rep.rep), "S_10 element 1 (alpha crit) reduces to the rep");
+        checkEqInt(e1.offset, 0, "S_10 element 1 (alpha crit): offset 0");
+        checkEq(ser(e2.rep), ser(rep.rep), "S_10 element 2 (alpha crit) reduces to the rep");
+        checkEqInt(e2.offset, 0, "S_10 element 2 (alpha crit): offset 0");
     }
     // Real-membrane crit variant: same elements, port paired to an external host membrane Z
     // instead of alpha, with the matched chunk sandwiched between unrelated regions (region index
     // 0 is NOT part of the chunk) -- exercises the oldToNew/templateToNew reindexing, not just the
     // slot.special branch. Nimbers cross-checked via query_position --graph-ensure-only on
-    // "22|<elem>|0,Z" / "22|<rep>|0,Z": S_11 rep/element both 2, S_16 rep/elements both 0.
+    // "22|<elem>|0,Z" / "22|<rep>|0,Z": S_6 rep/element both 2, S_10 rep/elements both 0.
     {
-        const auto rep = qc("22|4A|AZ|0,Z");
-        const auto elem = qc("22|2AB|ABZ|0,Z");
+        const auto rep = qc("22|4C|CZ|0,Z");
+        const auto elem = qc("22|2CD|CDZ|0,Z");
         checkEq(ser(elem.rep), ser(rep.rep),
-                "S_11 2nd element (real-membrane crit, mid-position) reduces to the rep");
+                "S_6 2nd element (real-membrane crit, mid-position) reduces to the rep");
         checkEqInt(elem.offset, rep.offset,
-                    "S_11 2nd element (real-membrane crit, mid-position): offset matches rep");
+                    "S_6 2nd element (real-membrane crit, mid-position): offset matches rep");
     }
     {
         const auto rep = qc("22|3CD|CDZ|0,Z");
         const auto e1 = qc("22|4C|CD|DZ|0,Z");
         const auto e2 = qc("22|2CD|CDE|EZ|0,Z");
         checkEq(ser(e1.rep), ser(rep.rep),
-                "S_16 element 1 (real-membrane crit, mid-position) reduces to the rep");
+                "S_10 element 1 (real-membrane crit, mid-position) reduces to the rep");
         checkEqInt(e1.offset, rep.offset,
-                    "S_16 element 1 (real-membrane crit, mid-position): offset matches rep");
+                    "S_10 element 1 (real-membrane crit, mid-position): offset matches rep");
         checkEq(ser(e2.rep), ser(rep.rep),
-                "S_16 element 2 (real-membrane crit, mid-position) reduces to the rep");
+                "S_10 element 2 (real-membrane crit, mid-position) reduces to the rep");
         checkEqInt(e2.offset, rep.offset,
-                    "S_16 element 2 (real-membrane crit, mid-position): offset matches rep");
+                    "S_10 element 2 (real-membrane crit, mid-position): offset matches rep");
     }
 }
 
@@ -2184,6 +2283,7 @@ int main() {
         testRecompress();
         testCanon();
         testCollections();
+        testRegistry();
         testSpecialPointCollections();
         testMultiRegionRepTarget();
         testQuickNimber();

@@ -751,17 +751,25 @@ function resample(path: V3[], count: number): V3[] {
  * the endpoint and the first point out of each endpoint's wedge) is resampled coarsely, so
  * relaxation acts at the scale of the wiggles rather than of the sample spacing; a point may only
  * move if neither new segment crosses a wall, the triangles it sweeps hold no wall point, and it
- * doesn't end up closer to a wall than it was (or than KEEP_CLEAR, whichever is smaller).
+ * doesn't end up closer to a wall than it was (or than half its raw clearance capped at
+ * KEEP_CLEAR_MAX, whichever is smaller).
  */
+const KEEP_CLEAR_RANGE = 0.3; // walls farther than this don't constrain smoothPath
+const KEEP_CLEAR_SHARE = 0.5; // fraction of its raw clearance a smoothed point must keep
+const KEEP_CLEAR_MAX = 0.1;   // ...capped, so open space doesn't hold the route off its walls
+
 function smoothPath(walls: WallIndex, raw: V3[]): V3[] {
   if (raw.length < 5) return raw;
-  const KEEP_CLEAR = 0.02;
   const inner = raw.slice(1, raw.length - 1);
   let L = 0;
   for (let i = 1; i < inner.length; i++) L += ang(inner[i - 1], inner[i]);
   const count = Math.max(3, Math.min(80, Math.ceil(L / 0.03) + 1));
   const p = [raw[0], ...resample(inner, count), raw[raw.length - 1]];
-  const clr = p.map(q => walls.clearance(q, KEEP_CLEAR));
+  // Taut-string relaxation hugs any obstacle it wraps (a lone spot ended up half a pixel off the
+  // stroke), so each point keeps a share of the room the route had there: the old fixed few-pixel
+  // floor let a route running 0.2 rad clear of a spot be pulled to 0.01.
+  const clr = p.map(q => walls.clearance(q, KEEP_CLEAR_RANGE));
+  const floor = clr.map(c => Math.min(KEEP_CLEAR_SHARE * c, KEEP_CLEAR_MAX));
   for (let it = 0; it < 40; it++) {
     for (let i = 2; i < p.length - 2; i++) {
       const cand = normalize({
@@ -769,8 +777,8 @@ function smoothPath(walls: WallIndex, raw: V3[]): V3[] {
         y: p[i - 1].y + p[i + 1].y + 2 * p[i].y,
         z: p[i - 1].z + p[i + 1].z + 2 * p[i].z,
       });
-      const cc = walls.clearance(cand, KEEP_CLEAR);
-      if (cc < Math.min(clr[i], KEEP_CLEAR)) continue;
+      const cc = walls.clearance(cand, KEEP_CLEAR_RANGE);
+      if (cc < Math.min(clr[i], floor[i])) continue;
       if (walls.crosses(p[i - 1], cand) || walls.crosses(cand, p[i + 1])) continue;
       if (sweptHasPoint(walls, p[i - 1], p[i], cand) || sweptHasPoint(walls, p[i], p[i + 1], cand)) continue;
       p[i] = cand;
@@ -787,6 +795,14 @@ function sweptHasPoint(walls: WallIndex, a: V3, b: V3, c: V3): boolean {
   return walls.triangleHasPoint(a, b, c, cen, r) || walls.triangleHasPoint(a, c, b, cen, r);
 }
 
+/** The unsmoothed route behind each stroke routeOnMesh returned (debug overlay: see rawRouteOf). */
+const rawRoutes = new WeakMap<SpherePoint[], SpherePoint[]>();
+
+/** The route a stroke came from before smoothPath, or undefined if the stroke wasn't routed. */
+export function rawRouteOf(stroke: SpherePoint[]): SpherePoint[] | undefined {
+  return rawRoutes.get(stroke);
+}
+
 /** Route one fully-specified move on a prebuilt face mesh. */
 export function routeOnMesh(mesh: FaceMesh, spec: RouteSpec, diag?: RouteDiag): SpherePoint[] | null {
   if (!mesh.ok) return null;
@@ -799,8 +815,11 @@ export function routeOnMesh(mesh: FaceMesh, spec: RouteSpec, diag?: RouteDiag): 
     raw = rev ? [...rev].reverse() : null;
   }
   if (!raw) return null;
+  const rawDense = densify(raw);
   const smooth = densify(smoothPath(mesh.walls, raw));
-  return selfCrosses(smooth) ? densify(raw) : smooth;
+  const stroke = selfCrosses(smooth) ? rawDense : smooth;
+  rawRoutes.set(stroke, rawDense);
+  return stroke;
 }
 
 function selfCrosses(p: V3[]): boolean {

@@ -27,12 +27,18 @@ instead of Claude re-deriving it from memory files or grep each time.
 - Canonical position encoding: `src/model/encoding.ts`. All dead-region surgery is gated
   by a before/after encoding check.
 - Advanced Collections / genome registry: hand-authored data lives in ONE file, `src/data/collectionElements.json` (one object per
-  collection: name, rep, genome, and per-offset `single`/`double`/`multi` element lists; S_33+ genomes are engine-derived snapshots flagged `derived`,
-  regenerate via `stalks/tools/genome_for_reps`); everything else (both `.generated.hpp` native headers, `collectionGenomes.generated.json`,
-  `collectionsRoster.json`, `collectAlpha.ts`'s in-memory registry) is a mechanical derivation —
+  collection: name, rep, genome, and per-offset `single`/`double`/`multi` element lists; every genome is the engine's answer for the rep,
+  refreshed via `scripts/refreshGenomes.cjs`, and those with all-named T-genes feed the fold/collision registry); everything else (`collection_elements.generated.hpp` — WASM only, native reads the JSON at runtime — `collectionGenomes.generated.json`,
+  `collectAlpha.ts`'s in-memory registry) is a mechanical derivation —
   see `FUNCTIONS.md`'s "Build scripts" section and `reference_encoding_system.md`. The native
   registry (`stalks/collections.cpp`) and its ~20 audit/discovery tools under `stalks/tools/` are
   the ground truth for family membership; the TS side never re-derives that logic independently.
+  As of 2026-10-09: S_33+ were renumbered (old→new table in `notes/rename_2026-10-09.md`;
+  collections whose genome still has an unnamed T-gene are the tail S_199–S_231). Nested T genomes
+  equal to a collection's own genome are stored by name (`scripts/collectionsJson.cjs`
+  `nameKnownGenomes`). Membership discovery: `unregistered_left_sides` → `classify_candidates`
+  (genome match is the trusted test; Yellow-only hits are not registered). The `derived` genome flag
+  was dropped 2026-10-10. Open: rebuild WASM.
 - Collect (`src/ui/collect.ts`) and T-Tree (`src/model/ttree.ts` / `src/ui/ttree.ts`) both classify
   genomes through the shared `src/model/collectAlpha.ts` pipeline (engine movetype tags, not the
   old retired DisaPoint-provenance approach). See `FUNCTIONS.md` for the current export list.

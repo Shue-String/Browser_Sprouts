@@ -54,7 +54,7 @@
         z-index: 10;
       }
 
-      #new-game-btn, #recreate-btn, #guide-btn, #collect-btn, #ttree-btn, #save-game-btn, #load-game-btn, #browser-btn {
+      #new-game-btn, #recreate-btn, #guide-btn, #collect-btn, #ttree-btn, #genomes-btn, #save-game-btn, #load-game-btn, #browser-btn {
         padding: 4px 10px;
         font: 12px/1 system-ui, sans-serif;
         color: #666;
@@ -65,7 +65,7 @@
         white-space: nowrap;
         user-select: none;
       }
-      #new-game-btn:hover, #recreate-btn:hover, #guide-btn:hover, #collect-btn:hover, #ttree-btn:hover,
+      #new-game-btn:hover, #recreate-btn:hover, #guide-btn:hover, #collect-btn:hover, #ttree-btn:hover, #genomes-btn:hover,
       #save-game-btn:hover:not(:disabled), #load-game-btn:hover, #browser-btn:hover { color: #333; border-color: #aaa; }
       #save-game-btn:disabled { opacity: 0.4; cursor: default; }
 
@@ -392,7 +392,7 @@
         font: 13px/1.4 system-ui, sans-serif;
         color: #333;
         box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-        width: 420px;
+        width: 860px;
         max-width: 92vw;
       }
       #tuning-header {
@@ -419,6 +419,10 @@
         max-height: 70vh;
         overflow-y: auto;
         padding-right: 4px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+        column-gap: 24px;
+        align-items: start;
       }
       #tuning-body h4 {
         margin: 14px 0 6px;
@@ -428,6 +432,8 @@
         color: #888;
       }
       #tuning-body h4:first-child { margin-top: 0; }
+      .tuning-col { min-width: 0; }
+      .tuning-col > h4:first-child { margin-top: 0; }
       .tuning-row {
         display: grid;
         grid-template-columns: 1fr 90px 64px;
@@ -482,8 +488,8 @@
       }
       #play-gate-btn:hover { background: #333; }
 
-      /* ── Position Browser / Guide / Collect / T-Tree overlays ─ */
-      #position-browser-overlay, #guide-overlay, #collect-overlay, #ttree-overlay {
+      /* ── Position Browser / Guide / Collect / T-Tree / Genomes overlays ─ */
+      #position-browser-overlay, #guide-overlay, #collect-overlay, #ttree-overlay, #genomes-overlay {
         display: none;
         position: fixed;
         inset: 0;
@@ -492,9 +498,9 @@
         justify-content: center;
         z-index: 100;
       }
-      #position-browser-overlay.visible, #guide-overlay.visible, #collect-overlay.visible, #ttree-overlay.visible { display: flex; }
+      #position-browser-overlay.visible, #guide-overlay.visible, #collect-overlay.visible, #ttree-overlay.visible, #genomes-overlay.visible { display: flex; }
 
-      #position-browser-dialog, #guide-dialog, #collect-dialog, #ttree-dialog {
+      #position-browser-dialog, #guide-dialog, #collect-dialog, #ttree-dialog, #genomes-dialog {
         background: #f9f9f6;
         border: 1px solid #ccc;
         border-radius: 8px;
@@ -543,6 +549,45 @@
         background: #fff;
       }
       #ttree-graph-container svg { display: block; font-family: system-ui, sans-serif; }
+
+      /* Genomes dialog: a filter bar above one sortable table that scrolls inside the dialog. */
+      #genomes-dialog {
+        width: 1200px;
+        max-width: 96vw;
+        height: 84vh;
+        display: flex;
+        flex-direction: column;
+      }
+      .genomes-bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 6px; }
+      #genomes-filter {
+        width: 320px;
+        max-width: 100%;
+        padding: 6px 9px;
+        font: 12px/1.3 monospace;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      .genomes-bar label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #555; cursor: pointer; }
+      #genomes-status { flex: none; font: 11px/1.4 system-ui, sans-serif; color: #888; margin-bottom: 8px; }
+      .genomes-scroll { flex: 1; min-height: 0; overflow: auto; border: 1px solid #ddd; border-radius: 4px; background: #fff; }
+      .genomes-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+      .genomes-table th, .genomes-table td { padding: 4px 8px; text-align: left; border-bottom: 1px solid #eee; vertical-align: top; }
+      .genomes-table thead th { position: sticky; top: 0; z-index: 1; background: #f3f3ef; border-bottom: 1px solid #ddd; }
+      .genomes-table thead tr.genomes-groups th { position: static; background: #fff; border-bottom: 2px solid #e3efe8; text-align: center; color: #2f6b4f; font-weight: 600; }
+      .genomes-table th button {
+        all: unset; cursor: pointer; font-size: 11px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.04em; color: #666;
+      }
+      .genomes-table th button:hover { color: #222; }
+      .genomes-table th button:focus-visible { outline: 2px solid #4a90d9; outline-offset: 2px; }
+      .genomes-table .num { text-align: right; font-family: monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .genomes-name { font-family: monospace; font-weight: 600; white-space: nowrap; }
+      .genomes-off { color: #8a5a1f; }
+      .genomes-genome { font-family: monospace; overflow-wrap: anywhere; min-width: 22ch; }
+      .genomes-mono { font-family: monospace; white-space: nowrap; }
+      .genomes-zero { color: #aaa; }
+      .genomes-offset-row td { background: #fcf8f1; }
+      .genomes-table tbody tr:hover td { background: #eef5f0; }
 
       /* Guide dialog: wider than the plain modals above (needs room for the topic list) and a
          fixed height so the two-pane layout doesn't jump around as content changes. */
@@ -1309,6 +1354,15 @@
             </span>
           </label>
 
+          <label class="toggle-row" title="Position Browser: when hovering/locking a child, also draw the router's raw route (before smoothing) as a dashed orange line under the purple preview">
+            <span>Raw Move Plan</span>
+            <span class="switch">
+              <input type="checkbox" id="raw-move-plan-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
           <label class="toggle-row" title="Show a list of which dead-region collapse function fired, upper-left of the play field. Cleared on each new move.">
             <span>Collapse List</span>
             <span class="switch">
@@ -1334,6 +1388,7 @@
 
       <button id="collect-btn" title="Browse genetic codes of single-crit left sides">Collect</button>
       <button id="ttree-btn" title="Render the T-move-only game tree below a known left side">T-Tree</button>
+      <button id="genomes-btn" title="Table of every collection's genome, rep, element count, lives range and T-gene usage">Genomes</button>
       <button id="guide-btn" title="Open the guide">Guide</button>
     </div>
 
@@ -1418,6 +1473,30 @@
           <div class="collect-list" id="collect-list"></div>
           <div class="collect-detail" id="collect-detail"></div>
           <div class="collect-collections-panel" id="collect-collections-panel"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="genomes-overlay">
+      <div id="genomes-dialog">
+        <div class="pb-header">
+          <span>Genomes</span>
+          <button id="genomes-close">Close</button>
+        </div>
+        <div class="genomes-bar">
+          <input id="genomes-filter" type="search" spellcheck="false" autocomplete="off" placeholder="Filter by name, genome or rep" />
+          <label><input type="checkbox" id="genomes-show-offsets" checked /> Show offsets</label>
+          <label><input type="checkbox" id="genomes-only-t" /> Only genomes used as a T-gene</label>
+        </div>
+        <div id="genomes-status"></div>
+        <div class="genomes-scroll">
+          <table class="genomes-table">
+            <thead>
+              <tr class="genomes-groups"><th colspan="4"></th><th colspan="3">Elements</th><th colspan="2">In others' T-genes</th></tr>
+              <tr id="genomes-head"></tr>
+            </thead>
+            <tbody id="genomes-body"></tbody>
+          </table>
         </div>
       </div>
     </div>

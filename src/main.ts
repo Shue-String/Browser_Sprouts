@@ -10,6 +10,7 @@ import type { ResolvedMove } from './model/moveCodeParse';
 import { synthesizeMove, appliedMoveMatches, computeRecreateHints, strokeReproduces } from './model/recreate';
 import type { RecreateHints } from './model/recreate';
 import { resolveBracketEntry, resolveMoveEndpoints, resolveParensEntry } from './model/vertexLabels';
+import { rawRouteOf } from './model/moveRouter';
 import { strokeCrossesEdges, candidateStrokes, candidateStrokeStream, candidateSelfLoopArcsWithSeeds } from './model/strokeSynthesis';
 import { allRoutedMoves } from './model/moveRouter';
 import { moveLog } from './debug/moveLog';
@@ -37,6 +38,7 @@ import type { MovePreviewTarget } from './ui/positionBrowser';
 import { openGuide, closeGuide, isGuideOpen } from './ui/guide';
 import { initCollect } from './ui/collect';
 import { initTTree } from './ui/ttree';
+import { initGenomes } from './ui/genomes';
 import { canon as canonEncoding, preloadModule, canonicalizeTrackedProvenanceSync, canonSync } from './engine/stalks';
 import { recordEdge, loadMasterSeed, loadQuickMasterSeed } from './model/positionCache';
 
@@ -177,7 +179,7 @@ let pendingChildTargets: MovePreviewTarget[] | null = null;
  *  vertex drag (smoothStepDrag doesn't report movement), and the last physics step moved less than
  *  the settle threshold. */
 function layoutQuiet(): boolean {
-  return !recreateActive && !pendingCollapse && !input.isDragging() && lastMaxMovement <= tunables.settleEpsilon;
+  return !recreateActive && !collapseActive() && !input.isDragging() && lastMaxMovement <= tunables.settleEpsilon;
 }
 
 /** Start (or resume) the parked children pass if the board is at rest. Called every frame. */
@@ -400,6 +402,10 @@ let   camera: RotationMatrix = identityRotation();
   showTrackedPanel: (o: { mismatch: boolean; engineKey?: string; geometryKey?: string } | null) =>
     updateTrackedPanel(o),
   get camera() { return camera; },
+  /** The collapse animating right now (at most one; see collapseActive). */
+  get collapse() {
+    return { special: pendingCollapse?.kind ?? null, general: generalCollapseFocus ? [...generalCollapseFocus] : null, detail: pendingCollapse };
+  },
   /** The canonical position string — the invariant dead-region surgery must preserve. */
   encode() { return canonicalEncoding(state); },
   applyMove: (v1: number, v2: number, stroke: unknown[]) => applyMove(state, { v1, v2, stroke: stroke as SpherePoint[] }),
@@ -605,6 +611,7 @@ let pauseRecreations = false;
 // hidden from normal play by default — a known stroke-synthesis coverage gap, not a player-facing
 // signal. Off unless a developer flips it on.
 let showBroken = false;
+let showRawMovePlan = false;
 
 // Arc-preview state: set while the user inspects candidate arcs before committing.
 let candidatePreviewList: { stroke: SpherePoint[]; legal: boolean }[] | null = null;
@@ -722,6 +729,7 @@ function undoLast(recordRedo = false): void {
   // an entry that actually completed (see HistoryEntry's own doc comment for the bug this avoids).
   if (top.committed) moveSeqLog.pop();
   pendingCollapse = null;
+  generalCollapseFocus = null;
   // The forward-only tracked map can't rewind in place, but it CAN be rebuilt from scratch
   // by replaying every still-committed move (Catch D, project_encoding_canon_rework M6):
   // mark desynced immediately (safe default while the replay is in flight), then let
@@ -748,6 +756,7 @@ function redoLast(): void {
   moveSeqLog.push(entry.moveLogEntry);
   Object.assign(state, entry.postState);
   pendingCollapse = null;
+  generalCollapseFocus = null;
   // Same forward-only-tracked-map rebuild as undo: mark desynced, then replay from scratch.
   pendingTrackedCheck = null;
   tracked.markDesynced();
@@ -800,13 +809,27 @@ bottomBarCopy.addEventListener('click', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Special-collapse queue (one at a time)
+// Collapse queue (one at a time)
 // ---------------------------------------------------------------------------
+//
+// Only one collapse animates at once — a special collapse (pendingCollapse) or one
+// fully-dead component shrinking under deadRegionStep (generalCollapseFocus) — and
+// it runs to its pop before the next is picked up. The instant surgeries
+// (scabAloneCollapse, eliminateIsolatedVertex) have no animation and still run as
+// soon as they apply.
 
 let pendingCollapse: SpecialCollapse | null = null;
+/** Vertex ids of the fully-dead component deadRegionStep is shrinking, null when none. */
+let generalCollapseFocus: Set<VertexId> | null = null;
 
+function collapseActive(): boolean {
+  return pendingCollapse !== null || generalCollapseFocus !== null;
+}
+
+/** Pick up the next special collapse, if none is running. Called again when the
+ * current general shrink finishes, so a check suppressed during it isn't lost. */
 function checkForCollapses(): void {
-  if (pendingCollapse) return;
+  if (collapseActive()) return;
   if (collapseCountThisMove >= MAX_COLLAPSES_PER_MOVE) return;
   pendingCollapse = detectLouse(state) ?? detectParallelDead(state) ?? detectTripleParallelDead(state) ?? detectTriangleDead(state) ?? detectEnclosedTriangle(state) ?? detectQuadDead(state) ?? detectBigonTip(state) ?? detectSelfConnectedDead(state);
 }
@@ -933,11 +956,11 @@ let trackedPollLast: { nV: number; nE: number } | null = null;
 let trackedPollDeadline = 0;
 function scheduleTrackedCheck(): void {
   trackedPollLast = null;
-  trackedPollDeadline = performance.now() + 4000; // hard cap so a stuck collapse can't wedge it
+  trackedPollDeadline = performance.now() + 12000; // hard cap so a stuck collapse can't wedge it (collapses run one at a time, so a chain can take a while)
   const poll = (): void => {
     if (pendingTrackedCheck === null) return; // consumed/cancelled (undo, reset, newer move)
     const nV = state.vertices.size, nE = state.edges.size;
-    const quiescent = pendingCollapse === null && trackedPollLast !== null &&
+    const quiescent = !collapseActive() && trackedPollLast !== null &&
       trackedPollLast.nV === nV && trackedPollLast.nE === nE;
     if (quiescent || performance.now() > trackedPollDeadline) { runPendingTrackedCheck(); return; }
     trackedPollLast = { nV, nE };
@@ -1184,6 +1207,21 @@ ttreeOverlay.addEventListener('click', e => {
   if (e.target === ttreeOverlay) ttreeOverlay.classList.remove('visible');
 });
 
+// Genomes (top bar).
+const genomesBtn     = document.getElementById('genomes-btn')     as HTMLButtonElement;
+const genomesOverlay = document.getElementById('genomes-overlay') as HTMLDivElement;
+const genomesClose   = document.getElementById('genomes-close')   as HTMLButtonElement;
+
+genomesBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  initGenomes();
+  genomesOverlay.classList.add('visible');
+});
+genomesClose.addEventListener('click', () => genomesOverlay.classList.remove('visible'));
+genomesOverlay.addEventListener('click', e => {
+  if (e.target === genomesOverlay) genomesOverlay.classList.remove('visible');
+});
+
 // Only shown (below the wide-panel breakpoint) as a way to open the same Position Browser
 // the wide layout would otherwise show as a persistent side panel.
 browserBtn.addEventListener('click', e => {
@@ -1293,6 +1331,7 @@ function loadGameState(save: SaveFileV2): void {
   currentSpotCount = deserialized.currentSpotCount;
   camera = deserialized.camera;
   pendingCollapse = null;
+  generalCollapseFocus = null;
   subregionHighlight = null;
   proposedArc = null;
   recenterAxis = null;
@@ -1350,13 +1389,24 @@ const tuningClose   = document.getElementById('tuning-close')   as HTMLButtonEle
 /** (Re)build the tuning panel rows from TUNABLE_SPECS, reflecting current values. */
 function renderTuningPanel(): void {
   tuningBody.innerHTML = '';
+  const columns: HTMLDivElement[] = [];
+  const columnFor = (i: number): HTMLDivElement => {
+    while (columns.length <= i) {
+      const col = document.createElement('div');
+      col.className = 'tuning-col';
+      tuningBody.appendChild(col);
+      columns.push(col);
+    }
+    return columns[i];
+  };
   let lastGroup = '';
   for (const spec of TUNABLE_SPECS) {
+    const col = columnFor(spec.column ?? 0);
     if (spec.group !== lastGroup) {
       lastGroup = spec.group;
       const h = document.createElement('h4');
       h.textContent = spec.group;
-      tuningBody.appendChild(h);
+      col.appendChild(h);
     }
     const row = document.createElement('div');
     row.className = 'tuning-row';
@@ -1396,7 +1446,7 @@ function renderTuningPanel(): void {
     });
 
     row.append(label, range, num);
-    tuningBody.appendChild(row);
+    col.appendChild(row);
   }
 }
 
@@ -1520,6 +1570,10 @@ pauseRecreateCheckbox.addEventListener('change', () => { pauseRecreations = paus
 const showBrokenCheckbox = document.getElementById('show-broken-checkbox') as HTMLInputElement;
 showBroken = showBrokenCheckbox.checked; // sync on (re)load — survives HMR
 showBrokenCheckbox.addEventListener('change', () => { showBroken = showBrokenCheckbox.checked; wake(); });
+
+const rawMovePlanCheckbox = document.getElementById('raw-move-plan-checkbox') as HTMLInputElement;
+showRawMovePlan = rawMovePlanCheckbox.checked; // sync on (re)load — survives HMR
+rawMovePlanCheckbox.addEventListener('change', () => { showRawMovePlan = rawMovePlanCheckbox.checked; wake(); });
 
 const encCheckbox = document.getElementById('enc-checkbox') as HTMLInputElement;
 const encPanel    = document.getElementById('encoding-panel') as HTMLDivElement;
@@ -1829,6 +1883,7 @@ function resetGame(spots: number): void {
   liveUnlockTokens.length = 0;
   redoStack.length = 0;
   pendingCollapse = null;
+  generalCollapseFocus = null;
   subregionHighlight = null;
   proposedArc = null;
   recreateCheckFailed = false;
@@ -2046,12 +2101,12 @@ function waitForFullSettle(): Promise<void> {
   });
 }
 
-/** Resolve once all collapse animations have finished (pendingCollapse === null). */
+/** Resolve once all collapse animations have finished (see collapseActive). */
 function waitForCollapseDone(): Promise<void> {
-  if (!pendingCollapse) return Promise.resolve();
+  if (!collapseActive()) return Promise.resolve();
   return new Promise(resolve => {
     const check = () => {
-      if (!pendingCollapse) { resolve(); return; }
+      if (!collapseActive()) { resolve(); return; }
       wake();
       setTimeout(check, 50);
     };
@@ -2704,15 +2759,19 @@ function frameBody(now: number): void {
         checkForCollapses();
       }
 
-      // Skip any component whose vertices are owned by a special-collapse animator,
-      // so deadRegionStep doesn't also try to centroid-shrink those vertices.
-      const { moving: deadMoving, popped, popCentroids } = deadRegionStep(state, skipVerts);
-      if (deadMoving) anyMoving = true;
-      if (popped) {
-        logCollapse('deadRegionStep (general)');
-        resampleAllEdges(state);
-        for (const c of popCentroids) popAnims.push({ pos: c, start: now });
-        checkForCollapses();
+      // General dead components shrink one at a time, and only while no special
+      // collapse is running (see collapseActive).
+      if (!pendingCollapse) {
+        const wasShrinking = generalCollapseFocus !== null;
+        const { moving: deadMoving, popped, popCentroids, focus } = deadRegionStep(state, undefined, generalCollapseFocus);
+        generalCollapseFocus = focus;
+        if (deadMoving) anyMoving = true;
+        if (popped) {
+          logCollapse('deadRegionStep (general)');
+          resampleAllEdges(state);
+          for (const c of popCentroids) popAnims.push({ pos: c, start: now });
+        }
+        if (popped || (wasShrinking && !focus)) checkForCollapses();
       }
     }
 
@@ -2909,7 +2968,7 @@ function frameBody(now: number): void {
       }
     }
     const playerTurn = (state.moveCount % 2 === 0 ? 1 : 2) as 1 | 2;
-    renderer.render(state, camera, { ...extras, showMidpoints, showRegions, showVertexIds, showBoundaryArrows, showRegionDiagnostic, showRegionNetwork, vertexLabels, spotLabels: spotLabelsDisplay, popAnimations: activePops, gameOver: isGameOver(), playerTurn, checkFailed: recreateCheckFailed, recreateHints: manualHints ?? undefined, candidatePreviewStrokes: candidatePreviewList ?? movePreviewFailCandidates ?? undefined, subregionHighlight: subregionHighlight ?? undefined, proposedArc: proposedArc ?? undefined, movePreviewArc: movePreviewArc ?? undefined, movePreviewFailRing: movePreviewFailRing ?? undefined, voronoiGraph: lastVoronoiGraph ?? undefined, voronoiCircumcenters: lastVoronoiCCs ?? undefined, voronoiExtraSeeds: lastVoronoiExtraSeeds ?? undefined, voronoiFullNodes: lastVoronoiFullNodes ?? undefined, voronoiSurvivingIds: lastVoronoiSurvivingIds ?? undefined, voronoiFakeCgrId: lastVoronoiFakeCgrId ?? undefined, hoverHighlight: hoverCharInfo ?? undefined, enclosureSideColors: showEnclosureSides ? lastEnclosureSideColors : undefined, enclosureCoverage: showEnclosureSides ? lastEnclosureCoverage : undefined, vertexIdLabels: canvasVertexLabels });
+    renderer.render(state, camera, { ...extras, showMidpoints, showRegions, showVertexIds, showBoundaryArrows, showRegionDiagnostic, showRegionNetwork, vertexLabels, spotLabels: spotLabelsDisplay, popAnimations: activePops, gameOver: isGameOver(), playerTurn, checkFailed: recreateCheckFailed, recreateHints: manualHints ?? undefined, candidatePreviewStrokes: candidatePreviewList ?? movePreviewFailCandidates ?? undefined, subregionHighlight: subregionHighlight ?? undefined, proposedArc: proposedArc ?? undefined, movePreviewArc: movePreviewArc ?? undefined, movePreviewRawArc: showRawMovePlan && movePreviewArc ? rawRouteOf(movePreviewArc) : undefined, movePreviewFailRing: movePreviewFailRing ?? undefined, voronoiGraph: lastVoronoiGraph ?? undefined, voronoiCircumcenters: lastVoronoiCCs ?? undefined, voronoiExtraSeeds: lastVoronoiExtraSeeds ?? undefined, voronoiFullNodes: lastVoronoiFullNodes ?? undefined, voronoiSurvivingIds: lastVoronoiSurvivingIds ?? undefined, voronoiFakeCgrId: lastVoronoiFakeCgrId ?? undefined, hoverHighlight: hoverCharInfo ?? undefined, enclosureSideColors: showEnclosureSides ? lastEnclosureSideColors : undefined, enclosureCoverage: showEnclosureSides ? lastEnclosureCoverage : undefined, vertexIdLabels: canvasVertexLabels });
   }
 
   if (needsRender) {

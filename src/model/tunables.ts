@@ -26,12 +26,28 @@ export interface Tunables {
   pointsPerRadian: number;
   overcrowdRatio: number;
   overcrowdMinExcess: number;
+  edgeClearance: number;
+  curveRefineAngle: number;
+  curveRefineWindow: number;
+  maxEdgePoints: number;
 
   // --- src/main.ts: Recreate playback timing ---
   settleMs: number;
   extraSettleStableFrames: number;
   extraSettleTimeoutMs: number;
   recreateSettleThreshold: number;
+
+  // --- src/model/deadRegions.ts: collapse animation speed, one per step function (1 = the
+  // original hard-coded speed; the animation runs that many times as fast) ---
+  deadShrinkSpeed: number;
+  louseSpeed: number;
+  parallelDeadSpeed: number;
+  tripleParallelDeadSpeed: number;
+  triangleDeadSpeed: number;
+  quadDeadSpeed: number;
+  enclosedTriangleSpeed: number;
+  bigonTipSpeed: number;
+  selfConnectedDeadSpeed: number;
 }
 
 export const DEFAULT_TUNABLES: Tunables = {
@@ -49,11 +65,25 @@ export const DEFAULT_TUNABLES: Tunables = {
   pointsPerRadian: 8,
   overcrowdRatio: 2.0,
   overcrowdMinExcess: 6,
+  edgeClearance: 0.03,
+  curveRefineAngle: 0, // off: with it on, Recreate replays 14/40 games faithfully vs 37/40 without (2026-10-05 sweep); 0.7 is the value that was tried
+  curveRefineWindow: 0.1,
+  maxEdgePoints: 120,
 
   settleMs: 1500,
   extraSettleStableFrames: 6,
   extraSettleTimeoutMs: 8000,
   recreateSettleThreshold: 0.004,
+
+  deadShrinkSpeed: 0.5,
+  louseSpeed: 0.5,
+  parallelDeadSpeed: 0.5,
+  tripleParallelDeadSpeed: 0.5,
+  triangleDeadSpeed: 0.5,
+  quadDeadSpeed: 0.5,
+  enclosedTriangleSpeed: 0.5,
+  bigonTipSpeed: 0.5,
+  selfConnectedDeadSpeed: 0.5,
 };
 
 export const tunables: Tunables = { ...DEFAULT_TUNABLES };
@@ -65,6 +95,8 @@ export interface TunableSpec {
   min: number;
   max: number;
   step: number;
+  /** Tuning-panel column (0 = left, the default). */
+  column?: number;
 }
 
 export const TUNABLE_SPECS: TunableSpec[] = [
@@ -82,11 +114,25 @@ export const TUNABLE_SPECS: TunableSpec[] = [
   { key: 'pointsPerRadian',     label: 'Points per radian',           group: 'Smoothing', min: 1,    max: 30,       step: 1 },
   { key: 'overcrowdRatio',      label: 'Overcrowd ratio',             group: 'Smoothing', min: 1,    max: 5,        step: 0.1 },
   { key: 'overcrowdMinExcess',  label: 'Overcrowd min excess',        group: 'Smoothing', min: 0,    max: 30,       step: 1 },
+  { key: 'edgeClearance',       label: 'Edge clearance (rad; vertices keep 2x)', group: 'Smoothing', min: 0, max: 0.1, step: 0.001 },
+  { key: 'curveRefineAngle',    label: 'Curve refine: turn (rad, 0 = off)', group: 'Smoothing', min: 0,    max: 3,        step: 0.05 },
+  { key: 'curveRefineWindow',   label: 'Curve refine: window (rad)',  group: 'Smoothing', min: 0.01, max: 0.5,      step: 0.01 },
+  { key: 'maxEdgePoints',       label: 'Max interior points per edge', group: 'Smoothing', min: 10,  max: 400,      step: 10 },
 
   { key: 'settleMs',                label: 'Settle dwell (ms)',           group: 'Recreate', min: 0, max: 5000,  step: 50 },
   { key: 'extraSettleStableFrames', label: 'Extra-settle stable frames',  group: 'Recreate', min: 1, max: 30,    step: 1 },
   { key: 'extraSettleTimeoutMs',    label: 'Extra-settle timeout (ms)',   group: 'Recreate', min: 0, max: 30000, step: 500 },
   { key: 'recreateSettleThreshold', label: 'Recreate settle threshold',   group: 'Recreate', min: 0, max: 0.05,  step: 0.0005 },
+
+  { key: 'deadShrinkSpeed',         label: 'General dead component',              group: 'Collapse speed (1 = original)', min: 0.05, max: 3, step: 0.05, column: 1 },
+  { key: 'louseSpeed',              label: 'Louse',                               group: 'Collapse speed (1 = original)', min: 0.05, max: 3, step: 0.05, column: 1 },
+  { key: 'parallelDeadSpeed',       label: 'Parallel dead (bigon)',               group: 'Collapse speed (1 = original)', min: 0.05, max: 3, step: 0.05, column: 1 },
+  { key: 'tripleParallelDeadSpeed', label: 'Triple parallel dead',                group: 'Collapse speed (1 = original)', min: 0.05, max: 3, step: 0.05, column: 1 },
+  { key: 'triangleDeadSpeed',       label: 'Triangle dead',                       group: 'Collapse speed (1 = original)', min: 0.05, max: 3, step: 0.05, column: 1 },
+  { key: 'quadDeadSpeed',           label: 'Quad dead',                           group: 'Collapse speed (1 = original)', min: 0.05, max: 3, step: 0.05, column: 1 },
+  { key: 'enclosedTriangleSpeed',   label: 'Enclosed triangle',                   group: 'Collapse speed (1 = original)', min: 0.05, max: 3, step: 0.05, column: 1 },
+  { key: 'bigonTipSpeed',           label: 'Bigon tip',                           group: 'Collapse speed (1 = original)', min: 0.05, max: 3, step: 0.05, column: 1 },
+  { key: 'selfConnectedDeadSpeed',  label: 'Self-connected dead',                 group: 'Collapse speed (1 = original)', min: 0.05, max: 3, step: 0.05, column: 1 },
 ];
 
 // DEFAULT_TUNABLES (a Tunables) and TUNABLE_SPECS (a plain array) are two independent listings of

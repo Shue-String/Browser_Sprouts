@@ -8,11 +8,10 @@
 //
 // Everything shown is read from the same registry the Collect pane's Collections panel uses
 // (KNOWN_COLLECTION_MEMBERS / KNOWN_COLLECTION_REP / the genome-text tables in
-// src/model/collectAlpha.ts, ultimately src/data/collectionElements.json), and element text goes
-// through the app's own shiftMembraneLetters (membrane letters shifted two forward, so A -> C, the
-// paper's convention -- applied only to shapes that contain an A, since some registry entries are
-// already lettered from C) and toLatexSymbols (alpha/oplus/brace escaping) -- nothing is
-// re-implemented here. The TS is bundled on the fly with esbuild, so no build step is needed first.
+// src/model/collectAlpha.ts, ultimately src/data/collectionElements.json, whose membrane letters
+// already start at C, the paper's convention), and element text goes through the app's own
+// toLatexSymbols (alpha/oplus/brace escaping) -- nothing is re-implemented here. The TS is bundled
+// on the fly with esbuild, so no build step is needed first.
 //
 // Usage: node scripts/exportCollectionsLatex.cjs [--from 2] [--to 10] [--out notes/collections_S2-S10.tex] [--pdf] [--tiny 8]
 //   --tiny COLS: instead of the two-column layout, set each base collection (no +1 offset) in tiny
@@ -51,10 +50,8 @@ const math = (s, bold = false) => {
   const body = m.toLatexSymbols(s);
   return bold ? `$${BS}boldsymbol{${body}}$` : `$${body}$`;
 };
-// A collection's elements, shown the paper's way: membrane letters start at C. A shape still lettered
-// from A is shifted two forward; one that already starts at C (the registry holds both) is left alone,
-// since shifting it again would start it at E.
-const element = (s, bold = false) => math(s.includes('A') ? m.shiftMembraneLetters(s) : s, bold);
+// A collection's elements, printed as authored (the registry letters membranes from C already).
+const element = (s, bold = false) => math(s, bold);
 const genomeOf = (name) => m.NAMED_FAMILY_GENOME_TEXT[name] ?? m.COLLECTION_GENOME_TEXT[name];
 
 const header = (name) => `${math(name, true)}${BS}quad ${math(genomeOf(name))}`;

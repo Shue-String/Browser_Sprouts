@@ -15,6 +15,7 @@ add_library(stalks_core
     src/savefile.cpp
     src/specfile.cpp
     src/analyze.cpp
+    src/json.cpp
 )
 target_include_directories(stalks_core PUBLIC src)
 
@@ -45,11 +46,8 @@ target_link_libraries(save_spec PRIVATE stalks_core)
 add_executable(verify_spec_count tools/verify_spec_count.cpp)
 target_link_libraries(verify_spec_count PRIVATE stalks_core)
 
-add_executable(collect_alpha_genetics tools/collect_alpha_genetics.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+add_executable(collect_alpha_genetics tools/collect_alpha_genetics.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/registry_audit_common.cpp)
 target_link_libraries(collect_alpha_genetics PRIVATE stalks_core)
-
-add_executable(dump_collections_roster tools/dump_collections_roster.cpp)
-target_link_libraries(dump_collections_roster PRIVATE stalks_core)
 
 add_executable(quick_reduction_counts tools/quick_reduction_counts.cpp)
 target_link_libraries(quick_reduction_counts PRIVATE stalks_core)
@@ -60,34 +58,34 @@ target_link_libraries(nimber_vector PRIVATE stalks_core)
 add_executable(region_frequency tools/region_frequency.cpp)
 target_link_libraries(region_frequency PRIVATE stalks_core)
 
-add_executable(unregistered_left_sides tools/unregistered_left_sides.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+add_executable(unregistered_left_sides tools/unregistered_left_sides.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/registry_audit_common.cpp)
 target_link_libraries(unregistered_left_sides PRIVATE stalks_core)
 
-add_executable(genome_for_reps tools/genome_for_reps.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+add_executable(genome_for_reps tools/genome_for_reps.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/registry_audit_common.cpp)
 target_link_libraries(genome_for_reps PRIVATE stalks_core)
 
-add_executable(yellow_check tools/yellow_check.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+add_executable(yellow_check tools/yellow_check.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/registry_audit_common.cpp)
 target_link_libraries(yellow_check PRIVATE stalks_core)
 
-add_executable(audit_yellow_bases tools/audit_yellow_bases.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+add_executable(audit_yellow_bases tools/audit_yellow_bases.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/registry_audit_common.cpp)
 target_link_libraries(audit_yellow_bases PRIVATE stalks_core)
 
-add_executable(find_yellow_candidates tools/find_yellow_candidates.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+add_executable(find_yellow_candidates tools/find_yellow_candidates.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/registry_audit_common.cpp)
 target_link_libraries(find_yellow_candidates PRIVATE stalks_core)
 
 add_executable(dump_registry_for_ttree_check tools/dump_registry_for_ttree_check.cpp tools/registry_audit_common.cpp)
 target_link_libraries(dump_registry_for_ttree_check PRIVATE stalks_core)
 
-add_executable(audit_registry_unjustified tools/audit_registry_unjustified.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+add_executable(audit_registry_unjustified tools/audit_registry_unjustified.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/registry_audit_common.cpp)
 target_link_libraries(audit_registry_unjustified PRIVATE stalks_core)
 
-add_executable(double_crit_probe tools/double_crit_probe.cpp tools/alpha_genome.cpp tools/double_crit_genome.cpp tools/registry_audit_common.cpp)
+add_executable(double_crit_probe tools/double_crit_probe.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/double_crit_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(double_crit_probe PRIVATE stalks_core)
 
 add_executable(unregistered_double_crit_regions tools/unregistered_double_crit_regions.cpp)
 target_link_libraries(unregistered_double_crit_regions PRIVATE stalks_core)
 
-add_executable(double_crit_candidates_report tools/double_crit_candidates_report.cpp tools/alpha_genome.cpp tools/double_crit_genome.cpp tools/registry_audit_common.cpp)
+add_executable(double_crit_candidates_report tools/double_crit_candidates_report.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/double_crit_genome.cpp tools/registry_audit_common.cpp)
 target_link_libraries(double_crit_candidates_report PRIVATE stalks_core)
 
 add_executable(winning_tree tools/winning_tree.cpp)
@@ -96,16 +94,16 @@ target_link_libraries(winning_tree PRIVATE stalks_core)
 add_executable(dump_token_life tools/dump_token_life.cpp)
 target_link_libraries(dump_token_life PRIVATE stalks_core)
 
-add_executable(find_child_parents tools/find_child_parents.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+add_executable(find_child_parents tools/find_child_parents.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/registry_audit_common.cpp)
 target_link_libraries(find_child_parents PRIVATE stalks_core)
 
-add_executable(audit_registry tools/audit_registry.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+add_executable(audit_registry tools/audit_registry.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/registry_audit_common.cpp)
 target_link_libraries(audit_registry PRIVATE stalks_core)
 
 add_executable(merge_specs tools/merge_specs.cpp)
 target_link_libraries(merge_specs PRIVATE stalks_core)
 
-add_executable(check_ttree_extras tools/check_ttree_extras.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+add_executable(check_ttree_extras tools/check_ttree_extras.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/registry_audit_common.cpp)
 target_link_libraries(check_ttree_extras PRIVATE stalks_core)
 
 add_executable(probe_dupe_nodes tools/probe_dupe_nodes.cpp)
@@ -114,7 +112,10 @@ target_link_libraries(probe_dupe_nodes PRIVATE stalks_core)
 add_executable(audit_registry_redundancy tools/audit_registry_redundancy.cpp tools/registry_audit_common.cpp)
 target_link_libraries(audit_registry_redundancy PRIVATE stalks_core)
 
-add_executable(check_candidates tools/check_candidates.cpp tools/alpha_genome.cpp tools/registry_audit_common.cpp)
+add_executable(classify_candidates tools/classify_candidates.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/registry_audit_common.cpp)
+target_link_libraries(classify_candidates PRIVATE stalks_core)
+
+add_executable(check_candidates tools/check_candidates.cpp tools/alpha_genome.cpp tools/genome_defs.cpp tools/registry_audit_common.cpp)
 target_link_libraries(check_candidates PRIVATE stalks_core)
 
 add_executable(verify_registry_shrink tools/verify_registry_shrink.cpp tools/registry_audit_common.cpp)
@@ -128,13 +129,23 @@ target_link_libraries(audit_registry_necessity PRIVATE stalks_core)
 set(STALKS_ALL_TARGETS
     stalks_core stalks_tests dump_master_meta dump_child_nimbers query_position explain_move
     query_movetype debug_spec_order save_spec verify_spec_count collect_alpha_genetics
-    dump_collections_roster quick_reduction_counts nimber_vector region_frequency
+    quick_reduction_counts nimber_vector region_frequency
     unregistered_left_sides genome_for_reps yellow_check find_yellow_candidates
     double_crit_probe unregistered_double_crit_regions double_crit_candidates_report winning_tree
     dump_token_life find_child_parents audit_registry merge_specs check_ttree_extras
     probe_dupe_nodes audit_registry_redundancy check_candidates verify_registry_shrink
     audit_registry_necessity dump_registry_for_ttree_check audit_registry_unjustified
+    audit_yellow_bases classify_candidates
 )
+
+# The native registry (collections.cpp) and tools/genome_defs.cpp read the live
+# collectionElements.json at runtime via collectionElementsJson() -- no generated copy. Defining
+# this path is also what switches collections.cpp off collection_elements.generated.hpp, which
+# only the WASM build (build_wasm.bat, no filesystem path) still compiles in.
+get_filename_component(STALKS_COLLECTION_ELEMENTS_JSON
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/data/collectionElements.json" ABSOLUTE)
+target_compile_definitions(stalks_core PRIVATE
+    STALKS_COLLECTION_ELEMENTS_JSON="${STALKS_COLLECTION_ELEMENTS_JSON}")
 
 if(MSVC)
     foreach(tgt ${STALKS_ALL_TARGETS})

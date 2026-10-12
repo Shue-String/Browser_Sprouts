@@ -14,12 +14,12 @@
 namespace stalks_tools {
 
 // Maximum recursion depth for nested [T] genomes -- depth 0 is the position itself, 1 its
-// T-children's own full genomes, kMaxFoldDepth the last level with a full [T] expansion (one level
+// T-children's own full genomes, maxFoldDepth() the last level with a full [T] expansion (one level
 // beyond that truncates to the bare 4-gene tuple). Single-sourced in src/data/collectionElements.json's
-// "maxFoldDepth" (mirrors collectAlpha.ts's own MAX_GENOME_DEPTH) via genome_defs.generated.hpp;
-// re-exported here so a caller of this header (e.g. double_crit_genome.cpp) doesn't need its own
-// #include of the generated header just for this one constant.
-extern const int kMaxFoldDepth;
+// "maxFoldDepth" (mirrors collectAlpha.ts's own MAX_GENOME_DEPTH), read at runtime via
+// genome_defs.hpp; exposed here so a caller of this header (e.g. double_crit_genome.cpp) doesn't
+// need genome_defs.hpp just for this one value.
+int maxFoldDepth();
 
 // The (R, D, {L}, {Z}) genome of a single-alpha position, per the engine's own movetype
 // classification (moves.hpp's specialPointMovetypes; movetype 1->R, 2->D, 3->L, 4->Z, 5->T --
@@ -121,6 +121,17 @@ bool isYellowCandidate(const stalks::Position& candidate, const stalks::SpecDB& 
 // are defined by live quickCanon() registry membership, not a static genome tuple with declared
 // required T-children, so there is nothing for isYellowCandidate to check.
 bool hasNamedFamilyEntry(const std::string& name);
+
+// Every name hasNamedFamilyEntry accepts -- each hand-authored family at every shift 0..maxShift,
+// in collectionElements.json's order -- i.e. every valid isYellowCandidate searchedFamilyName.
+std::vector<std::string> allNamedFamilyNames();
+
+// `p`'s own full genome text "(R,D,{L},{Z},[T])", T deduped and sorted. Unlike fullGenomeText, the
+// ROOT is never folded to a name -- a registered rep's own quickCanon reduction is itself, so
+// fullGenomeText(rep) would just print the family name (the "self-fold" bug, see
+// project_collect_collections_panel); only its T-children are folded. "(UNCLASSIFIABLE)" when
+// classifyAlphaGenome can't classify `p`. Shared by genome_for_reps and classify_candidates.
+std::string rootGenomeText(const stalks::Position& p, const stalks::SpecDB& db);
 
 // Testing-only: forces the internal registry-name index's one-time lazy build to happen now, with
 // no collections.hpp setExcludedRegistryKey exclusion active. Call this BEFORE ever setting an

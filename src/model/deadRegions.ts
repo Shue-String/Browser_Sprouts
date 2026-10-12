@@ -26,13 +26,14 @@ import type { GameState, VertexId, EdgeId, RegionId, Vertex } from './types';
 import { VertexType, VertexVisualState } from './types';
 import type { SpherePoint } from '../math/sphere';
 import { normalize, slerp, arcsCross, sphereAngle } from '../math/sphere';
-import { recomputeRegions } from './moves';
+import { recomputeRegions, regionContainsPointNearest } from './moves';
 import { cloneState, allocEdgeId } from './gameState';
 import { canonicalEncoding } from './encoding';
 import { canonSync, canonReady } from '../engine/stalks';
 import { smallCircleSelfLoop } from './strokeSynthesis';
-import { stereoChart, buildFaceDeflation, deflatePoint, deflateArc, deflateTrack } from './faceDeflate';
+import { stereoChart, buildFaceDeflation, deflatePoint, deflateArc, deflateTrack, diskBoundaryPoint, diskPointOf, deflateInteriorPath } from './faceDeflate';
 import type { FaceDeflation } from './faceDeflate';
+import { tunables } from './tunables';
 
 // Collapse-generated self-loops: when the concatenated/shrunk geometry feeding a new self-loop
 // is confined to a small neighbourhood, it's replaced with a genuine small circle (see
@@ -104,7 +105,13 @@ function commitIfEncodingPreserved(state: GameState, surgery: () => void): boole
   return true;
 }
 
-/** Fraction to slerp each dead point toward its component centroid per frame. */
+/** Per-frame slerp fraction `step` (a geometric shrink: (1 - step)^k remains after k frames)
+ * run at `speed` times its pace, so the same distance is covered in 1/speed as many frames. */
+function scaledStep(step: number, speed: number): number {
+  return 1 - Math.pow(1 - step, speed);
+}
+
+/** Fraction to slerp each dead point toward its component centroid per frame (at speed 1). */
 const DEAD_SHRINK_STEP = 0.06;
 /** Geodesic radians: once a dead component's radius drops below this, it pops. */
 const POP_RADIUS = 0.12;
@@ -240,15 +247,19 @@ function chordCrossesLivingEdges(
 }
 
 /**
- * One frame of dead-region shrink + pop. Pulls every fully-dead component toward
- * its centroid; once a component is smaller than POP_RADIUS it is deleted (the
- * deletion is encoding-gated with rollback). Returns whether anything is still
- * animating and whether a component popped this frame.
+ * One frame of dead-region shrink + pop, for ONE fully-dead component at a time
+ * (so collapses play out one after another rather than all at once). The
+ * component pulls toward its centroid; once it is smaller than POP_RADIUS it is
+ * deleted (the deletion is encoding-gated with rollback). Returns whether
+ * anything moved, whether the component popped this frame, and `focus`: the
+ * vertex ids of the component still shrinking, to pass back in next frame so
+ * it is carried through to its pop before another one starts (null once none is).
  *
  * GUARD: a component will not shrink a step that would drag one of its (dead)
  * edges across a LIVING edge. This makes a dead component that encloses living
  * structure simply jam instead of collapsing through it — the proper handling of
- * living-inside-dead is left to the planned topology pass.
+ * living-inside-dead is left to the planned topology pass. A jammed component
+ * is passed over for the next one.
  *
  * skipVertices: any component that contains one of these vertex IDs is left alone
  * this frame (used to hand off control to a special-collapse animator).
@@ -256,7 +267,8 @@ function chordCrossesLivingEdges(
 export function deadRegionStep(
   state: GameState,
   skipVertices?: Set<VertexId>,
-): { moving: boolean; popped: boolean; popCentroids: SpherePoint[] } {
+  focus?: Set<VertexId> | null,
+): { moving: boolean; popped: boolean; popCentroids: SpherePoint[]; focus: Set<VertexId> | null } {
   const comp = componentRoots(state);
   const allDead = fullyDeadByComponent(state, comp);
 
@@ -289,68 +301,65 @@ export function deadRegionStep(
     (compEdges.get(root) ?? compEdges.set(root, []).get(root)!).push(e);
   }
 
-  const toPop = new Set<VertexId>();
-  const centroidByRoot = new Map<VertexId, SpherePoint>();
-  let moving = false;
+  // The component already under way goes first.
+  const roots = [...compVerts.keys()];
+  const focusRoot = focus ? [...focus].map(id => comp.get(id)).find(r => r !== undefined && compVerts.has(r)) : undefined;
+  if (focusRoot !== undefined) roots.sort((x, y) => (y === focusRoot ? 1 : 0) - (x === focusRoot ? 1 : 0));
 
-  for (const [root, verts] of compVerts) {
+  for (const root of roots) {
+    const verts = compVerts.get(root)!;
     let cx = 0, cy = 0, cz = 0;
     for (const v of verts) { cx += v.pos.x; cy += v.pos.y; cz += v.pos.z; }
     const c = normalize({ x: cx, y: cy, z: cz });
-    centroidByRoot.set(root, c);
 
     let radius = 0;
     for (const v of verts) {
       const dot = Math.max(-1, Math.min(1, v.pos.x * c.x + v.pos.y * c.y + v.pos.z * c.z));
       radius = Math.max(radius, Math.acos(dot));
     }
-    if (radius < POP_RADIUS) { toPop.add(root); continue; }
+    if (radius < POP_RADIUS) {
+      // Pop it (encoding-gated); a refused pop is passed over for the next component.
+      const popped = commitIfEncodingPreserved(state, () => {
+        for (const id of [...state.vertices.keys()]) {
+          if (comp.get(id) === root) state.vertices.delete(id);
+        }
+        for (const [id, e] of [...state.edges]) {
+          if (comp.get(e.v1) === root) state.edges.delete(id);
+        }
+        safeRecompute(state, 'deadRegionStep');
+      });
+      if (popped) return { moving: true, popped: true, popCentroids: [c], focus: null };
+      continue;
+    }
 
     const edges = compEdges.get(root) ?? [];
 
     // Would this shrink step drag a dead edge across a living edge? If so, jam.
+    const step = scaledStep(DEAD_SHRINK_STEP, tunables.deadShrinkSpeed);
     const tent = new Map<VertexId, SpherePoint>();
-    for (const v of verts) tent.set(v.id, slerp(v.pos, c, DEAD_SHRINK_STEP));
+    for (const v of verts) tent.set(v.id, slerp(v.pos, c, step));
     let blocked = false;
     for (const e of edges) {
       const tpts = e.points.map((p, i) =>
         i === 0 ? tent.get(e.v1)!
         : i === e.points.length - 1 ? tent.get(e.v2)!
-        : slerp(p, c, DEAD_SHRINK_STEP));
+        : slerp(p, c, step));
       if (livingEdges.some(le => polylinesCross(tpts, le.points))) { blocked = true; break; }
     }
     if (blocked) continue;
 
     // Commit the shrink: vertices, then edge interior points, then re-anchor.
-    for (const v of verts) v.pos = slerp(v.pos, c, DEAD_SHRINK_STEP);
+    for (const v of verts) v.pos = slerp(v.pos, c, step);
     for (const e of edges) {
-      for (let i = 1; i < e.points.length - 1; i++) e.points[i] = slerp(e.points[i], c, DEAD_SHRINK_STEP);
+      for (let i = 1; i < e.points.length - 1; i++) e.points[i] = slerp(e.points[i], c, step);
       const v1 = state.vertices.get(e.v1), v2 = state.vertices.get(e.v2);
       if (v1) e.points[0] = { ...v1.pos };
       if (v2) e.points[e.points.length - 1] = { ...v2.pos };
     }
-    moving = true;
+    return { moving: true, popped: false, popCentroids: [], focus: new Set(verts.map(v => v.id)) };
   }
 
-  // Pop fully-shrunk components (encoding-gated).
-  let popped = false;
-  if (toPop.size > 0) {
-    popped = commitIfEncodingPreserved(state, () => {
-      for (const id of [...state.vertices.keys()]) {
-        if (toPop.has(comp.get(id)!)) state.vertices.delete(id);
-      }
-      for (const [id, e] of [...state.edges]) {
-        if (toPop.has(comp.get(e.v1)!)) state.edges.delete(id);
-      }
-      safeRecompute(state, 'deadRegionStep');
-    });
-  }
-
-  const popCentroids = popped
-    ? [...toPop].map(root => centroidByRoot.get(root)!).filter(Boolean)
-    : [];
-
-  return { moving: moving || popped, popped, popCentroids };
+  return { moving: false, popped: false, popCentroids: [], focus: null };
 }
 
 // ===========================================================================
@@ -552,15 +561,16 @@ export function louseCollapseStep(
   }
 
   // Slerp A and W toward X (X stays fixed as the target anchor).
-  a.pos = slerp(a.pos, target, LOUSE_SHRINK_STEP);
-  w.pos = slerp(w.pos, target, LOUSE_SHRINK_STEP);
+  const step = scaledStep(LOUSE_SHRINK_STEP, tunables.louseSpeed);
+  a.pos = slerp(a.pos, target, step);
+  w.pos = slerp(w.pos, target, step);
 
   // Slerp edge interior points toward X, then re-anchor endpoints.
   for (const eid of collapse.edges) {
     const e = state.edges.get(eid);
     if (!e) continue;
     for (let i = 1; i < e.points.length - 1; i++) {
-      e.points[i] = slerp(e.points[i], target, LOUSE_SHRINK_STEP);
+      e.points[i] = slerp(e.points[i], target, step);
     }
     const v1 = state.vertices.get(e.v1);
     const v2 = state.vertices.get(e.v2);
@@ -598,19 +608,25 @@ interface DeflateAnim {
   /** Boundary edges: the deflation angles of their start and end in loop order, and
    * whether the loop runs along the edge's own v1→v2 direction. */
   edges: { id: EdgeId; theta0: number; theta1: number; forward: boolean }[];
-  /** Boundary vertices: their deflation angle and their one external edge. */
-  verts: { id: VertexId; theta: number; extId: EdgeId }[];
+  /** Boundary vertices: their deflation angle and their external edge (none for a vertex whose
+   * whole degree is spent inside the face, e.g. a triple bigon's P and Q). */
+  verts: { id: VertexId; theta: number; extId?: EdgeId }[];
+  /** Edges lying inside the face with both ends on its boundary: their disk-space path (scaled by
+   * the depth each frame) and whether it runs along the edge's own v1→v2 direction. */
+  inner: { id: EdgeId; disk: { x: number; y: number }[] }[];
 }
 
 /** Snapshot a dead face for deflation. `loop` walks its boundary (each vertex with
  * the edge leaving it toward the next vertex), `ext` gives each boundary vertex's
- * one external edge, and `outside` is any point outside the face. Null if the
- * face can't be meshed. */
+ * one external edge (if it has one), `inner` lists edges inside the face that join two
+ * boundary vertices, and `outside` is any point outside the face. Null if the face
+ * can't be meshed. */
 function startDeflate(
   state: GameState,
   loop: { vid: VertexId; eid: EdgeId }[],
   ext: Map<VertexId, EdgeId>,
   outside: SpherePoint,
+  inner: EdgeId[] = [],
 ): DeflateAnim | null {
   const pts: SpherePoint[] = [];
   const spans: { id: EdgeId; start: number; end: number; forward: boolean }[] = [];
@@ -633,15 +649,30 @@ function startDeflate(
   const verts: DeflateAnim['verts'] = [];
   for (const { id, idx } of vertStarts) {
     const extId = ext.get(id);
-    if (extId === undefined || !state.edges.has(extId)) return null;
+    if (extId !== undefined && !state.edges.has(extId)) return null;
     verts.push({ id, theta: theta(idx), extId });
   }
-  return { def, frame: 0, r: 1, edges, verts };
+  const innerEdges: DeflateAnim['inner'] = [];
+  for (const eid of inner) {
+    const e = state.edges.get(eid);
+    const t1 = verts.find(v => v.id === e?.v1), t2 = verts.find(v => v.id === e?.v2);
+    if (!e || !t1 || !t2) return null;
+    innerEdges.push({
+      id: eid,
+      disk: [
+        diskBoundaryPoint(def, t1.theta),
+        ...e.points.slice(1, -1).map(p => diskPointOf(def, p)),
+        diskBoundaryPoint(def, t2.theta),
+      ],
+    });
+  }
+  return { def, frame: 0, r: 1, edges, verts, inner: innerEdges };
 }
 
-/** The depth for the next animation frame. */
-function nextDeflateDepth(anim: DeflateAnim): number {
-  anim.frame++;
+/** The depth for the next animation frame, the schedule run at `speed` times its pace
+ * (`frame` advances by `speed`, so it is fractional off speed 1). */
+function nextDeflateDepth(anim: DeflateAnim, speed: number): number {
+  anim.frame += speed;
   const k = anim.frame;
   return Math.exp(-DEFLATE_U_STEP * k * k / (k + DEFLATE_EASE_FRAMES));
 }
@@ -657,7 +688,7 @@ function deflateTo(state: GameState, anim: DeflateAnim, r: number): void {
     if (vx) vx.pos = { ...pos };
     // Grow the external edge by the stretch its vertex just travelled (its old end
     // point is the vertex's old position), keeping whatever shape smoothing gave the rest.
-    const e = state.edges.get(v.extId);
+    const e = v.extId === undefined ? undefined : state.edges.get(v.extId);
     if (e) {
       const toV = e.v2 === v.id ? e.points : [...e.points].reverse();
       const pts = [...toV.slice(0, -1), ...step];
@@ -671,6 +702,14 @@ function deflateTo(state: GameState, anim: DeflateAnim, r: number): void {
     ids.add(be.id);
     const arc = deflateArc(def, be.theta0, be.theta1, r);
     e.points = be.forward ? arc : arc.reverse();
+    const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
+    const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
+  }
+  for (const ie of anim.inner) {
+    const e = state.edges.get(ie.id);
+    if (!e) continue;
+    ids.add(ie.id);
+    e.points = deflateInteriorPath(def, ie.disk, r);
     const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
     const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
   }
@@ -692,6 +731,17 @@ function deflateRadius(state: GameState, anim: DeflateAnim): number {
     for (const p of e.points) max = Math.max(max, sphereAngle(p, anim.def.center));
   }
   return max;
+}
+
+/** Finish a deflation onto its centre and run `surgery` under the encoding gate. Finishing flattens
+ * every boundary edge to a single point, so if the gate refuses, the pre-finish geometry is put back:
+ * a refused pop must leave a drawable board (a one-point edge can be neither resampled nor routed). */
+function finishDeflateAndCommit(state: GameState, anim: DeflateAnim, surgery: () => void): boolean {
+  const preFinish = cloneState(state);
+  deflateTo(state, anim, 0);
+  const ok = commitIfEncodingPreserved(state, surgery);
+  if (!ok) Object.assign(state, preFinish);
+  return ok;
 }
 
 // ===========================================================================
@@ -839,22 +889,21 @@ export function parallelDeadStep(
     }
   }
   const anim = collapse.deflate;
-  deflateTo(state, anim, nextDeflateDepth(anim));
+  deflateTo(state, anim, nextDeflateDepth(anim, tunables.parallelDeadSpeed));
   // Hold (still shrinking) until the canon engine can vet the surgery.
   if (deflateRadius(state, anim) >= PARALLEL_DEAD_POP_RADIUS || !canonReady()) return { done: false, popAt: null };
 
-  // Finish onto the centre: P, Q and the ends of both external edges arrive there.
-  deflateTo(state, anim, 0);
   const popAt = { ...anim.def.center };
-  const ep = state.edges.get(collapse.edgeP)!;
-  const eq = state.edges.get(collapse.edgeQ)!;
-  // X→P (ending at the centre) + Q→Y (starting there, first point dropped).
-  const xToPPts = ep.v1 === collapse.p ? [...ep.points].reverse() : [...ep.points];
-  const qToYPts = eq.v1 === collapse.q ? [...eq.points] : [...eq.points].reverse();
-  const newPoints: SpherePoint[] = [...xToPPts.slice(0, -1), { ...popAt }, ...qToYPts.slice(1)];
-
   let newEid = -1;
-  const ok = commitIfEncodingPreserved(state, () => {
+  // Finish onto the centre: P, Q and the ends of both external edges arrive there.
+  const ok = finishDeflateAndCommit(state, anim, () => {
+    const ep = state.edges.get(collapse.edgeP)!;
+    const eq = state.edges.get(collapse.edgeQ)!;
+    // X→P (ending at the centre) + Q→Y (starting there, first point dropped).
+    const xToPPts = ep.v1 === collapse.p ? [...ep.points].reverse() : [...ep.points];
+    const qToYPts = eq.v1 === collapse.q ? [...eq.points] : [...eq.points].reverse();
+    const newPoints: SpherePoint[] = [...xToPPts.slice(0, -1), { ...popAt }, ...qToYPts.slice(1)];
+
     state.vertices.delete(collapse.p);
     state.vertices.delete(collapse.q);
     // Sweep for ALL edges incident to P or Q: covers the parallel edges, the
@@ -915,22 +964,79 @@ export function parallelDeadStep(
 // side that's still alive. Popping deletes P, Q, and all three edges; the
 // (up to) one living face absorbs the space — no reconnection is needed since
 // P and Q have no external edges to preserve.
+//
+// Animation: the two dead faces together form one disc D, bounded by the two
+// edges that border the remaining (living) face; the third edge runs through
+// the middle of D. D deflates in place (see "Deflate-in-place animation"
+// above) onto a point inside itself, the middle edge carried along with it, so
+// the whole component folds in on its own dead side whatever side of the
+// sphere that is. (An earlier version slid P and Q toward the antipode of the
+// living content's centroid; with the living face wrapped around the pair that
+// target sat inside living territory and the edges swept across it.)
 
 export interface TripleParallelDeadCollapse {
   kind: 'triple-parallel-dead';
   p: VertexId;
   q: VertexId;
   edges: [EdgeId, EdgeId, EdgeId];
+  /** Which disc deflates, chosen on the first animation frame (see tripleConfigs): the two edges
+   * bounding it (P along one to Q, Q along the other back) and the edge through its middle. */
+  loop: { vid: VertexId; eid: EdgeId }[] | null;
+  inner: EdgeId | null;
+  /** Deflation state, built on the first animation frame. */
+  deflate: DeflateAnim | null;
 }
 
-const TRIPLE_PARALLEL_SHRINK_STEP = 0.08;
-const TRIPLE_PARALLEL_POP_RADIUS  = 0.04;
+const TRIPLE_PARALLEL_POP_RADIUS = 0.04;
+
+/** One way to split a triple bigon into a deflating disc and the face that stays. */
+interface TripleConfig {
+  keptFace: RegionId;
+  loop: { vid: VertexId; eid: EdgeId }[];
+  inner: EdgeId;
+}
+
+/**
+ * Every valid way to pick the face that stays: the other two faces, together with the edge
+ * between them, form the disc D that deflates, so both must be EMPTY — nothing on their boundary
+ * but P and Q. (A dead face can still hold another dead component; deflating over that would
+ * sweep through it, so the triple waits until that component has gone.) The living face, if
+ * any, comes first. Read from the live regions each time: region ids are renumbered whenever
+ * surgery recomputes them, so none is kept between frames.
+ */
+function tripleConfigs(state: GameState, p: VertexId, q: VertexId, between: EdgeId[]): TripleConfig[] {
+  const faceIds = new Set<RegionId>();
+  for (const eid of between) {
+    const edge = state.edges.get(eid);
+    if (!edge) return [];
+    faceIds.add(edge.leftRegion);
+    faceIds.add(edge.rightRegion);
+  }
+  if (faceIds.size !== 3) return [];
+  const isEmpty = (fid: RegionId): boolean => {
+    const r = state.regions.get(fid);
+    if (!r || r.boundaries.length !== 1) return false;
+    return r.boundaries[0].entries.every(en => en.vertexId === p || en.vertexId === q || !!state.vertices.get(en.vertexId)?.isPseudo);
+  };
+  const configs: TripleConfig[] = [];
+  for (const kept of faceIds) {
+    if (![...faceIds].every(f => f === kept || isEmpty(f))) continue;
+    const outer = between.filter(eid => {
+      const edge = state.edges.get(eid)!;
+      return edge.leftRegion === kept || edge.rightRegion === kept;
+    });
+    const inner = between.filter(eid => !outer.includes(eid));
+    if (outer.length !== 2 || inner.length !== 1) continue;
+    configs.push({ keptFace: kept, loop: [{ vid: p, eid: outer[0] }, { vid: q, eid: outer[1] }], inner: inner[0] });
+  }
+  return configs.sort((a, b) => Number(!!state.regions.get(a.keptFace)?.isDead) - Number(!!state.regions.get(b.keptFace)?.isDead));
+}
 
 /**
  * Scan for two degree-3 vertices connected by exactly three parallel edges
  * (using up all of both endpoints' degree, i.e. no external edges) where at
- * least two of the three faces those edges bound are dead. Returns the first
- * match or null.
+ * least two of the three faces those edges bound are dead and a disc to
+ * deflate exists (see tripleConfigs). Returns the first match or null.
  */
 export function detectTripleParallelDead(state: GameState): TripleParallelDeadCollapse | null {
   const seen = new Set<string>();
@@ -959,7 +1065,6 @@ export function detectTripleParallelDead(state: GameState): TripleParallelDeadCo
     }
     if (otherIncident) continue;
 
-    // The three edges bound exactly three faces (each face touches two of them).
     const faceIds = new Set<RegionId>();
     for (const eid of between) {
       const edge = state.edges.get(eid)!;
@@ -967,19 +1072,48 @@ export function detectTripleParallelDead(state: GameState): TripleParallelDeadCo
       faceIds.add(edge.rightRegion);
     }
     if (faceIds.size !== 3) continue;
-
     const deadCount = [...faceIds].filter(fid => state.regions.get(fid)?.isDead).length;
     if (deadCount < 2) continue;
+    if (tripleConfigs(state, p, q, between).length === 0) continue;
 
-    return { kind: 'triple-parallel-dead', p, q, edges: between as [EdgeId, EdgeId, EdgeId] };
+    return {
+      kind: 'triple-parallel-dead', p, q, edges: between as [EdgeId, EdgeId, EdgeId],
+      loop: null, inner: null, deflate: null,
+    };
   }
   return null;
 }
 
 /**
- * One frame of triple-parallel-dead collapse. P and Q slerp toward their
- * midpoint; on contact both vertices and all three connecting edges are
- * deleted (encoding-gated) — nothing survives to reconnect.
+ * A point outside the dead disc D, for the deflation to tell D's side from the other: a vertex
+ * on the kept face's boundary if it has one besides P and Q, else a point just inside the kept
+ * face beside one of the outer edges. Null if neither can be found.
+ */
+function pointOutsideTripleDisc(state: GameState, cfg: TripleConfig, p: VertexId, q: VertexId): SpherePoint | null {
+  const kept = state.regions.get(cfg.keptFace);
+  if (!kept) return null;
+  for (const b of kept.boundaries) for (const en of b.entries) {
+    const v = state.vertices.get(en.vertexId);
+    if (v && !v.isPseudo && en.vertexId !== p && en.vertexId !== q) return { ...v.pos };
+  }
+  const e = state.edges.get(cfg.loop[0].eid);
+  if (!e || e.points.length < 3) return null;
+  const k = Math.floor(e.points.length / 2);
+  const a = e.points[k - 1], m = e.points[k], c = e.points[k + 1] ?? m;
+  // Unit normal to the edge at its middle, tried on both sides.
+  const t = normalize({ x: c.x - a.x, y: c.y - a.y, z: c.z - a.z });
+  const nrm = normalize({ x: m.y * t.z - m.z * t.y, y: m.z * t.x - m.x * t.z, z: m.x * t.y - m.y * t.x });
+  for (const sgn of [1, -1]) for (const off of [0.02, 0.01, 0.005]) {
+    const cand = normalize({ x: m.x + sgn * off * nrm.x, y: m.y + sgn * off * nrm.y, z: m.z + sgn * off * nrm.z });
+    if (regionContainsPointNearest(state, kept, cand)) return cand;
+  }
+  return null;
+}
+
+/**
+ * One frame of triple-parallel-dead collapse: deflate the dead disc one step (P, Q and all
+ * three edges folding in on its centre); once it is small, finish onto the centre and delete
+ * P, Q and the three edges (encoding-gated) — nothing survives to reconnect.
  */
 export function tripleParallelDeadStep(
   state: GameState,
@@ -988,44 +1122,39 @@ export function tripleParallelDeadStep(
   const vp = state.vertices.get(collapse.p);
   const vq = state.vertices.get(collapse.q);
   if (!vp || !vq) return { done: true, popAt: null };
+  if (collapse.edges.some(eid => !state.edges.has(eid))) return { done: true, popAt: null };
 
-  // Collapse toward the point antipodal to nearby live content (see
-  // occupiedCentroidAntipode) rather than the raw P/Q midpoint, so this
-  // doesn't sweep its shrinking edges across content sitting in the smaller half.
-  const mid = occupiedCentroidAntipode(state, new Set([collapse.p, collapse.q]))
-    ?? slerp(vp.pos, vq.pos, 0.5);
-  const dp = sphereAngle(vp.pos, mid);
-  const dq = sphereAngle(vq.pos, mid);
-
-  if (dp < TRIPLE_PARALLEL_POP_RADIUS && dq < TRIPLE_PARALLEL_POP_RADIUS) {
-    const popAt = { ...mid };
-    const ok = commitIfEncodingPreserved(state, () => {
-      state.vertices.delete(collapse.p);
-      state.vertices.delete(collapse.q);
-      for (const [eid, e] of [...state.edges]) {
-        if (e.v1 === collapse.p || e.v2 === collapse.p ||
-            e.v1 === collapse.q || e.v2 === collapse.q) {
-          state.edges.delete(eid);
-        }
-      }
-      safeRecompute(state, 'tripleParallelDeadStep');
-    });
-    return { done: true, popAt: ok ? popAt : null };
-  }
-
-  vp.pos = slerp(vp.pos, mid, TRIPLE_PARALLEL_SHRINK_STEP);
-  vq.pos = slerp(vq.pos, mid, TRIPLE_PARALLEL_SHRINK_STEP);
-  for (const eid of collapse.edges) {
-    const e = state.edges.get(eid);
-    if (!e) continue;
-    for (let i = 1; i < e.points.length - 1; i++) {
-      e.points[i] = slerp(e.points[i], mid, TRIPLE_PARALLEL_SHRINK_STEP);
+  if (!collapse.deflate) {
+    // Try each valid choice of kept face; one whose disc is nearly the whole sphere can fail to
+    // mesh where the other choice (a small disc) builds fine.
+    for (const cfg of tripleConfigs(state, collapse.p, collapse.q, collapse.edges)) {
+      const outside = pointOutsideTripleDisc(state, cfg, collapse.p, collapse.q);
+      const anim = outside ? startDeflate(state, cfg.loop, new Map(), outside, [cfg.inner]) : null;
+      if (anim) { collapse.deflate = anim; collapse.loop = cfg.loop; collapse.inner = cfg.inner; break; }
     }
-    const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
-    const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
+    if (!collapse.deflate) {
+      console.warn('[tripleParallelDeadStep] could not build the deflation for', collapse.edges);
+      return { done: true, popAt: null };
+    }
   }
+  const anim = collapse.deflate;
+  deflateTo(state, anim, nextDeflateDepth(anim, tunables.tripleParallelDeadSpeed));
+  // Hold (still shrinking) until the canon engine can vet the surgery.
+  if (deflateRadius(state, anim) >= TRIPLE_PARALLEL_POP_RADIUS || !canonReady()) return { done: false, popAt: null };
 
-  return { done: false, popAt: null };
+  const popAt = { ...anim.def.center };
+  const ok = finishDeflateAndCommit(state, anim, () => {
+    state.vertices.delete(collapse.p);
+    state.vertices.delete(collapse.q);
+    for (const [eid, e] of [...state.edges]) {
+      if (e.v1 === collapse.p || e.v2 === collapse.p ||
+          e.v1 === collapse.q || e.v2 === collapse.q) {
+        state.edges.delete(eid);
+      }
+    }
+    safeRecompute(state, 'tripleParallelDeadStep');
+  });
+  return { done: true, popAt: ok ? popAt : null };
 }
 
 // ===========================================================================
@@ -1161,22 +1290,21 @@ export function triangleDeadStep(
     }
   }
   const anim = collapse.deflate;
-  deflateTo(state, anim, nextDeflateDepth(anim));
+  deflateTo(state, anim, nextDeflateDepth(anim, tunables.triangleDeadSpeed));
   // Hold (still shrinking) until the canon engine can vet the surgery.
   if (deflateRadius(state, anim) >= TRIANGLE_DEAD_POP_RADIUS || !canonReady()) return { done: false, popAt: null };
 
+  const center = { ...anim.def.center };
   // Finish onto the centre: every vertex and the end of every external edge
   // arrive at it along their own tracks.
-  deflateTo(state, anim, 0);
-  const center = { ...anim.def.center };
-  const eb = state.edges.get(collapse.edgeB)!;
-  const ec = state.edges.get(collapse.edgeC)!;
-  const aToY = eb.v1 === collapse.b ? [...eb.points] : [...eb.points].reverse();
-  aToY[0] = { ...center };
-  const aToZ = ec.v1 === collapse.c ? [...ec.points] : [...ec.points].reverse();
-  aToZ[0] = { ...center };
+  const ok = finishDeflateAndCommit(state, anim, () => {
+    const eb = state.edges.get(collapse.edgeB)!;
+    const ec = state.edges.get(collapse.edgeC)!;
+    const aToY = eb.v1 === collapse.b ? [...eb.points] : [...eb.points].reverse();
+    aToY[0] = { ...center };
+    const aToZ = ec.v1 === collapse.c ? [...ec.points] : [...ec.points].reverse();
+    aToZ[0] = { ...center };
 
-  const ok = commitIfEncodingPreserved(state, () => {
     va.pos = { ...center };
     // Delete B, C, and all edges incident to either — covers the three triangle
     // edges, the external edges, and any extra edges that eliminateIsolatedVertex
@@ -1730,7 +1858,7 @@ export function quadDeadStep(
     return { done: true, popAt: ok ? popAt : null };
   }
 
-  collapse.t = Math.min(1, collapse.t + QUAD_DEAD_STEP_DELTA);
+  collapse.t = Math.min(1, collapse.t + QUAD_DEAD_STEP_DELTA * tunables.quadDeadSpeed);
   const newRemaining = 1 - collapse.t;
   const half = collapse.t / 2;
 
@@ -1983,7 +2111,7 @@ export function enclosedTriangleStep(
     return { done: true, popAt: ok ? popAt : null };
   }
 
-  collapse.t = Math.min(1, collapse.t + ENCLOSED_TRIANGLE_STEP_DELTA);
+  collapse.t = Math.min(1, collapse.t + ENCLOSED_TRIANGLE_STEP_DELTA * tunables.enclosedTriangleSpeed);
   const newRemaining = 1 - collapse.t;
 
   // The whole dead region (triangle edges AB/AC and the BC1/BC2 bigon) shrinks
@@ -2160,12 +2288,13 @@ export function bigonTipStep(
   }
 
   // Slerp W toward A; re-anchor bigon edge endpoints.
-  vw.pos = slerp(vw.pos, target, BIGON_TIP_SHRINK_STEP);
+  const step = scaledStep(BIGON_TIP_SHRINK_STEP, tunables.bigonTipSpeed);
+  vw.pos = slerp(vw.pos, target, step);
   for (const eid of [collapse.e1, collapse.e2]) {
     const e = state.edges.get(eid);
     if (!e) continue;
     for (let i = 1; i < e.points.length - 1; i++) {
-      e.points[i] = slerp(e.points[i], target, BIGON_TIP_SHRINK_STEP);
+      e.points[i] = slerp(e.points[i], target, step);
     }
     const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
     const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
@@ -2360,9 +2489,10 @@ export function selfConnectedDeadStep(
   // --- Animation frame ---
 
   // S always slerps toward the target.
-  vs.pos = slerp(vs.pos, target, SCD_SHRINK_STEP);
+  const step = scaledStep(SCD_SHRINK_STEP, tunables.selfConnectedDeadSpeed);
+  vs.pos = slerp(vs.pos, target, step);
   // In case B, T slerps toward the midpoint too.
-  if (collapse.symmetric) vt.pos = slerp(vt.pos, target, SCD_SHRINK_STEP);
+  if (collapse.symmetric) vt.pos = slerp(vt.pos, target, step);
 
   // Pull S's self-loop and edge S-T toward target; re-anchor endpoints.
   const edgesToPull = [collapse.selfLoopS, collapse.edgeST];
@@ -2372,7 +2502,7 @@ export function selfConnectedDeadStep(
     const e = state.edges.get(eid);
     if (!e) continue;
     for (let i = 1; i < e.points.length - 1; i++) {
-      e.points[i] = slerp(e.points[i], target, SCD_SHRINK_STEP);
+      e.points[i] = slerp(e.points[i], target, step);
     }
     const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
     const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };

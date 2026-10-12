@@ -3,7 +3,7 @@
  * plus <outDir>/REPORT.md listing which children fail and what gets drawn instead.
  *
  * Each position is tested exactly as the app will see it after Load: serialize -> deserialize ->
- * recomputeRegions. A child counts as failing when no router reading of the position reaches it
+ * recomputeRegions -> layout relax. A child counts as failing when no router reading of the position reaches it
  * (moveRouter allRoutedMoves, i.e. what the Position Browser's background pass can find).
  *
  *   npx esbuild scripts/route/failureSaves.ts --bundle --platform=node --format=esm --outfile=<tmp>/f.mjs
@@ -132,7 +132,12 @@ async function main(): Promise<void> {
       for (let m = 0; m < 3 * spots; m++) {
         // The position exactly as Load will rebuild it.
         const save = serializeGameState(state, IDENTITY, spots, tokens, null, history);
-        const loaded = deserializeGameState(save).state;
+        const raw = deserializeGameState(save).state;
+        recomputeRegions(raw);
+        // The app lets the layout physics settle after Load before anything is hovered or routed, and the
+        // router needs that room (on the raw geometry most children look undrawable) — so test the settled one.
+        const loaded = cloneState(raw);
+        relax(loaded);
         recomputeRegions(loaded);
         const res = await analyze(encodePositionDecompressed(loaded).text || 'N'); // the Position Browser's analysis text (see main.ts liveAnalysisText)
         const children = (res.children ?? []).filter(c => c.move && c.move.kind !== MoveKind.InteriorPseudo);
@@ -198,7 +203,8 @@ async function main(): Promise<void> {
         }
   
         // Advance with a random drawable child, recording history + tokens like live play.
-        const options = [...reach.values()];
+        // (strokes must fit `state`'s own geometry, which is the raw reload, not the settled test copy)
+        const options = [...(await enumerateAll(raw)).values()];
         if (options.length === 0) break;
         const pick = options[Math.floor(Math.random() * options.length)];
         const stroke: SpherePoint[] = pick.stroke.map(q => ({ ...q }));

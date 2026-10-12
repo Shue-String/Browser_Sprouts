@@ -124,8 +124,15 @@ int main(int argc, char** argv) {
     std::cerr << "rep set: " << repCanon.size() << " distinct canonical forms\n";
 
     std::set<std::string> seenQuickEnc;  // dedup by quick-canon identity, across files/spec-nodes
-    // lives -> (quickEnc, genome key) rows; sorted by genome just before writing.
-    std::map<int, std::vector<std::pair<std::string, std::string>>> unregistered;
+    // One unregistered quick-canon left side: its quick-canon rep, its genome (classified on the raw
+    // structural form, see this file's doc comment), and that raw form itself -- the first scanned
+    // node that reduced to this rep, so a caller can re-run that exact position elsewhere.
+    struct Row {
+        std::string quickEnc;
+        std::string genome;
+        std::string raw;
+    };
+    std::map<int, std::vector<Row>> unregistered;  // lives -> rows; sorted by genome before writing
     std::map<int, long long> totalByLives;
 
     for (int i = 2; i < argc; ++i) {
@@ -172,7 +179,7 @@ int main(int argc, char** argv) {
             const bool inCollection = repCanon.count(quickEnc) > 0;
             if (inCollection) continue;
 
-            unregistered[lives].push_back({quickEnc, stalks_tools::fullGenomeText(pBase, db)});
+            unregistered[lives].push_back({quickEnc, stalks_tools::fullGenomeText(pBase, db), serialize(pBase)});
         }
         std::cerr << "  scanned " << scanned << ", qualifying single-alpha " << qualifying << "\n";
     }
@@ -195,11 +202,11 @@ int main(int argc, char** argv) {
         auto& bucket = unregistered[lives];
         std::sort(bucket.begin(), bucket.end(),
                   [](const auto& a, const auto& b) {
-                      return a.second != b.second ? a.second < b.second : a.first < b.first;
+                      return a.genome != b.genome ? a.genome < b.genome : a.quickEnc < b.quickEnc;
                   });
-        f << "enc\tgenome\n";
-        for (const auto& [enc, genome] : bucket) {
-            f << enc << "\t" << genome << "\n";
+        f << "enc\tgenome\traw\n";
+        for (const auto& [enc, genome, raw] : bucket) {
+            f << enc << "\t" << genome << "\t" << raw << "\n";
             for (const std::string& t : topLevelTChildren(genome))
                 ++tSubgenomeCounts[t];
         }

@@ -2,11 +2,13 @@
 // every registered Collection element -- see collections.cpp's singleCritFamilies/
 // doubleCritFamilies/multiCritFamilies doc comments) into
 // stalks/src/collection_elements.generated.hpp: a compile-time C++ literal with the exact same
-// shape, in the exact same order (order only matters for allCollectionRosters()'s introspection
-// dump ordering -- the matching registries below key off a std::map, order-independent there).
+// shape, in the exact same order. WASM build ONLY (stalks/build_wasm.bat): native builds read the
+// JSON at runtime instead (collections.cpp's loadFamilies/collectionElementsJson), so after editing
+// the JSON this header only matters once the WASM engine is rebuilt. (Order only matters for
+// allCollectionRosters()'s introspection dump ordering -- the matching registries key off a
+// std::map, order-independent there.)
 //
-// This script does NO derivation -- it only reshapes JSON into C++ struct-literal syntax (same
-// role as scripts/genGenomeDefsHeader.cjs plays for collectionElements.json's genomes). The JSON's "notes"
+// This script does NO derivation -- it only reshapes JSON into C++ struct-literal syntax. The JSON's "notes"
 // fields (hand-written provenance commentary: date added, verification method, why a candidate
 // was rejected/removed) and each element's "minSpots" (the minimum starting-spot count at which
 // that left side is known to appear, or null if unknown) are intentionally NOT transcribed here --

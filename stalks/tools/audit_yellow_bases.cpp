@@ -12,7 +12,6 @@
 #include "alpha_genome.hpp"
 #include "canon.hpp"
 #include "encoding.hpp"
-#include "genome_defs.generated.hpp"
 #include "graph.hpp"
 #include "position.hpp"
 #include "specfile.hpp"
@@ -26,26 +25,6 @@
 
 using namespace stalks;
 using namespace stalks_tools;
-
-namespace {
-
-std::string foldedName(const std::string& family, int shift) {
-    if (shift == 0) return family;
-    return family + "\xE2\x8A\x95" + std::to_string(shift);  // UTF-8 U+2295
-}
-
-std::vector<std::string> allNamedFamilyNames() {
-    std::vector<std::string> names;
-    for (const auto& [family, def] : genome_defs_generated::familyDefs()) {
-        for (int shift = 0; shift <= genome_defs_generated::kMaxShift; ++shift) {
-            const std::string name = foldedName(family, shift);
-            if (hasNamedFamilyEntry(name)) names.push_back(name);
-        }
-    }
-    return names;
-}
-
-}  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) {

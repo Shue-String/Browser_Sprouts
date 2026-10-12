@@ -4,6 +4,7 @@
 #include "position.hpp"
 
 #include <deque>
+#include <functional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -143,6 +144,12 @@ public:
     Node* root() const { return root_; }
     Mode mode() const { return mode_; }
     std::size_t size() const { return nodes_.size(); }
+
+    // Optional progress hook: called with the new node count and its encoding each time build() registers a node.
+    // Lets a long-running tool print periodic status without touching the graph from another thread.
+    std::function<void(std::size_t, const std::string&)> onNewNode;
+    // Called with the raw child's serialization right before an uncached canon of it.
+    std::function<void(const std::string&)> onResolveMiss;
 
     // True Grundy value / nimber offset of the whole start position. In Exact mode the offset is
     // always 0 and rootNimber() == root()->nimber. In Quick mode the root node holds the value of

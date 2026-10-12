@@ -54,7 +54,6 @@ import {
   type TChildClassification,
   COLLECTION_GENOME_TEXT,
   COLLECTION_ROSTER_FOLDER_NAMES,
-  DERIVED_GENOME_COLLECTIONS,
   GENOME_NAMES,
   KNOWN_COLLECTION_MEMBERS,
   KNOWN_COLLECTION_REP,
@@ -429,7 +428,7 @@ function isNamedGenome(genome: AlphaGenome | FourGeneGenome): boolean {
  * entry always carries its quickEnc/quickOffset alongside `enc`) attach it to the returned genome,
  * the same way a freshly-computed genome always carries it (see FourGeneGenome's own doc comment).
  * Without this, a T-child resolved via this fast path could never be recognized as a member of a
- * registered Collection with no hand-authored genome (S_33+) -- registryFoldName would
+ * registered Collection with no registry genome -- registryFoldName would
  * just silently find nothing, forever, since this path never falls through to a fresh engine call
  * once it answers. */
 function byEncGenome(enc: string, ref?: { quickEnc: string; quickOffset: number }): AlphaGenome | undefined {
@@ -1212,10 +1211,10 @@ function renderCollectionItems(name: string, members: Entry[]): { itemsHtml: str
 }
 
 /** The name/count/genome header row shared by both a top-level group's <summary> and a nested
- * offset block's own header -- every collection with a stored genome (hand-authored S_1-S_32 via
- * NAMED_FAMILY_GENOME_TEXT, plus the engine-derived S_33 onward via COLLECTION_GENOME_TEXT, both
+ * offset block's own header -- every collection with a stored genome (registry genomes and their
+ * offsets via NAMED_FAMILY_GENOME_TEXT, plus the display-only ones via COLLECTION_GENOME_TEXT, both
  * straight from collectionElements.json) shows it immediately, with no engine call at all. Z_n
- * (double-crit) and offset siblings of a derived collection have no stored genome and show none.
+ * (double-crit) and offset siblings of a display-only collection have no stored genome and show none.
  * `countText` is omitted entirely for a nested offset block's own header -- all of a family's
  * counts (base plus any non-empty "X⊕n" siblings) are shown ONCE, on the top-level summary only,
  * joined by " ; " (see renderCollectionGroup). */
@@ -1306,9 +1305,9 @@ function folderSortKey(name: string): [number, string, number] {
 }
 
 /** base collection name -> its "X⊕n" offset names in offset order, for every collection the roster or
- * the named-genome registry knows (S_33+, Z_1 and the rest included, not just the hand-authored
+ * the named-genome registry knows (Z_1 and the display-only ones included, not just the registry
  * families) -- so each collection is one folder with its offsets nested inside, never a separate
- * top-level folder per offset. Hand-authored families always list all their MAX_SHIFT offsets
+ * top-level folder per offset. Registry families always list all their MAX_SHIFT offsets
  * (empty ones get dropped later via hasContent); others list only the offsets the roster has. */
 const COLLECTION_OFFSET_GROUPS: ReadonlyMap<string, string[]> = (() => {
   const byBase = new Map<string, Set<string>>();
@@ -1328,13 +1327,13 @@ const COLLECTION_OFFSET_GROUPS: ReadonlyMap<string, string[]> = (() => {
 
 /** Render the Collections side panel (see index.html's #collect-collections-panel): one folder per
  * known collection/family, pre-populated with its static roster members (KNOWN_COLLECTION_MEMBERS,
- * straight from src/data/collectionsRoster.json, genomes from collectionElements.json). A no-op (and leaves the panel's
+ * and genomes both straight from src/data/collectionElements.json). A no-op (and leaves the panel's
  * previous content alone) while the panel is closed, so building this tree doesn't run every
  * render() call for no reason.
  *
  * TOP-LEVEL folders are the named families (S_1, S_2, S_3, ...) unioned with
- * COLLECTION_ROSTER_FOLDER_NAMES (every collection currently registered in stalks/src/
- * collections.cpp, straight from src/data/collectionsRoster.json -- whatever's added there later
+ * COLLECTION_ROSTER_FOLDER_NAMES (every collection currently registered in
+ * src/data/collectionElements.json -- whatever's added there later
  * too) MINUS anything that's actually an "X⊕n" offset of some base (S_5⊕1, Z_1⊕1, ... -- see
  * COLLECTION_OFFSET_GROUPS) -- those get nested
  * inside their own base's group instead (see renderCollectionGroup), never their own top-level
@@ -1352,19 +1351,8 @@ function renderCollections(): void {
   if (!dialog || !panel || !dialog.classList.contains('collections-open')) return;
 
   const offsetNames = new Set([...COLLECTION_OFFSET_GROUPS.values()].flat());
-  // Registry-only "S_n" folders (engine-derived genome -- S_33 onward) with only 2 elements are
-  // hidden from the panel entirely. Re-added after being removed once: a header-patch fix for the
-  // (since removed) live genome fetch looked sufficient on its own under a scripted rapid-scroll
-  // test, but the user's real fast scroll crashed it again regardless -- see
-  // renderCollectionItems' own doc comment (MAX_LISTED_MEMBERS) for the fuller account, and don't
-  // remove this or that cap again without live confirmation. Scoped to the "S_n" name shape (not
-  // e.g. Z_1) and to EXACTLY 2 elements, matching the user's own wording;
-  // collectionsRoster.json/KNOWN_COLLECTION_MEMBERS themselves are untouched, this only changes
-  // which folders the panel itself lists.
-  const isHiddenTinyRegistryFolder = (name: string): boolean =>
-    DERIVED_GENOME_COLLECTIONS.has(name) && collectionItemStats(name).count === 2;
   const topLevelNames = [...new Set([...COLLECTION_ROSTER_FOLDER_NAMES, ...NAMED_FAMILIES.map(f => f.name), ...COLLECTION_OFFSET_GROUPS.keys()])].filter(
-    name => !offsetNames.has(name) && !isHiddenTinyRegistryFolder(name),
+    name => !offsetNames.has(name),
   );
   topLevelNames.sort((a, b) => {
     const ak = folderSortKey(a);

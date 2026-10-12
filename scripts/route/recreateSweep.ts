@@ -7,6 +7,10 @@
  *   npx esbuild scripts/route/recreateSweep.ts --bundle --platform=node --format=esm --outfile=<tmp>/w.mjs
  *   NO_MAIN=1 [LABELS=1] [SHOW=1] [DUMP=<game>:<move>] node <tmp>/w.mjs <games> <maxSpots> <seed>
  *
+ * SAVE_DIR=<dir> writes each game that is not faithful as a loadable save (the recorded game, as played
+ * live) named sweep-s<seed>-g<game>-<stuck|diverged>-m<move>.json, plus a -before.json of the recorded
+ * position just before that move.
+ *
  * LABELS=1 records/replays labelled ("nL:") codes like the app; SHOW=1 prints recorded vs replayed
  * regions at the first divergence; DUMP prints the move-region analysis for one recorded move.
  */
@@ -23,6 +27,11 @@ import { strokeCrossesEdges } from '../../src/model/strokeSynthesis';
 import { allRoutedMoves } from '../../src/model/moveRouter';
 import { recomputeSpotLabels, labelForFromMap, spotGroupForFromMap, resolveMoveEndpoints, resolveBracketEntry, resolveParensEntry } from '../../src/model/vertexLabels';
 import { relax } from './routeHarness';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { serializeGameState } from '../../src/model/saveState';
+import type { HistoryStepInput } from '../../src/model/saveState';
+import type { RotationMatrix } from '../../src/math/sphere';
+const IDENTITY: RotationMatrix = [1, 0, 0, 0, 1, 0, 0, 0, 1];
 function mulberry32(a: number) { return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 const tc = async (s: GameState) => { const t = encodePositionDecompressed(s).text; return t === '' ? 'N' : canon(t); };
 const kind = (before: GameState, v1: number, v2: number) => v1 !== v2 ? 'join/split' : `self-loop deg${before.vertices.get(v1)!.degree}`;
@@ -35,12 +44,14 @@ for (let g = 0; g < games; g++) {
   const spots = 2 + Math.floor(rnd() * (maxSpots - 1));
   const st = createInitialState(spots);
   const tokens: string[] = [], canons: string[] = [], kinds: string[] = [], states: GameState[] = [];
+  const history: HistoryStepInput[] = [];
   for (let m = 0; m < 3 * spots; m++) {
     const opts = [...allRoutedMoves(st, 4)].filter(mv => !strokeCrossesEdges(st, mv.stroke, undefined, mv.v1, mv.v2));
     if (opts.length === 0) break;
     const pick = opts[Math.floor(rnd() * opts.length)];
     const before = cloneState(st);
     try { applyMove(st, { v1: pick.v1, v2: pick.v2, stroke: pick.stroke.map(q => ({ ...q })) }); } catch { break; }
+    history.push({ state: before, committed: { v1: pick.v1, v2: pick.v2, rawStroke: pick.stroke.map(q => ({ ...q })) } });
     if (process.env.DUMP === `${g}:${m + 1}`) {
       const showB = (x: GameState, r: any) => r.boundaries.map((b: any) => b.entries.map((e: any) => e.vertexId).join(' ')).join(' | ');
       const nv = [...st.vertices.keys()].filter(v => !before.vertices.has(v) && !st.vertices.get(v)!.isPseudo);
@@ -77,6 +88,15 @@ for (let g = 0; g < games; g++) {
     relax(rp);
   }
   bump(result.startsWith('faithful') ? 'faithful' : result.split(' at ')[0] + ' ' + result.match(/\((.*?)\)/)![1]);
+  if (process.env.SAVE_DIR && result !== 'faithful') {
+    mkdirSync(process.env.SAVE_DIR, { recursive: true });
+    const m = result.match(/^(stuck|DIVERGED) at (\d+)/)!;
+    writeFileSync(`${process.env.SAVE_DIR}/sweep-s${seed}-g${g}-${m[1].toLowerCase()}-m${m[2]}.json`, JSON.stringify(serializeGameState(st, IDENTITY, spots, tokens, null, history)));
+    // The recorded game as it stood just before the failing move: the position Recreate had to reproduce
+    // from, with the history trimmed to match (load it and play the failing move yourself).
+    const n = Number(m[2]) - 1;
+    writeFileSync(`${process.env.SAVE_DIR}/sweep-s${seed}-g${g}-${m[1].toLowerCase()}-m${m[2]}-before.json`, JSON.stringify(serializeGameState(history[n].state, IDENTITY, spots, tokens.slice(0, n), null, history.slice(0, n))));
+  }
   console.log(`g${g} ${spots} spots, ${tokens.length} moves: ${result}`);
 }
 console.log(JSON.stringify(tally, null, 1));

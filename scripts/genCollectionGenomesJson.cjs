@@ -1,5 +1,5 @@
-// Emits src/data/collectionGenomes.generated.json: every Collection's genome (hand-authored AND
-// engine-derived, see collectionsJson.cjs) plus maxShift/maxFoldDepth, taken from
+// Emits src/data/collectionGenomes.generated.json: every Collection's genome (see
+// collectionsJson.cjs) plus maxShift/maxFoldDepth, taken from
 // src/data/collectionElements.json. A small slice of that file on purpose -- collectAlpha.ts and
 // collect.ts need only the genomes, and importing the full element lists would add ~320KB of
 // left-side encodings to the front-end bundle. Pure derivation, no data of its own.

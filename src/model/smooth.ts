@@ -3,6 +3,7 @@ import type { SpherePoint } from '../math/sphere';
 import { slerp, arcsCross } from '../math/sphere';
 import { fullyDeadVertexIds } from './deadRegions';
 import { tunables } from './tunables';
+import { nearestOnArc, refinementSpacing } from './smoothGeometry';
 
 export interface DragTarget {
   vertexId: VertexId;
@@ -87,22 +88,29 @@ export function smoothStep(state: GameState, shrinkDead = false, extraSkip?: Set
     : deadSkip;
   const forceScale = getForceScale();
   const allEdges = [...state.edges.values()];
-  const index = new SegmentIndex(allEdges);
+  const index = new SegmentIndex(allEdges, isolatedSpots(state));
+  const obstacles = [...state.vertices.values()].filter(v => !v.isPseudo);
 
   for (const e of allEdges) {
     if (e.points.length < 3) continue;
     if (skip.has(e.v1) && skip.has(e.v2)) continue; // fully-dead or collapsing edge
-    if (edgeOvercrowded(e)) {
+    const { ideal, want } = interiorTargets(e, obstacles);
+    if (edgeNeedsResample(e, ideal, want)) {
       // A stroke drawn needlessly long (or an edge dragged much shorter since its
       // last resample) can end up with far more interior points than its current
       // arc length needs. Packed that tightly, redistributePoints/laplacianSmooth
       // can't converge the point count down — they just reshuffle existing points.
       // Recompute the point count the same way a move commit does.
-      resampleEdge(e, index);
+      resampleEdge(e, index, want);
       continue;
     }
     const mayMove = (i: number, next: SpherePoint): boolean => !pointMoveCrosses(index, e, i, next);
-    redistributePoints(e.points, mayMove);
+    // All or nothing: if any point's move is refused, the edge keeps its spacing this frame. Refusing
+    // single points leaves them out of order between moved neighbours, folding the edge into a
+    // visible zig-zag (worst on an edge a collapse is growing each frame, whose targets all shift).
+    redistributePoints(e.points, next =>
+      next.every((p, i) => p === e.points[i] || mayMove(i, p)) &&
+      !(polylineCrossesOthers(index, e, next) && !polylineCrossesOthers(index, e, e.points)));
     laplacianSmooth(e.points, 1, tunables.laplacianStrength * forceScale, mayMove);
     index.refresh(e);
   }
@@ -284,11 +292,13 @@ export function edgeRepellers(state: GameState): Array<{ edgeId: number; point: 
 
 /**
  * Move a point on the unit sphere away from a repeller.
- * Uses a quadratic falloff: force = step * (1 - d/radius)^2 for d < radius.
+ * Uses a quadratic falloff: force = step * (1 - d/radius)^2 for d < radius. `dist` overrides the
+ * distance the falloff uses (the push is still directly away from `repeller`) — how a sample is
+ * made to feel a vertex that its adjacent chord passes close to.
  */
-function repulsePoint(p: SpherePoint, repeller: SpherePoint, step: number, radius: number): SpherePoint {
+function repulsePoint(p: SpherePoint, repeller: SpherePoint, step: number, radius: number, dist?: number): SpherePoint {
   const dot = Math.max(-1, Math.min(1, p.x*repeller.x + p.y*repeller.y + p.z*repeller.z));
-  const d = Math.acos(dot);
+  const d = dist ?? Math.acos(dot);
   if (d < 1e-6 || d >= radius) return p;
   const t = 1 - d / radius;
   const force = step * t * t;
@@ -350,6 +360,16 @@ function wouldCrossAnyEdge(
   return false;
 }
 
+const cross3 = (a: SpherePoint, b: SpherePoint): SpherePoint => ({ x: a.y*b.z - a.z*b.y, y: a.z*b.x - a.x*b.z, z: a.x*b.y - a.y*b.x });
+const dot3 = (a: SpherePoint, b: SpherePoint): number => a.x*b.x + a.y*b.y + a.z*b.z;
+
+/** Positions of the vertices no edge touches. */
+function isolatedSpots(state: GameState): SpherePoint[] {
+  const used = new Set<VertexId>();
+  for (const e of state.edges.values()) { used.add(e.v1); used.add(e.v2); }
+  return [...state.vertices.values()].filter(v => !v.isPseudo && !used.has(v.id)).map(v => v.pos);
+}
+
 /** Chord distance (squared) between two points — cheap broad-phase for arc-vs-arc tests. */
 const chord2 = (a: SpherePoint, b: SpherePoint): number => (a.x-b.x)**2 + (a.y-b.y)**2 + (a.z-b.z)**2;
 const SAME_POINT2 = 1e-12; // two end points this close are the same shared vertex
@@ -382,7 +402,23 @@ class SegmentIndex {
   private keysOf = new Map<Edge, number[]>();
   private stamp = 0;
 
-  constructor(edges: Edge[]) { for (const e of edges) this.add(e); }
+  /**
+   * `spots` are the isolated vertices (no incident edge). Nothing else stops an edge point being
+   * dragged across one: a vertex with edges is fenced in by them, but a lone spot is just a point.
+   */
+  constructor(edges: Edge[], private readonly spots: SpherePoint[] = []) { for (const e of edges) this.add(e); }
+
+  /** True if some isolated spot lies strictly inside the spherical triangle a,b,c (either winding). */
+  sweepsSpot(a: SpherePoint, b: SpherePoint, c: SpherePoint): boolean {
+    const nab = cross3(a, b), nbc = cross3(b, c), nca = cross3(c, a);
+    const hx = a.x + b.x + c.x, hy = a.y + b.y + c.y, hz = a.z + b.z + c.z;
+    for (const p of this.spots) {
+      if (p.x*hx + p.y*hy + p.z*hz <= 0) continue; // antipodal ghost
+      const s1 = dot3(nab, p), s2 = dot3(nbc, p), s3 = dot3(nca, p);
+      if ((s1 > 1e-12 && s2 > 1e-12 && s3 > 1e-12) || (s1 < -1e-12 && s2 < -1e-12 && s3 < -1e-12)) return true;
+    }
+    return false;
+  }
 
   /** Re-file `e` after its points moved or were replaced. */
   refresh(e: Edge): void {
@@ -474,6 +510,7 @@ function pointMoveCrosses(index: SegmentIndex, e: Edge, i: number, next: SphereP
   const crossesAny = (p: SpherePoint): boolean =>
     index.hits(pts[i - 1], p, e, k => Math.abs(k - (i - 1)) <= 1) ||
     index.hits(p, pts[i + 1], e, k => Math.abs(k - i) <= 1);
+  if (index.sweepsSpot(pts[i - 1], pts[i], next) || index.sweepsSpot(pts[i], pts[i + 1], next)) return true;
   return crossesAny(next) && !crossesAny(pts[i]);
 }
 
@@ -481,6 +518,108 @@ function pointMoveCrosses(index: SegmentIndex, e: Edge, i: number, next: SphereP
 function polylineCrossesOthers(index: SegmentIndex, e: Edge, pts: SpherePoint[]): boolean {
   for (let k = 0; k + 1 < pts.length; k++) if (index.hits(pts[k], pts[k + 1], e)) return true;
   return false;
+}
+
+const angBetween = (a: SpherePoint, b: SpherePoint): number => Math.acos(Math.max(-1, Math.min(1, dot3(a, b))));
+
+/** Move p directly away from `from` along the sphere by `amount` radians. */
+function stepAway(p: SpherePoint, from: SpherePoint, amount: number): SpherePoint {
+  const d = Math.max(-1, Math.min(1, dot3(p, from)));
+  const tx = p.x - d * from.x, ty = p.y - d * from.y, tz = p.z - d * from.z;
+  const tl = Math.hypot(tx, ty, tz);
+  if (tl < 1e-9) return p;
+  const nx = p.x + amount * tx / tl, ny = p.y + amount * ty / tl, nz = p.z + amount * tz / tl;
+  const nl = Math.hypot(nx, ny, nz);
+  return { x: nx / nl, y: ny / nl, z: nz / nl };
+}
+
+/**
+ * Hard minimum spacing, applied after the forces. The forces shape the drawing but are soft: an
+ * edge pulled taut round a vertex (Laplacian + tightening) can out-pull the repulsion until a
+ * chord grazes it. This pushes the geometry apart until, measured to the actual segments:
+ *   - a vertex is at least tunables.edgeClearance from every edge it isn't attached to, and
+ *   - two vertices are at least twice that apart (an edge has to fit between them).
+ * Each separation is shared between the two parties, except that the dragged vertex is never
+ * moved (the user has it) and a segment with no movable sample (both ends are vertices) leaves
+ * the vertex to move alone. Every move goes through the same crossing guards as the forces, so a
+ * crowded board ends up tight but legal rather than crossed. Vertices in `skip` (collapsing dead
+ * structure, which has to be free to shrink) and pseudo-vertices are exempt.
+ */
+function enforceClearance(state: GameState, skip: Set<VertexId> | undefined, dragId: VertexId | undefined): void {
+  const c = tunables.edgeClearance;
+  if (c <= 0) return;
+  const edges = [...state.edges.values()];
+  const verts = [...state.vertices.values()].filter(v => !v.isPseudo && !skip?.has(v.id));
+  const nudgeVertex = (v: { id: VertexId; pos: SpherePoint }, from: SpherePoint, amount: number): boolean => {
+    if (amount <= 1e-9) return false;
+    const next = stepAway(v.pos, from, amount);
+    if (next === v.pos || wouldCrossAnyEdge(v.pos, next, v.id, edges)) return false;
+    v.pos = next;
+    return true;
+  };
+
+  for (let pass = 0; pass < 3; pass++) {
+    let moved = false;
+    for (let a = 0; a < verts.length; a++) {
+      for (let b = a + 1; b < verts.length; b++) {
+        const va = verts[a], vb = verts[b];
+        const d = angBetween(va.pos, vb.pos);
+        if (d >= 2 * c || d < 1e-9) continue;
+        const aDrag = va.id === dragId, bDrag = vb.id === dragId;
+        if (aDrag && bDrag) continue;
+        const need = 2 * c - d;
+        const aShare = bDrag ? 1 : aDrag ? 0 : 0.5;
+        const pa = va.pos, pb = vb.pos;
+        if (nudgeVertex(va, pb, need * aShare)) moved = true;
+        if (nudgeVertex(vb, pa, need * (1 - aShare))) moved = true;
+      }
+    }
+    if (moved) anchorEdgeEnds(state);
+
+    let index: SegmentIndex | null = null; // built on the first sample that has to move
+    for (const v of verts) {
+      const vDrag = v.id === dragId;
+      for (const e of edges) {
+        if (e.v1 === v.id || e.v2 === v.id) continue;
+        if (skip && skip.has(e.v1) && skip.has(e.v2)) continue; // fully-dead edge, collapsing
+        const pts = e.points;
+        for (let k = 0; k + 1 < pts.length; k++) {
+          const a = pts[k], b = pts[k + 1];
+          if (Math.sqrt(chord2(v.pos, a)) > c + 1.01 * Math.sqrt(chord2(a, b))) continue;
+          const r = nearestOnArc(v.pos, a, b);
+          if (r.d >= c) continue;
+          const need = c - r.d;
+          const movA = k >= 1, movB = k + 1 <= pts.length - 2; // interior samples; the ends are vertices
+          const vShare = vDrag ? 0 : (movA || movB ? 0.5 : 1);
+          if (nudgeVertex(v, r.q, need * vShare)) moved = true;
+          const eNeed = need * (1 - vShare);
+          if (eNeed <= 1e-9) continue;
+          const wa = movA ? (1 - r.t) : 0, wb = movB ? r.t : 0;
+          const w2 = wa * wa + wb * wb;
+          if (w2 < 0.04) continue; // contact point sits on a fixed end: nothing to move
+          index ??= new SegmentIndex(edges, isolatedSpots(state));
+          for (const [i, w] of [[k, wa], [k + 1, wb]] as const) {
+            if (w <= 0) continue;
+            const next = stepAway(pts[i], v.pos, eNeed * w / w2);
+            if (next !== pts[i] && !pointMoveCrosses(index, e, i, next)) { pts[i] = next; moved = true; }
+          }
+          index.refresh(e);
+        }
+      }
+    }
+    if (moved) anchorEdgeEnds(state);
+    if (!moved) break;
+  }
+}
+
+/** Re-anchor every edge's end points to its (possibly moved) vertices. */
+function anchorEdgeEnds(state: GameState): void {
+  for (const e of state.edges.values()) {
+    const v1 = state.vertices.get(e.v1);
+    const v2 = state.vertices.get(e.v2);
+    if (v1) e.points[0] = { ...v1.pos };
+    if (v2) e.points[e.points.length - 1] = { ...v2.pos };
+  }
 }
 
 /**
@@ -532,11 +671,20 @@ function repulsionStep(state: GameState, drag?: DragTarget, skip?: Set<VertexId>
       if (m.skipVertexIds?.has(v.id)) continue;
       pos = repulsePoint(pos, m.point, tunables.vertexRepulsionStep * forceScale, tunables.repulsionRadius);
     }
-    // Repel from interior sample points of edges not incident to this vertex.
+    // Repel from the nearest point of every segment of edges not incident to this vertex. A
+    // segment's push scales with its length (relative to the usual sample spacing), so the total
+    // doesn't depend on how many samples an edge happens to have and a chord can't slip past.
     for (const e of allEdges) {
       if (e.v1 === v.id || e.v2 === v.id) continue;
-      for (let i = 1; i < e.points.length - 1; i++) {
-        pos = repulsePoint(pos, e.points[i], tunables.sampleRepulsionStep * forceScale, tunables.repulsionRadius);
+      const last = e.points.length - 2;
+      for (let i = 0; i <= last; i++) {
+        const a = e.points[i], b = e.points[i + 1];
+        const segLen = Math.sqrt(chord2(a, b)) * 1.01;
+        if (Math.sqrt(chord2(pos, a)) > tunables.repulsionRadius + segLen) continue;
+        const r = nearestOnArc(pos, a, b);
+        if (r.d >= tunables.repulsionRadius) continue;
+        if ((i === 0 && r.t === 0) || (i === last && r.t === 1)) continue; // a terminal vertex: vertex-vertex handles it
+        pos = repulsePoint(pos, r.q, tunables.sampleRepulsionStep * forceScale * segLen * tunables.pointsPerRadian, tunables.repulsionRadius);
       }
     }
     // --- TIGHT-ANGLE SPREADING ---
@@ -594,16 +742,11 @@ function repulsionStep(state: GameState, drag?: DragTarget, skip?: Set<VertexId>
   }
 
   // 2. Re-anchor edge endpoints.
-  for (const e of state.edges.values()) {
-    const v1 = state.vertices.get(e.v1);
-    const v2 = state.vertices.get(e.v2);
-    if (v1) e.points[0] = { ...v1.pos };
-    if (v2) e.points[e.points.length - 1] = { ...v2.pos };
-  }
+  anchorEdgeEnds(state);
 
   // 3. Repel interior sample points.
   //    Each edge's own midpoint is excluded — it must not repel itself.
-  const index = new SegmentIndex(allEdges); // after the re-anchoring above
+  const index = new SegmentIndex(allEdges, isolatedSpots(state)); // after the re-anchoring above
   for (const e of state.edges.values()) {
     if (skip && skip.has(e.v1) && skip.has(e.v2)) continue; // fully-dead edge, collapsing
     const edgeMidpoints = midpoints
@@ -612,8 +755,16 @@ function repulsionStep(state: GameState, drag?: DragTarget, skip?: Set<VertexId>
     for (let i = 1; i < e.points.length - 1; i++) {
       const orig = e.points[i];
       let p = orig;
-      for (const r of vertexPositions) {
-        p = repulsePoint(p, r, tunables.sampleRepulsionStep * forceScale, tunables.repulsionRadius);
+      // A vertex the edge isn't attached to is felt through the sample's two chords, so a long
+      // chord passing close to it pushes both its end points even when they're far away.
+      const chordA = angBetween(e.points[i - 1], p), chordB = angBetween(p, e.points[i + 1]);
+      for (const r of vertexEntries) {
+        const pointDist = angBetween(p, r.pos);
+        if (pointDist >= tunables.repulsionRadius + Math.max(chordA, chordB)) continue;
+        const attached = r.id === e.v1 || r.id === e.v2;
+        const d = attached ? pointDist
+          : Math.min(pointDist, nearestOnArc(r.pos, e.points[i - 1], p).d, nearestOnArc(r.pos, p, e.points[i + 1]).d);
+        p = repulsePoint(p, r.pos, tunables.sampleRepulsionStep * forceScale, tunables.repulsionRadius, d);
       }
       for (const r of edgeMidpoints) {
         p = repulsePoint(p, r, tunables.sampleRepulsionStep * forceScale, tunables.repulsionRadius);
@@ -635,6 +786,8 @@ function repulsionStep(state: GameState, drag?: DragTarget, skip?: Set<VertexId>
     }
     index.refresh(e);
   }
+
+  enforceClearance(state, skip, drag?.vertexId);
 
   // Sync pseudo-vertex positions to their edge's current arc midpoint so they
   // move with the edge during smoothing rather than floating free.
@@ -747,19 +900,33 @@ export function smoothStepDrag(state: GameState, drag: DragTarget): boolean /* r
 // from normal jitter.
 
 /**
- * True if an edge has accumulated far more interior points than its current
- * (post-shrink) arc length needs — e.g. a stroke drawn needlessly long across
- * the sphere whose endpoints have since been pulled close together by layout
- * smoothing. redistributePoints/laplacianSmooth only reposition the existing
- * points along the polyline; they never change how many there are, so an
- * overcrowded edge can stay visibly bunched instead of settling.
+ * How many interior points an edge should have: `ideal` from its arc length alone, and `want`,
+ * which is more when it passes close to a vertex it isn't attached to or bends sharply (see
+ * refinementSpacing) — redistributePoints keeps an edge's spacing uniform, so the only way to
+ * sample a tight spot finely is to sample the whole edge more finely.
  */
-function edgeOvercrowded(e: Edge): boolean {
+function interiorTargets(e: Edge, vertices: { id: VertexId; pos: SpherePoint }[]): { ideal: number; want: number } {
   const arcLen = polylineLength(e.points);
-  const idealInterior = Math.max(1, Math.round(arcLen * tunables.pointsPerRadian));
+  const ideal = Math.max(1, Math.round(arcLen * tunables.pointsPerRadian));
+  const obstacles = vertices.filter(v => v.id !== e.v1 && v.id !== e.v2).map(v => v.pos);
+  const spacing = refinementSpacing(e.points, obstacles, tunables.curveRefineAngle, tunables.curveRefineWindow);
+  const refined = Number.isFinite(spacing) ? Math.min(tunables.maxEdgePoints, Math.ceil(arcLen / spacing) - 1) : 0;
+  return { ideal, want: Math.max(ideal, refined) };
+}
+
+/**
+ * True if an edge's point count has drifted from what it should be: far more interior points
+ * than `want` (e.g. a stroke drawn needlessly long across the sphere whose endpoints have since
+ * been pulled close together — redistributePoints/laplacianSmooth only reposition the existing
+ * points, they never change how many there are), or well under it because the edge now needs
+ * refining. Needs both a ratio and an absolute floor on the too-many side: the ratio alone would
+ * trigger on short edges with just a couple of "extra" points from normal jitter; the too-few
+ * side has a 20% dead band so a target that wobbles by a point doesn't resample every frame.
+ */
+function edgeNeedsResample(e: Edge, ideal: number, want: number): boolean {
   const actualInterior = e.points.length - 2;
-  return actualInterior > idealInterior * tunables.overcrowdRatio
-      && actualInterior - idealInterior > tunables.overcrowdMinExcess;
+  return (actualInterior > want * tunables.overcrowdRatio && actualInterior - want > tunables.overcrowdMinExcess)
+      || (want > ideal && actualInterior < 0.8 * want);
 }
 
 /**
@@ -767,12 +934,13 @@ function edgeOvercrowded(e: Edge): boolean {
  */
 export function resampleAllEdges(state: GameState): void {
   const allEdges = [...state.edges.values()];
-  const index = new SegmentIndex(allEdges);
-  for (const e of allEdges) resampleEdge(e, index);
+  const index = new SegmentIndex(allEdges, isolatedSpots(state));
+  const vertices = [...state.vertices.values()].filter(v => !v.isPseudo);
+  for (const e of allEdges) resampleEdge(e, index, interiorTargets(e, vertices).want);
 }
 
 /**
- * Resample an edge to a point count proportional to its arc length.
+ * Resample an edge to `interior` interior points (see interiorTargets).
  * Replaces e.points in-place; endpoints are preserved exactly.
  *
  * Resampling puts new points on the old polyline, so each new chord cuts the corner it spans — on
@@ -781,10 +949,10 @@ export function resampleAllEdges(state: GameState): void {
  * four times, the points (chords hug the curve more closely), and the edge is left as it was if
  * even that crosses. Re-files the edge in `index` when its points change.
  */
-function resampleEdge(e: Edge, index: SegmentIndex): void {
+function resampleEdge(e: Edge, index: SegmentIndex, interior: number): void {
   const old = e.points;
   if (old.length < 2) return;
-  const ideal = Math.max(1, Math.round(polylineLength(old) * tunables.pointsPerRadian));
+  const ideal = interior;
   const crossedBefore = polylineCrossesOthers(index, e, old);
   for (const factor of [1, 2, 4]) {
     const next = resampledPoints(old, ideal * factor);
@@ -825,7 +993,9 @@ function resampledPoints(pts: SpherePoint[], interiorCount: number): SpherePoint
 // Arc-length redistribution
 // ---------------------------------------------------------------------------
 
-function redistributePoints(pts: SpherePoint[], mayMove?: (i: number, next: SpherePoint) => boolean): boolean {
+/** Respace an edge's interior points evenly along its arc length. `accept` (if given) vets the whole
+ * respaced polyline, which is applied only if it passes. */
+function redistributePoints(pts: SpherePoint[], accept?: (next: SpherePoint[]) => boolean): boolean {
   const n = pts.length;
   const arcLen = [0];
   for (let i = 1; i < n; i++) {
@@ -846,10 +1016,13 @@ function redistributePoints(pts: SpherePoint[], mayMove?: (i: number, next: Sphe
   }
   result.push({ ...pts[n-1] });
 
+  // Endpoints are untouched; pass them through as the same objects so `accept` can tell them apart.
+  result[0] = pts[0];
+  result[n - 1] = pts[n - 1];
+  if (accept && !accept(result)) return false;
   let moved = false;
   for (let i = 1; i < n - 1; i++) {
     const dot = Math.max(-1, Math.min(1, pts[i].x*result[i].x + pts[i].y*result[i].y + pts[i].z*result[i].z));
-    if (mayMove && !mayMove(i, result[i])) continue;
     if (Math.acos(dot) > tunables.settleEpsilon) moved = true;
     pts[i] = result[i];
   }

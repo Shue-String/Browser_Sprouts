@@ -27,7 +27,10 @@
 #include <exception>
 #include <fstream>
 #include <iostream>
+#include <atomic>
+#include <mutex>
 #include <set>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -84,6 +87,40 @@ static int run(int argc, char** argv) {
     } else {
         const auto t0 = std::chrono::steady_clock::now();
         GameGraph g(GameGraph::Mode::Quick);
+        // Progress line every 15 minutes (checked as nodes are created; the total node count is
+        // unknown up front, so this reports absolute progress, not a percentage).
+        const char* envSecs = std::getenv("QRC_PROGRESS_SECS");  // default 15 min; override for debugging
+        const int progressSecs = envSecs ? std::atoi(envSecs) : 900;
+        // A watchdog thread prints every interval even when no node is being created, so a hang
+        // inside one huge build shows up as an unchanged node count plus the position being built.
+        std::mutex mu;
+        std::size_t curNodes = 0;
+        std::string curEnc, curRaw;
+        g.onNewNode = [&](std::size_t nodes, const std::string& enc) {
+            std::lock_guard<std::mutex> lk(mu);
+            curNodes = nodes;
+            curEnc = enc;
+        };
+        g.onResolveMiss = [&](const std::string& raw) {
+            std::lock_guard<std::mutex> lk(mu);
+            curRaw = raw;
+        };
+        std::atomic<bool> done{false};
+        std::thread watchdog([&] {
+            auto next = t0 + std::chrono::seconds(progressSecs);
+            while (!done) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                const auto now = std::chrono::steady_clock::now();
+                if (now < next)
+                    continue;
+                next = now + std::chrono::seconds(progressSecs);
+                std::lock_guard<std::mutex> lk(mu);
+                std::cerr << "[progress] " << std::chrono::duration<double>(now - t0).count() / 60.0
+                          << " min, " << curNodes << " nodes, last new node: "
+                          << curEnc.substr(0, 300)
+                          << " | raw child being canonicalized: " << curRaw.substr(0, 400) << std::endl;
+            }
+        });
         const Position start = parsePosition(startEncoding(n));
         int off = 0;
         for (int k = 2; k < n; ++k)  // same incremental build order as the master-save harness
@@ -91,6 +128,8 @@ static int run(int argc, char** argv) {
         Node* root = g.ensure(start, &off);
         const int trueVal = root->nimber ^ off;
         const std::size_t cnt = saveSubgraphToFile(g, root, masterPath);
+        done = true;
+        watchdog.join();
         const SolvedDB db = loadGraphFromFile(masterPath);
         SolvedDB::Value v;
         int loadOff = 0;

@@ -82,6 +82,8 @@ export interface RenderOptions {
   proposedArc?: SpherePoint[];
   /** Position Browser hover/lock preview of a child move — drawn dashed purple. */
   movePreviewArc?: SpherePoint[];
+  /** Debug: the preview's route before smoothing — drawn dashed orange under the purple arc. */
+  movePreviewRawArc?: SpherePoint[];
   /** Position Browser hover/lock preview when the target endpoints are known but no
    *  non-crossing stroke could be synthesized to reach it — drawn as red rings around
    *  the vertex(es) that should be connected instead of a (wrong) arc. */
@@ -785,6 +787,23 @@ export class Renderer {
         ctx.stroke();
         ctx.restore();
       }
+    }
+
+    // --- Raw (unsmoothed) move plan, under the preview arc ---
+    if (opts.movePreviewRawArc && opts.movePreviewRawArc.length >= 2) {
+      const ctx = this.ctx;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(245, 140, 20, 0.95)';
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([3, 4]);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      const pts = opts.movePreviewRawArc.map(p => this.toCanvas(p, camera));
+      ctx.beginPath();
+      ctx.moveTo(pts[0].px, pts[0].py);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].px, pts[i].py);
+      ctx.stroke();
+      ctx.restore();
     }
 
     // --- Move preview arc (Position Browser hover/lock) ---

@@ -175,7 +175,12 @@ resolved to concrete vertex IDs), `ParsedSequence`.
 | `resampleEdge(e, index)` (internal) | Resample edge to a point count proportional to arc length. A result that newly crosses another edge is retried at 2x/4x points, else the old points are kept (chords across a tight bend used to slice neighbouring edges) |
 | `resampleAllEdges(state)` | Guarded resample of every edge — use instead of looping `resampleEdge` |
 | `pointMoveCrosses(index, e, i, next)` (internal) | Crossing guard for interior edge-point moves (redistribute, Laplacian, sample repulsion/tightening); rejects a move only if it creates a crossing the current position doesn't already have |
+| `redistributePoints(pts, accept?)` (internal) | Even arc-length respacing. In smoothStep it is ALL OR NOTHING: if any point fails `pointMoveCrosses` (or the new polyline newly crosses another edge) the edge keeps its spacing that frame. Per-point refusal left points out of order and folded the edge into zig-zags, worst on external edges a deflating collapse grows each frame |
 | `SegmentIndex` (internal class) | Uniform 3D grid of edge segments (padded by arc sagitta) behind the crossing guards, so a query tests only nearby segments; built per phase, `refresh(e)` after an edge's points move, the edge being moved is scanned directly. Without it the guard made smoothStep ~6x slower (quadratic in points) |
+| `enforceClearance(state, skip, dragId)` (internal) | Hard minimum spacing after the forces: vertex >= `tunables.edgeClearance` from every non-incident segment, vertices >= 2x that apart; shared between the parties, dragged vertex never moved, dead (`skip`) and pseudo vertices exempt, every move behind the crossing guards |
+| `SegmentIndex.sweepsSpot` / `pointMoveCrosses` | Edge-point moves also rejected when they would sweep over an isolated spot (a lone spot has no edges to fence it in) |
+| `interiorTargets(e, vertices)` / `edgeNeedsResample` (internal) | Point count an edge should have: arc-length ideal, raised by `refinementSpacing` (smoothGeometry.ts) near non-attached vertices. The net-bend trigger (`curveRefineAngle`) is OFF by default: on, Recreate replays 14/40 sweep games faithfully vs 37/40 |
+| `src/model/smoothGeometry.ts` | `nearestOnArc(p,a,b)` point-to-arc distance; `refinementSpacing` |
 
 Tuning constants live in `src/model/tunables.ts` (see below), not inline in this file anymore.
 
@@ -188,7 +193,8 @@ Tuning constants live in `src/model/tunables.ts` (see below), not inline in this
 | `Tunables` (interface) | Shape of the tunable constant set (repulsion radii, step sizes, thresholds, etc.) |
 | `DEFAULT_TUNABLES` | Factory defaults |
 | `tunables` | The live, mutable tunable object smoothing/rendering code reads from |
-| `TunableSpec` / `TUNABLE_SPECS` | Metadata (label, min/max/step) driving the in-app tuning panel |
+| `TunableSpec` / `TUNABLE_SPECS` | Metadata (label, min/max/step, optional panel `column`) driving the in-app tuning panel |
+| `*Speed` keys (`deadShrinkSpeed`, `louseSpeed`, `parallelDeadSpeed`, `tripleParallelDeadSpeed`, `triangleDeadSpeed`, `quadDeadSpeed`, `enclosedTriangleSpeed`, `bigonTipSpeed`, `selfConnectedDeadSpeed`) | Per-collapse animation speed multiplier (1 = the original hard-coded pace, default 0.5), one per step function; panel column 2. Slerp steps go through `scaledStep` (`1-(1-s)^speed`), deflations advance `nextDeflateDepth`'s frame by `speed`, quad/enclosed-triangle scale their `t` delta |
 | `loadTunables()` | Load saved overrides from localStorage into `tunables` |
 | `saveTunables()` | Persist current `tunables` to localStorage |
 | `resetTunables()` | Reset `tunables` back to `DEFAULT_TUNABLES` |
@@ -202,7 +208,7 @@ Tuning constants live in `src/model/tunables.ts` (see below), not inline in this
 | Function | Description |
 |---|---|
 | `fullyDeadVertexIds(state)` | Set of all vertices in fully-dead connected components (used by smooth.ts to skip them) |
-| `deadRegionStep(state, skip?)` | One frame: shrink fully-dead components toward centroid; pop when small enough. Returns `{ moving, popped, popCentroids }` |
+| `deadRegionStep(state, skip?, focus?)` | One frame for ONE fully-dead component (the `focus` one first, jammed/refused ones passed over): shrink toward centroid, pop when small enough. Returns `{ moving, popped, popCentroids, focus }`; main.ts feeds `focus` back so a component runs to its pop before the next starts |
 | `eliminateIsolatedVertex(state, skip?)` | Splice out one degree-2 dead vertex between two non-bigon neighbors; returns pop position or null |
 | `scabAloneCollapse(state, skipVertices?)` | To fixpoint: for each dead boundary with exactly one live vertex (a scab), delete the dead neighbors and create a self-loop edge on the scab |
 
@@ -212,7 +218,7 @@ Tuning constants live in `src/model/tunables.ts` (see below), not inline in this
 |---|---|---|
 | `detectLouse(state)` | `louseCollapseStep(state, collapse)` | Theta-graph: 2 degree-3 vertices + 1 degree-2, 4 edges, 3 dead regions |
 | `detectParallelDead(state)` | `parallelDeadStep(state, collapse)` | Bigon: 2 degree-3 vertices connected by exactly 2 parallel edges, each with one external edge. Animated by deflate-in-place (below); pop joins X-P + Q-Y into one X-Y edge (self-loop if X = Y) |
-| `detectTripleParallelDead(state)` | `tripleParallelDeadStep(state, collapse)` | N-parallel-edge generalization of the bigon case (3+ parallel edges between the two degree-3 vertices) |
+| `detectTripleParallelDead(state)` | `tripleParallelDeadStep(state, collapse)` | Three parallel edges between two degree-3 vertices, >=2 faces dead. Deflates in place: `tripleConfigs` picks which face stays (the other two must be EMPTY — only P,Q on their boundary; the first step tries each valid choice, since a near-whole-sphere disc can fail to mesh) and the disc bounded by the other two edges deflates with the middle edge carried along. Refused pop restores the pre-finish geometry |
 | `detectTriangleDead(state)` | `triangleDeadStep(state, collapse)` | Triangle: 3-vertex dead boundary, each vertex with one external edge. Animated by deflate-in-place (below); pop re-roots B/C external edges at A on the centre |
 | `detectQuadDead(state)` | `quadDeadStep(state, collapse)` | Quadrilateral: 4-vertex dead boundary; collapses to 2 new vertices + 5 edges |
 | `detectBigonTip(state)` | `bigonTipStep(state, collapse)` | Degree-2 vertex hanging off a degree-3 vertex where both edges go to the same neighbor |
@@ -224,20 +230,26 @@ Each `Collapse` type above (`LouseCollapse`, `ParallelDeadCollapse`, `TriplePara
 `SelfConnectedDeadCollapse`) is also exported as an interface describing the detected shape
 passed from `detectX` into `xStep`.
 
-**Deflate-in-place** (shared by `parallelDeadStep` and `triangleDeadStep`; the dead face shrinks onto a point
+**Deflate-in-place** (shared by `parallelDeadStep`, `triangleDeadStep` and `tripleParallelDeadStep`; the dead face shrinks onto a point
 inside itself via `faceDeflate.ts`, external edges are EXTENDED each frame along their vertex's track so
 smoothing keeps relaxing the surrounding structure during the collapse): `startDeflate` (snapshot the face
-loop + external edges, build the map), `nextDeflateDepth` (eased depth schedule), `deflateTo` (lay out
+loop + optional external edges + optional interior edges, build the map), `nextDeflateDepth` (eased depth schedule), `deflateTo` (lay out
 vertices/boundary edges/external-edge growth at depth r), `deflateRadius` (pop test). Pops hold until
 `canonReady()` so the encoding gate can always run.
 
+**One collapse at a time** (main.ts): `pendingCollapse` (special) and `generalCollapseFocus` (deadRegionStep's
+component) are mutually exclusive (`collapseActive()`); `checkForCollapses` does nothing while either runs and is
+re-run when a general shrink ends. The instant surgeries (`scabAloneCollapse`, `eliminateIsolatedVertex`) are not
+queued. `window.__sprouts.collapse` reports the active one.
+
 Key internal helpers: `occupiedCentroidAntipode` (steering waypoint away from the occupied side
-of the sphere, used by both `quadDeadStep` and `enclosedTriangleStep`), and a shared path-
-deformation group used by `quadDeadStep`/`enclosedTriangleStep` to retrace real (frozen-at-
-detection) edges instead of slerping toward a fresh target each frame: `pointAlongPath` (point at
-a fractional position along a frozen path), `pathPrefix`/`pathSlice` (sub-ranges of a frozen path,
-for the still-unreeled portion), `deformPreservingOffset` (re-anchor a frozen path's shape to a
-live, possibly-waypoint-bent chord — see memory `project_dead_region_elimination.md`).
+of the sphere, used by `quadDeadStep`), and a shared path-deformation group used by
+`quadDeadStep`/`enclosedTriangleStep` to retrace real (frozen-at-detection) edges instead of slerping
+toward a fresh target each frame: `pointAlongPath` (point at a fractional position along a frozen path),
+`pathSlice` (sub-range of a frozen path, for the still-unreeled portion), `deformPreservingOffset`
+(re-anchor a frozen path's shape to a live, possibly-waypoint-bent chord — see memory
+`project_dead_region_elimination.md`), `shrinkTowardAnchor` (enclosedTriangleStep: a homothety about A in
+the stereographic chart centred on A's external neighbour).
 
 ---
 
@@ -255,6 +267,7 @@ crowding breaks it on thin sliver faces.)
 | `stereoChart(pole)` | Stereographic chart `{fwd, inv}` projecting from `pole` (also used by `deadRegions.ts`'s `shrinkTowardAnchor`) |
 | `buildFaceDeflation(loop, outside)` | Build the map for the face bounded by `loop` on the side away from `outside`; returns `thetas` (boundary angle per loop point) + `center`, or null if degenerate |
 | `deflatePoint(def, theta, r)` | Point at depth r on boundary point theta's track |
+| `diskBoundaryPoint(def, theta)` / `diskPointOf(def, p)` / `deflateInteriorPath(def, disk, r)` | Carry a curve lying INSIDE the face through the deflation: H of its points once (boundary ends by angle, interior points by chart barycentrics), then the scaled disk path traced exactly at each depth |
 | `deflateArc(def, theta0, theta1, r)` | Deflated boundary between two angles, traced EXACTLY through the piecewise-linear map (a point per mesh-edge crossing, so chords can't clip neighbouring tracks) |
 | `deflateTrack(def, theta, r0, r1)` | A boundary point's track between two depths, traced exactly |
 
@@ -378,9 +391,11 @@ directly (`moves.hpp`'s `specialPointMovetypes`: movetype 1→R, 2→D, 3→L, 4
 the single TS-side source of truth for genome shapes, family names, and fold/bypass resolution;
 shared by both Collect (`src/ui/collect.ts`) and T-Tree (`src/model/ttree.ts` / `src/ui/ttree.ts`).
 The native mirror of this file's registry is `stalks/tools/alpha_genome.cpp` — the two are kept in
-sync via each collection's `genome` field in `src/data/collectionElements.json` (hand-authored for S_1–S_32, engine-derived and flagged
-`derived: true` for S_33+) → `scripts/genGenomeDefsHeader.cjs` (hand-authored only) → `stalks/tools/genome_defs.generated.hpp`, and →
-`scripts/genCollectionGenomesJson.cjs` → `src/data/collectionGenomes.generated.json` (every genome; what this file reads). Do not hand-edit the generated files. `COLLECTION_GENOME_TEXT` holds every collection's genome text.
+sync via each collection's `genome` field in `src/data/collectionElements.json` (the engine's answer for the rep, refreshed by
+`scripts/refreshGenomes.cjs`) → read at runtime by `stalks/tools/genome_defs.cpp`, and →
+`scripts/genCollectionGenomesJson.cjs` → `src/data/collectionGenomes.generated.json` (every genome; what this file reads). Do not hand-edit the generated files. Both sides build the fold/collision registry from
+every genome whose T-genes are all collection names; a genome still holding a nested, unnamed T genome is display-only.
+`COLLECTION_GENOME_TEXT` holds every collection's genome text.
 
 | Export | Description |
 |---|---|
@@ -391,7 +406,7 @@ sync via each collection's `genome` field in `src/data/collectionElements.json` 
 | `registryIndexReady` (promise) | Resolves once `buildRegistryIndex()` has finished folding the stored genomes into the in-memory `REGISTRY` |
 | `registryFoldName(g)` | Resolve a `{quickEnc, quickOffset}` pair to its registered family name, if any |
 | `KNOWN_COLLECTION_MEMBERS` / `KNOWN_COLLECTION_REP` / `KNOWN_COLLECTION_REP_RAW` | Per-family member lists / representative encodings, derived from `COLLECTION_ROSTERS` |
-| `GENOME_NAMES` / `NAMED_FAMILY_GENOME_TEXT` / `NAMED_FAMILIES` / `COLLECTION_GENOME_TEXT` | The resolved family registry (name → genome text, full family records; `COLLECTION_GENOME_TEXT` covers every collection incl. engine-derived S_33+) |
+| `GENOME_NAMES` / `NAMED_FAMILY_GENOME_TEXT` / `NAMED_FAMILIES` / `COLLECTION_GENOME_TEXT` | The resolved family registry (name → genome text, full family records; `COLLECTION_GENOME_TEXT` covers every collection incl. display-only ones) |
 | `familyForCore(g)` | Look up a family by its `(R,D,{L},{T'})` core key alone (ignores `[T]`) — see `reference_family_core_collision_bug.md` for a 2026-09-03 bug in an earlier version of this lookup |
 | `bypassOnlyFoldName(g, resolveChild, depth)` / `resolvedFoldName(...)` | Resolve a genome's display name allowing one level of "bypass" (fold through an unnamed intermediate T-child to a named grandchild) |
 | `findBypassMatches(...)` | Full bypass-match search used by the T-gene table / T-Tree "extra" edge classification |
@@ -447,6 +462,18 @@ path (`toLatexMath`) and the dotted-line move-preview demo referenced in
 | `buildTTreeTablesLatex(graph, onProgress?)` | One compilable LaTeX document: a genome table (`collect.ts`'s `buildGenomeTableLatex`, with each bypassed T-child's last column showing the position it bypasses to) for every `requiredByAny` (i.e. non-bypassed) node, fewest lives first, then ONE nimber table: the full game tree (every single subposition, via `analyze`) below every R/D/L/Z child those tables quote, smallest-lives parent first, each parent's distinct children + their nimbers (just the child's nimber, no written-out nim-sum). Sum XORs and per-parent mex are re-checked against the engine, mismatches flagged `(!)`. Each parent is one unbreakable longtable row with a nested children table; fixed column widths so one compile pass aligns the header |
 | `downloadText(filename, text)` | Blob-download helper (the dump is too big to paste) |
 
+## `src/model/genomeCensus.ts` — Genomes pane data
+
+| Function | Description |
+|---|---|
+| `genomeCensus()` | One `GenomeCensusRow` per (collection, offset) group of `collectionElements.json` (plus any offset used as a T-gene with no elements of its own, e.g. `S_2⊕1`): genome text, rep, element count (offset 0 counts the rep), min/max extra-adjusted lives with the crit counted as one life (`CRIT_LIVES`, via `ttree.ts`'s `adjustedLivesOf`), number of collections using the group as a direct T-gene, and the sum of those collections' offset-0 counts. Computed once, cached |
+
+## `src/ui/genomes.ts` — Genomes window (top-bar "Genomes" button)
+
+| Function | Description |
+|---|---|
+| `initGenomes()` | Wire the sortable/filterable `genomeCensus()` table once; safe to call multiple times |
+
 ---
 
 ## `src/ui/collect.ts` — Collect window: genetic-code browser + Advanced Collections panel
@@ -463,9 +490,8 @@ Everything else is internal (this file has grown substantially since the DisaPoi
   `collectAlpha.ts` (ALPHA-genome pipeline, not the old DisaPoint one), and builds the T-gene
   table (`renderRequiredLine`/`computeRowInfos`/`findBypassMatches`) — the same logic
   `stalks/tools/yellow_check.cpp` ports natively for offline cross-checking.
-- **Advanced Collections panel**: browses the registered-family roster from
-  `src/data/collectionsRoster.json` (generated by `stalks/tools/dump_collections_roster.cpp` from
-  the native `collections.cpp` registry — regenerate after any native registry edit) and
+- **Advanced Collections panel**: browses the registered-family roster read directly from
+  `src/data/collectionElements.json` (`collectAlpha.ts`'s `COLLECTION_ROSTERS`) and
   `collectAlphaGenomes.json`. For registry-only (S_33+) folder families with no bundled member
   list, the full genome is computed live on scroll-into-view (`IntersectionObserver` + a targeted
   single-header DOM patch, not a full re-render) — see `project_collect_collections_panel.md`'s six
@@ -769,17 +795,25 @@ Shared headers (not standalone tools): `alpha_genome.hpp`/`.cpp` (single-alpha `
 genome classification, shared by the discovery/audit tools below), `double_crit_genome.hpp`/`.cpp`
 (two-crit genome assembly, built on `alpha_genome.hpp`), `registry_audit_common.hpp`/`.cpp` (shared
 TSV parse/write plumbing for the three `audit_registry_*`/`verify_registry_shrink` tools),
-`genome_defs.generated.hpp` (generated — see Build scripts below, do not hand-edit).
+`genome_defs.hpp`/`.cpp` (loads the registry genomes — those with all-named T-genes — + `maxShift`/`maxFoldDepth` from
+`src/data/collectionElements.json` at runtime, via the engine's `collectionElementsJson()`).
+
+Native data loading: `stalks/src/json.hpp`/`.cpp` is a minimal JSON parser; `collections.cpp`'s
+`collectionElementsJson()` reads `src/data/collectionElements.json` once per process (path baked in
+by `CMakeLists.txt`'s `STALKS_COLLECTION_ELEMENTS_JSON`, set on `stalks_core` only) and builds the
+single/double/multi registries from it, so a JSON edit needs no native rebuild. Without that macro
+(the WASM build) `collections.cpp` compiles the registry from `collection_elements.generated.hpp`.
 
 ## Advanced Collections registry: discovery (find new candidate families)
 
 | Tool | Purpose |
 |---|---|
 | `find_yellow_candidates.cpp` | Scan `.spec` corpus files for single-alpha left sides whose genome matches a named family and aren't yet registered ("go yellow") |
-| `unregistered_left_sides.cpp` | Report every quick-canon single-alpha left side (grouped by life count) not recognized by any registered collection |
+| `unregistered_left_sides.cpp` | Report every quick-canon single-alpha left side (grouped by life count) not recognized by any registered collection; columns `enc` (quick-canon form), `genome`, `raw` (the first raw corpus position that reduced to it) |
 | `unregistered_double_crit_regions.cpp` | Double-crit analogue of the above: candidate two-membrane regions not in `doubleCritRegistry()` |
 | `double_crit_candidates_report.cpp` | For unregistered double-crit candidates, compute + group by genome text to spot shared families |
 | `check_candidates.cpp` | Vet a manually-supplied candidate list (e.g. rows pulled from the Shue-pairings paper CSV) that never passed through the automated corpus scan |
+| `classify_candidates.cpp` | Which existing collection does each candidate left side belong to? Per candidate: `reducesTo` (current registry's quickCanon), `yellow` (every S_1–S_32 family at every shift for which `isYellowCandidate` says YES), `genomeMatch` (collections whose stored genome equals its `rootGenomeText`, offset 0 only — the only check that covers S_33+), plus its genome text and `resolvedGenomeName`. `classify_candidates <candidates.txt> [out.tsv]` |
 
 ## Advanced Collections registry: audit (is the registry itself minimal/correct?)
 
@@ -790,7 +824,7 @@ TSV parse/write plumbing for the three `audit_registry_*`/`verify_registry_shrin
 | `audit_registry_necessity.cpp` | True leave-one-out audit: exclude one entry at a time and re-run `quickCanon()` — the correct successor to `audit_registry_redundancy.cpp`'s heuristic, which had a race-condition blind spot |
 | `verify_registry_shrink.cpp` | Regression check after editing the registry: every original element (removed or not) must still reduce to the same (rep, offset) it did pre-edit |
 | `check_ttree_extras.cpp` | Whole-T-Tree cross-check of `isYellowCandidate` — verifies every required/bypass-witness descendant is clean, not just the root |
-| `audit_yellow_bases.cpp` | For every registered base (offset-0) rep, runs `isYellowCandidate` against every one of the 32 named families (all shifts) other than its own — looking for an already-registered family that secretly duplicates/bypasses into another. Raw hits MUST also be checked for `(R,D,{L},{Z})` head equality (`isYellowCandidate` alone ignores the head and produces false positives whenever two families happen to share a generic T-gene list) |
+| `audit_yellow_bases.cpp` | For every registered base (offset-0) rep, runs `isYellowCandidate` against every one of the 32 named families (all shifts) other than its own — looking for an already-registered family that secretly duplicates/bypasses into another. `isYellowCandidate` checks the `(R,D,{L},{Z})` head itself since the 2026-09-27 fix (before it, two families sharing a generic T-gene list gave false positives) |
 | `find_child_parents.cpp` | Given a target T-child, report which candidate parents actually reach it as a real T-child (traces a specific data-integrity issue back to its source) |
 | `probe_dupe_nodes.cpp` | Check a `.spec` file for duplicate-encoding nodes (should be zero after `merge_specs.cpp`) |
 | `nimber_vector.cpp` | Compute exact nimbers for a batch of left sides across several fixed hosts (e.g. to test for an offset-sibling relationship without knowing the offset in advance) |
@@ -810,7 +844,6 @@ TSV parse/write plumbing for the three `audit_registry_*`/`verify_registry_shrin
 
 | Tool | Purpose |
 |---|---|
-| `dump_collections_roster.cpp` | Export the native registry (`collections.cpp`) to `src/data/collectionsRoster.json` — rerun after any registry edit |
 | `dump_master_meta.cpp` | Merge exact + quick-mode `.sprout` master saves into the two JSON files that seed `positionCache`'s meta store at startup |
 | `dump_token_life.cpp` | Emit `token_life.generated.json` (plain-token → life value) — single source of truth for `ttree.ts`'s `TOKEN_LIFE` table |
 | `dump_child_nimbers.cpp` | CSV of every minimal node's nimber + per-nimber child counts, for a given spot count |
@@ -846,11 +879,11 @@ never hand-edit a `.generated.hpp` or JSON marked generated.
 | Script | Purpose |
 |---|---|
 | `collectionsJson.cjs` | Shared reader/writer + schema doc for `src/data/collectionElements.json` (collections → shared `rep` + `genome` → `offsets` → `single`/`double`/`multi` element lists) |
-| `genGenomeDefsHeader.cjs` | hand-authored genomes in `src/data/collectionElements.json` → `stalks/tools/genome_defs.generated.hpp` |
-| `genCollectionElementsHeader.cjs` | `src/data/collectionElements.json` → `stalks/src/collection_elements.generated.hpp` (flattened to per-section families) |
+| `genCollectionElementsHeader.cjs` | `src/data/collectionElements.json` → `stalks/src/collection_elements.generated.hpp` (flattened to per-section families; WASM build only — native builds read the JSON at runtime via `collections.cpp`'s `collectionElementsJson()`) |
 | `genCollectionGenomesJson.cjs` | `src/data/collectionElements.json` → `src/data/collectionGenomes.generated.json` (genomes only, for the front end) |
 | `exportCollectionsLatex.cjs` | Registry (Collections panel data) → standalone LaTeX: one section per collection S_n over a range (default S_2–S_10), base collection left / its ⊕1 offset right, rep first, membrane letters shifted to start at C; `--from/--to/--out/--pdf` |
 | `checkGeneratedHeaders.cjs` | CI-style check: fails if any generated file above is stale relative to its JSON source; wired into `npm run build` |
+| `refreshGenomes.cjs` | Recompute every collection's genome from its rep via `stalks/build/genome_for_reps.exe` and rewrite it in `collectionElements.json` (`node scripts/refreshGenomes.cjs [exe] [--check]`; `--check` only reports differences). Rebuild the native tools first after any registry change, then `npm run gen:headers` |
 | `renameGenomes.cjs` | Rename Advanced Collections/genome families across both JSON sources and regenerate everything derived from them in one pass (`node scripts/renameGenomes.cjs <mapping.json> [--dry-run] [--skip-native]`) — built as a standing tool since family renames have happened multiple times (see `project_advanced_collections.md`, `project_genome_renaming_tool.md`) |
 | `filterLives.cjs` | Quick filter pass over `master_meta.json` for encodings with life count 5-7 containing a DisaPoint — pure-JS port, no WASM needed |
 

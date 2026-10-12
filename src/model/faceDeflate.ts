@@ -331,20 +331,30 @@ export function buildFaceDeflation(loop: SpherePoint[], outside: SpherePoint): F
   }
   const W = nbrs.map(nb => [...nb.values()].reduce((s, w) => s + w, 0));
   const nbrList = nbrs.map(nb => [...nb.entries()]);
-  // Successive over-relaxation (Gauss–Seidel) to the embedding.
-  for (let it = 0; it < 20000; it++) {
-    let maxDelta = 0;
-    for (let i = m; i < nv; i++) {
-      let sx = 0, sy = 0;
-      for (const [j, w] of nbrList[i]) { sx += w * dx[j]; sy += w * dy[j]; }
-      const nx = dx[i] + 1.8 * (sx / W[i] - dx[i]), ny = dy[i] + 1.8 * (sy / W[i] - dy[i]);
-      maxDelta = Math.max(maxDelta, Math.abs(nx - dx[i]), Math.abs(ny - dy[i]));
-      dx[i] = nx; dy[i] = ny;
+  // Successive over-relaxation (Gauss–Seidel) to the embedding. The weights are not symmetric, so
+  // over-relaxation is not guaranteed to converge and occasionally blows up (to NaN); plain
+  // Gauss–Seidel (omega 1) always does, the system being diagonally dominant with positive weights.
+  // Try the fast one first and fall back on divergence.
+  const solve = (omega: number): boolean => {
+    for (let i = m; i < nv; i++) { dx[i] = 0; dy[i] = 0; }
+    for (let it = 0; it < 20000; it++) {
+      let maxDelta = 0;
+      for (let i = m; i < nv; i++) {
+        let sx = 0, sy = 0;
+        for (const [j, w] of nbrList[i]) { sx += w * dx[j]; sy += w * dy[j]; }
+        const nx = dx[i] + omega * (sx / W[i] - dx[i]), ny = dy[i] + omega * (sy / W[i] - dy[i]);
+        maxDelta = Math.max(maxDelta, Math.abs(nx - dx[i]), Math.abs(ny - dy[i]));
+        dx[i] = nx; dy[i] = ny;
+      }
+      if (!(maxDelta < 4)) return false; // every point stays in the unit disk, so a bigger step is divergence
+      if (maxDelta < 1e-12) break;
     }
-    if (maxDelta < 1e-12) break;
-  }
+    return true;
+  };
+  if (!solve(1.8)) solve(1);
   for (const t of mesh.tris) {
-    if (orient(dx[t[0]], dy[t[0]], dx[t[1]], dy[t[1]], dx[t[2]], dy[t[2]]) <= 0) return null;
+    // Negated so a NaN position fails too.
+    if (!(orient(dx[t[0]], dy[t[0]], dx[t[1]], dy[t[1]], dx[t[2]], dy[t[2]]) > 0)) return null;
   }
 
 
@@ -518,4 +528,47 @@ export function deflateArc(def: FaceDeflation, theta0: number, theta1: number, r
 export function deflateTrack(def: FaceDeflation, theta: number, r0: number, r1: number): SpherePoint[] {
   const b = polygonPoint(def, def.flip * theta);
   return tracePath(def, [{ x: r0 * b.x, y: r0 * b.y }, { x: r1 * b.x, y: r1 * b.y }]);
+}
+
+// ---------------------------------------------------------------------------
+// Curves inside the face
+// ---------------------------------------------------------------------------
+//
+// A curve lying in the face's interior (e.g. the middle edge of a triple bigon, whose two ends
+// are on the boundary loop) is carried through the deflation the same way: take its image
+// under H once, then scale that disk path by r at every depth. The scaled copies are nested
+// like the boundary's, so the curve never crosses the boundary curves or itself.
+
+/** Disk point on the boundary at deflation angle `theta` (the same angles `thetas` holds). */
+export function diskBoundaryPoint(def: FaceDeflation, theta: number): { x: number; y: number } {
+  return polygonPoint(def, def.flip * theta);
+}
+
+/** H of a point inside the face: its position in the disk (best match if it sits on a mesh edge). */
+export function diskPointOf(def: FaceDeflation, p: SpherePoint): { x: number; y: number } {
+  const q = def.chart.fwd(p);
+  let best = -Infinity, bestT = 0, bestB: [number, number, number] = [1, 0, 0];
+  for (let t = 0; t < def.tris.length; t++) {
+    const [i, j, k] = def.tris[t];
+    const A = orient(def.px[i], def.py[i], def.px[j], def.py[j], def.px[k], def.py[k]);
+    const l0 = orient(q.x, q.y, def.px[j], def.py[j], def.px[k], def.py[k]) / A;
+    const l1 = orient(def.px[i], def.py[i], q.x, q.y, def.px[k], def.py[k]) / A;
+    const b: [number, number, number] = [l0, l1, 1 - l0 - l1];
+    const worst = Math.min(...b);
+    if (worst > best) { best = worst; bestT = t; bestB = b; }
+    if (worst >= 0) break;
+  }
+  const [i, j, k] = def.tris[bestT];
+  const c = bestB.map(v => Math.max(0, v));
+  const s = c[0] + c[1] + c[2];
+  return {
+    x: (c[0] * def.dx[i] + c[1] * def.dx[j] + c[2] * def.dx[k]) / s,
+    y: (c[0] * def.dy[i] + c[1] * def.dy[j] + c[2] * def.dy[k]) / s,
+  };
+}
+
+/** The deflated image at depth `r` of an interior curve given by its disk path (see diskPointOf),
+ * traced exactly through the mesh. */
+export function deflateInteriorPath(def: FaceDeflation, disk: { x: number; y: number }[], r: number): SpherePoint[] {
+  return tracePath(def, disk.map(w => ({ x: r * w.x, y: r * w.y })));
 }

@@ -36,7 +36,7 @@
 // standing tool should not hang/OOM outright if ever pointed at something unexpectedly large.
 //
 // Usage: genome_for_reps <targets.txt> [out.tsv]
-// targets.txt: one raw left-side rep encoding per line (as stored in collectionsRoster.json's own
+// targets.txt: one raw left-side rep encoding per line (as stored in collectionElements.json's own
 // "rep" field, e.g. "2,3,5a" or "3AB|ACD|BCDa" -- crit port already literal ascii 'a').
 #include "alpha_genome.hpp"
 #include "canon.hpp"
@@ -65,27 +65,6 @@ int maxSubLives2(const Position& p) {
     int m = 0;
     for (const auto& comp : p.components) m = std::max(m, comp.lives2());
     return m;
-}
-
-std::string rootGenomeText(const Position& p, const SpecDB& db) {
-    auto g = stalks_tools::classifyAlphaGenome(p, db);
-    if (!g) return "(UNCLASSIFIABLE)";
-    std::ostringstream out;
-    out << "(" << g->R << "," << g->D << ",{";
-    bool first = true;
-    for (int v : g->L) { if (!first) out << ","; out << v; first = false; }
-    out << "},{";
-    first = true;
-    for (int v : g->Z) { if (!first) out << ","; out << v; first = false; }
-    out << "},[";
-    auto children = stalks_tools::tChildrenOf(p);
-    std::vector<std::string> tTexts;
-    for (const auto& child : children) tTexts.push_back(stalks_tools::fullGenomeText(child, db));
-    std::sort(tTexts.begin(), tTexts.end());
-    first = true;
-    for (const auto& t : tTexts) { if (!first) out << ","; out << t; first = false; }
-    out << "])";
-    return out.str();
 }
 
 }  // namespace
@@ -146,7 +125,7 @@ int main(int argc, char** argv) {
             out << rep << "\t" << sk->second << "\n";
             continue;
         }
-        out << rep << "\t" << rootGenomeText(targetPos.at(rep), db) << "\n";
+        out << rep << "\t" << stalks_tools::rootGenomeText(targetPos.at(rep), db) << "\n";
     }
     std::cerr << "wrote " << outPath << "\n";
     return 0;

@@ -1,4 +1,5 @@
 #pragma once
+#include "json.hpp"
 #include "position.hpp"
 
 #include <map>
@@ -61,6 +62,11 @@ QuickCanonResult quickCanon(const Position& p);
 void resetQuickReductionCounts();
 const std::map<std::string, long long>& quickReductionCounts();
 
+// The same applied reductions as quickReductionCounts, one entry per application, in the order
+// they were applied (so the first entry is the first reduction quickCanon made). Cleared together
+// with the counts by resetQuickReductionCounts().
+const std::vector<std::string>& quickReductionSequence();
+
 // Testing-only hook for a true leave-one-out registry-necessity audit (see
 // tools/audit_registry_necessity.cpp): while `key` (the exact "[" + display + "/" text a
 // successful match would record via recordQuickReduction) is set, every one of steps 3-5
@@ -104,10 +110,9 @@ std::vector<std::string> detachableMultiCritLeftSideKeys(const Position& p);
 // internal CritMatch type.
 std::set<std::string> registeredDoubleCritKeys();
 
-// One authored Collection roster, exposed for UI/tooling sync -- see
-// tools/dump_collections_roster.cpp, which writes this out for the Collect pane's Collections
-// panel (src/data/collectionsRoster.json) so a change here is reflected there automatically,
-// with no hand-copied duplicate list to drift out of sync.
+// One authored Collection roster (one collection at one offset), exposed for tooling and tests.
+// Built from src/data/collectionElements.json -- the same file the Collect pane's Collections
+// panel reads directly.
 struct CollectionRoster {
     std::string name;                  // e.g. "S_1", "S_2", "S_3", "S_4" -- extend as more are registered
     int offset = 0;                    // 0 or 1 (Pairing Theorem)
@@ -119,5 +124,14 @@ struct CollectionRoster {
 // form used to build the internal matching registries in collections.cpp -- single source of
 // truth, so this can never drift from what quickCanon() actually matches.
 std::vector<CollectionRoster> allCollectionRosters();
+
+// The parsed src/data/collectionElements.json, read once on first call from the path CMake bakes in
+// as STALKS_COLLECTION_ELEMENTS_JSON -- the native registry's runtime source, also shared by the
+// tools (genome_defs.cpp) so the file is read and parsed only once per process. Native builds
+// only: the WASM build has no filesystem path, defines no STALKS_COLLECTION_ELEMENTS_JSON, and
+// compiles the registry from collection_elements.generated.hpp instead (so this is left undefined
+// there -- calling it from browser code fails to link). Throws std::runtime_error naming the path
+// if the file is missing or malformed.
+const json::Value& collectionElementsJson();
 
 } // namespace stalks

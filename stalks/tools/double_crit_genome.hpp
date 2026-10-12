@@ -41,7 +41,7 @@ std::vector<DoubleCritChild> classifyDoubleCritChildren(const stalks::Position& 
 //        remains live; Ra/Rb/Da/Db are single values, La/Lb/Za/Zb sets (mirrors the direct-value
 //        genes' own scalar-vs-set split one level up).
 //   (5,5)->T(p) member -- recursive FULL double-crit genome text (both crits still live), depth-
-//        capped like alpha_genome.cpp's own kMaxFoldDepth: `depth` 0 computes members fully (their
+//        capped like alpha_genome.cpp's own maxFoldDepth(): `depth` 0 computes members fully (their
 //        own [T(p)] included), `depth` 1 truncates a member's OWN T(p) fold to the bare 16-slot core.
 // Any (mt1,mt2) pair not listed above is dropped silently by THIS struct (no field to hold it) --
 // doubleCritGenomeText's caller-facing text instead reports such a case explicitly via

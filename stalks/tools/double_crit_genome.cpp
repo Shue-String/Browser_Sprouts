@@ -120,7 +120,7 @@ DoubleCritGenome classifyDoubleCritGenome(const Position& p, const SpecDB& db, T
             // won't print a [T(p)] list at this depth anyway (see its own depth check below), so
             // computing entries for it would be pure waste, exactly mirroring alpha_genome.cpp's
             // genomeTextAt early-return (which never even calls tChildrenOf at max depth).
-            if (depth < kMaxFoldDepth)
+            if (depth < maxFoldDepth())
                 g.Tp.insert(doubleCritGenomeText(canonicalize(c.child), db, tok1, tok2, depth + 1));
         } else {
             std::cerr << "  warning: UNMAPPED (mt1=" << c.mt1 << ",mt2=" << c.mt2 << ") child of "
@@ -145,7 +145,7 @@ std::string doubleCritGenomeText(const Position& p, const SpecDB& db, Token tok1
                         strSetText(g.gLa) + "},{" + strSetText(g.gLb) + "},{" + strSetText(g.gZa) +
                         "},{" + strSetText(g.gZb) + "}";
 
-    if (depth >= kMaxFoldDepth) return head + ")";
+    if (depth >= maxFoldDepth()) return head + ")";
     return head + ",[" + strSetText(g.Tp) + "])";
 }
 

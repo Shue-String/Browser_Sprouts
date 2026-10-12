@@ -2,8 +2,8 @@
 // and regenerates everything derived from it. Built as a standing tool because this codebase has
 // already renamed collections multiple times (see project_advanced_collections.md's rename
 // history, and collections.cpp's own 2026-08-29 "NAMING NOTE" doc comment) and is expected to
-// again -- no other file hand-duplicates a collection name; everything else (the two .generated.hpp
-// files, collectionGenomes.generated.json, collectionsRoster.json, collectAlpha.ts's in-memory
+// again -- no other file hand-duplicates a collection name; everything else
+// (collection_elements.generated.hpp, collectionGenomes.generated.json, collectAlpha.ts's in-memory
 // registry) is a mechanical derivation of that one file, rebuilt by the pipeline this script drives.
 //
 // Usage: node scripts/renameGenomes.cjs <mapping.json> [--dry-run] [--skip-native]
@@ -16,22 +16,22 @@
 // validation fails.
 //
 // What this touches, all inside collectionElements.json: every collections[].name, and every
-// genome T-child reference to a renamed collection (at any nesting depth -- a derived genome's T
-// list can hold nested genomes). Nothing else in the file mentions a collection name (group names
+// genome T-child reference to a renamed collection (at any nesting depth -- a genome's T list can
+// hold nested genomes). Nothing else in the file mentions a collection name (group names
 // are derived from name + offset). The rename is a two-phase (old -> sentinel -> new) structural
 // rewrite, so cyclic/chained mappings (A->B, B->A) are safe by construction.
 //
-// Collection ORDER is NOT touched, even cosmetically: among hand-authored genomes it is
+// Collection ORDER is NOT touched, even cosmetically: among registry genomes it is
 // load-bearing for collision-priority resolution whenever two+ share a bare (R,D,{L},{Z}) core with
-// different T-lists (scripts/genGenomeDefsHeader.cjs: "order is load-bearing"; confirmed
+// different T-lists (stalks/tools/genome_defs.hpp: "load-bearing"; confirmed
 // empirically 2026-09-20 -- an earlier version of this tool DID reorder "for readability" and
 // silently changed several T-gene fold counts, since bypassOnlyFold/familyForCoreKey pick the FIRST
 // declared family for an ambiguous core). Renaming must be a pure relabeling with zero fold-behavior
 // change -- reorder the file by hand afterward, as a SEPARATE, deliberately-reviewed step, if wanted.
 //
-// Also regenerates, via `npm run gen:headers`'s three scripts: both .generated.hpp files and
+// Also regenerates, via `npm run gen:headers`'s two scripts: collection_elements.generated.hpp and
 // src/data/collectionGenomes.generated.json. Unless --skip-native it then rebuilds the native
-// engine (stalks/build.bat) and re-dumps src/data/collectionsRoster.json.
+// engine (stalks/build.bat).
 //
 // What this does NOT do (finish manually, in order):
 //  1. Rebuild WASM (stalks/build_wasm.bat) -- not run automatically since it's the flakiest step in
@@ -53,7 +53,6 @@ const { execFileSync } = require('child_process');
 const { read, write } = require('./collectionsJson.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
-const ROSTER_JSON_PATH = path.join(REPO_ROOT, 'src', 'data', 'collectionsRoster.json');
 
 function fail(msg) {
   console.error(`renameGenomes: ${msg}`);
@@ -148,21 +147,17 @@ function run(cmd, cmdArgs, opts = {}) {
   execFileSync(cmd, cmdArgs, { cwd: REPO_ROOT, stdio: 'inherit', shell: true, ...opts });
 }
 
-run('node', ['scripts/genGenomeDefsHeader.cjs']);
 run('node', ['scripts/genCollectionElementsHeader.cjs']);
 run('node', ['scripts/genCollectionGenomesJson.cjs']);
 run('node', ['scripts/checkGeneratedHeaders.cjs']);
 
 if (skipNative) {
   console.log('\n--skip-native: stopping here. Remaining manual steps: native rebuild, ' +
-              'dump_collections_roster, stalks_tests, WASM rebuild, tsc, live verification.');
+              'stalks_tests, WASM rebuild, tsc, live verification.');
   process.exit(0);
 }
 
 run('cmd', ['/c', 'stalks\\build.bat']);
-run(path.join('stalks', 'build', 'dump_collections_roster.exe'), [
-  path.relative(path.join(REPO_ROOT, 'stalks'), ROSTER_JSON_PATH),
-], { cwd: path.join(REPO_ROOT, 'stalks') });
 
 console.log('\nDone. Remaining manual steps: rebuild WASM (stalks/build_wasm.bat), `npx tsc --noEmit`, ' +
             'live-verify the Collect pane / Collections panel in the browser.');

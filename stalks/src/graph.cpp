@@ -99,6 +99,8 @@ GameGraph::ChildLink GameGraph::resolveChild(const Position& raw) {
     std::string key = serialize(raw);
     if (const auto it = childCache_.find(key); it != childCache_.end())
         return it->second;
+    if (onResolveMiss)
+        onResolveMiss(key);  // about to canonicalize a raw child not seen before
     const QuickCanonResult r = identityForm(raw);
     ChildLink link{build(r.rep), r.offset};
     childCache_.emplace(std::move(key), link);
@@ -118,6 +120,8 @@ Node* GameGraph::build(const Position& canonical) {
         // trusting its -1 sentinel. Its subpositions/children are guaranteed empty (placeholders
         // are never expanded), so falling through into the normal build logic below is safe.
         n = it->second;
+        if (onNewNode)
+            onNewNode(nodes_.size(), n->enc);  // placeholder expansion counts as progress too
     } else {
         // Create the node and register it (owning its encoding) before recursing, so shared
         // descendants (diamonds) resolve to the one node.
@@ -126,6 +130,8 @@ Node* GameGraph::build(const Position& canonical) {
         n->enc = enc;
         n->placeholder = true;  // not populated yet -- Node's own default (false) would say "complete"
         index_.emplace(std::string_view(n->enc), n);
+        if (onNewNode)
+            onNewNode(nodes_.size(), n->enc);
     }
     // placeholder stays true until n's value fields are actually populated below (each return
     // site clears it) -- move expansion can throw (EncodingError from resolveChild's canonicalize/

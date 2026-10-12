@@ -3,7 +3,7 @@
 #include "canon.hpp"
 #include "collections.hpp"
 #include "encoding.hpp"
-#include "genome_defs.generated.hpp"
+#include "genome_defs.hpp"
 #include "graph.hpp"
 #include "moves.hpp"
 #include "registry_audit_common.hpp"
@@ -20,10 +20,9 @@ using namespace stalks;
 
 namespace stalks_tools {
 
-// Single-sourced from collectionElements.json's "maxFoldDepth" via genome_defs.generated.hpp (see
-// genGenomeDefsHeader.cjs); declared (extern) in alpha_genome.hpp so double_crit_genome.cpp can
-// share this same definition instead of hand-typing its own copy of the constant.
-const int kMaxFoldDepth = genome_defs_generated::kMaxFoldDepth;
+// Read from collectionElements.json's "maxFoldDepth" (see genome_defs.hpp); declared in
+// alpha_genome.hpp so double_crit_genome.cpp shares it instead of hand-typing its own copy.
+int maxFoldDepth() { return genome_defs::genomeDefs().maxFoldDepth; }
 
 namespace {
 
@@ -39,14 +38,13 @@ std::string setStrBare(const std::set<int>& s) {
 }
 
 // Named-genome shorthand table. The DATA (per-family R/D/{L}/{Z}/[T] shape) is single-sourced in
-// src/data/collectionElements.json (each collection's "genome" field; hand-authored ones only) and reaches this file as genome_defs.generated.hpp -- a mechanical
-// transcription, not a hand-typed copy (see that header's own comment). This function ports
+// src/data/collectionElements.json (each collection's "genome" field; those with all-named T-genes),
+// read at runtime by genome_defs.cpp -- never a hand-typed or generated copy. This function ports
 // collectAlpha.ts's resolveGenome/buildRegistry ALGORITHM (fold `shift` into every gene via XOR,
 // union T-children across the shift range, detect same-genome-different-name collisions) natively
 // to C++, so the only thing duplicated across languages is the ~40-line algorithm itself, not the
 // ~20-family, ever-growing data table it used to be (that table drifted at least once already --
-// see the generated header's own S_10/S_11 note, now impossible to reintroduce since both
-// languages compute from the same JSON).
+// the S_10/S_11 mix-up, now impossible to reintroduce since both languages read the same JSON).
 std::string foldedNameOf(const std::string& family, int shift) {
     if (shift == 0) return family;
     return family + "⊕" + std::to_string(shift);
@@ -67,10 +65,10 @@ std::vector<int> sortedDedup(std::vector<int> v) {
     return v;
 }
 
-const std::map<std::string, genome_defs_generated::GenomeDef>& genomeDefsByName() {
-    static const std::map<std::string, genome_defs_generated::GenomeDef> kByName = [] {
-        std::map<std::string, genome_defs_generated::GenomeDef> m;
-        for (const auto& [name, def] : genome_defs_generated::familyDefs()) m.emplace(name, def);
+const std::map<std::string, genome_defs::GenomeDef>& genomeDefsByName() {
+    static const std::map<std::string, genome_defs::GenomeDef> kByName = [] {
+        std::map<std::string, genome_defs::GenomeDef> m;
+        for (const auto& [name, def] : genome_defs::genomeDefs().families) m.emplace(name, def);
         return m;
     }();
     return kByName;
@@ -89,7 +87,7 @@ const ResolvedGenome& resolveGenome(const std::string& family, int shift) {
     const auto defIt = defs.find(family);
     if (defIt == defs.end())
         throw std::runtime_error("genome_defs has no entry named \"" + family + "\"");
-    const genome_defs_generated::GenomeDef& def = defIt->second;
+    const genome_defs::GenomeDef& def = defIt->second;
 
     ResolvedGenome resolved;
     resolved.R = def.R ^ shift;
@@ -131,14 +129,14 @@ struct NamedGenomeEntry {
 };
 
 // Registers every family at every shift 0..kMaxShift, base forms before shifted forms (in
-// genome_defs.generated.hpp's own declaration order) -- same collision-resolution priority as
+// collectionElements.json's own collection order) -- same collision-resolution priority as
 // collectAlpha.ts's buildRegistry, and for the same reason: several (family, shift) pairs compute
 // to the same (R,D,{L},{Z}) core with different [T] lists, and a genuinely NEW collision (two
 // DIFFERENT names computing the identical full genome) should throw, not silently pick one.
 //
 // Returns entries in REGISTRATION order (not sorted) -- this order is itself load-bearing, not
 // just a collision-detection convenience: namedGenomes()'s compact-key fallback (used at
-// kMaxFoldDepth, where a T-grandchild is folded on its bare (R,D,{L},{Z}) core alone, no [T]
+// maxFoldDepth(), where a T-grandchild is folded on its bare (R,D,{L},{Z}) core alone, no [T]
 // available to disambiguate) needs "first family/shift registered in THIS priority order wins the
 // bare core" -- exactly mirroring collectAlpha.ts's withCompactKeys, which gets this for free from
 // JS's insertion-order-preserving Record. A std::map of these entries would silently reorder by
@@ -169,10 +167,10 @@ std::vector<NamedGenomeEntry> buildNamedGenomes() {
         ordered.push_back({key, name});
     };
 
-    const auto& defs = genome_defs_generated::familyDefs();
-    for (const auto& entry : defs) registerOne(entry.first, 0);
-    for (const auto& entry : defs) {
-        for (int shift = 1; shift <= genome_defs_generated::kMaxShift; shift++) registerOne(entry.first, shift);
+    const auto& gd = genome_defs::genomeDefs();
+    for (const auto& entry : gd.families) registerOne(entry.first, 0);
+    for (const auto& entry : gd.families) {
+        for (int shift = 1; shift <= gd.maxShift; shift++) registerOne(entry.first, shift);
     }
 
     return ordered;
@@ -195,8 +193,8 @@ const std::map<std::string, std::string>& namedGenomes() {
 }
 
 // Collection membership data, in the SAME resolution-priority order as collectAlpha.ts's
-// NAMED_FAMILIES: every family's own shift-0 form first (in genome_defs.generated.hpp's
-// declaration order), then each family's shift 1..kMaxShift forms -- required because
+// NAMED_FAMILIES: every family's own shift-0 form first (in collectionElements.json's
+// collection order), then each family's shift 1..kMaxShift forms -- required because
 // familyForCoreKey below picks the FIRST match, and several distinct (family, shift) pairs
 // collide on their bare (R,D,{L},{Z}) core with different [T] lists (base forms must win those
 // collisions). A pair of hardcoded "legacy fold key" entries (S_1's own core with a spurious
@@ -223,10 +221,10 @@ const std::vector<NamedFamily>& namedFamilies() {
             families.push_back({foldedNameOf(familyName, shift), fourGeneKeyOf(g),
                                  std::vector<std::string>(g.T.begin(), g.T.end()), familyName, shift});
         };
-        const auto& defs = genome_defs_generated::familyDefs();
-        for (const auto& entry : defs) pushFamily(entry.first, 0);
-        for (const auto& entry : defs) {
-            for (int shift = 1; shift <= genome_defs_generated::kMaxShift; shift++)
+        const auto& gd = genome_defs::genomeDefs();
+        for (const auto& entry : gd.families) pushFamily(entry.first, 0);
+        for (const auto& entry : gd.families) {
+            for (int shift = 1; shift <= gd.maxShift; shift++)
                 pushFamily(entry.first, shift);
         }
         return families;
@@ -302,8 +300,8 @@ std::string bypassOnlyFoldName(const std::string& coreKey) {
 
 // Every registered element's own reduction target + offset, keyed by the reduced position's own
 // serialized form -- lets genome-naming (foldToName/foldToNameChecked below) recognize a T-child as
-// a member of ANY registered Collection (currently up to S_221), not just the 32 families
-// hand-authored in src/data/genomeDefs.json (see [[project_genome_naming_registry_fix]]). Built from
+// a member of ANY registered Collection (currently up to S_221), not just the families
+// with a registry genome in src/data/collectionElements.json (see [[project_genome_naming_registry_fix]]). Built from
 // EVERY ELEMENT of EVERY roster entry (not from CollectionRoster's own .rep/.offset fields): a
 // paired-sibling group's .rep is deliberately left empty (allCollectionRosters()'s own doc comment --
 // "shares its pair-partner's rep instead of having its own"), and reconstructing which physical rep
@@ -441,12 +439,12 @@ std::string sumDecompositionFoldName(const Position& p) {
     return byOffset != byRep->second.end() ? byOffset->second : std::string();
 }
 
-// Exact-fold match first (namedGenomes(), the finite hand-authored/derived set of full "(R,D,{L},
+// Exact-fold match first (namedGenomes(), the finite registry set of full "(R,D,{L},
 // {Z},[T])" strings); failing that, the registry-based structural match above; failing that, the
 // bypass-only core fallback below -- a finite string table can never enumerate every real T-list a
 // bypass-only family's members can have, which is exactly what broke on [1212a/ (core (0,1,{0},{}),
-// matching S_1) before that fix. Tries namedGenomes() FIRST (not the registry) so a hand-authored genome
-// entry's hand-verified text always wins over a same-shape registry match -- see
+// matching S_1) before that fix. Tries namedGenomes() FIRST (not the registry) so a registry genome
+// entry's own text always wins over a same-shape registry match -- see
 // [[project_genome_naming_registry_fix]]'s own note on this ordering choice.
 std::string foldToName(const std::string& plainText, const Position& p) {
     const auto it = namedGenomes().find(plainText);
@@ -542,7 +540,7 @@ std::string foldToNameChecked(const std::string& plainText, const Position& p, c
 // depth 0 = the position itself, 1 = its T-children (full, with their own [T]), 2 = T-of-T
 // (truncated to the bare 4-gene tuple, no further [T]) -- matches collectAlpha.ts's
 // MAX_GENOME_DEPTH; none of the named genomes above need deeper nesting to be recognized.
-// kMaxFoldDepth itself is declared in alpha_genome.hpp and defined below, outside this anonymous
+// maxFoldDepth() itself is declared in alpha_genome.hpp and defined above, outside this anonymous
 // namespace (needs external linkage so double_crit_genome.cpp can link against it too).
 
 // classifyAlphaGenome/tChildrenOf/genomeTextAt are pure functions of (p, target[, depth]):
@@ -575,7 +573,7 @@ std::string genomeTextAt(const Position& p, const SpecDB& db, int depth, Token t
         "(" + std::to_string(g->R) + "," + std::to_string(g->D) + ",{" + setStrBare(g->L) + "},{" +
         setStrBare(g->Z) + "}";
 
-    if (depth >= kMaxFoldDepth) return gGenomeTextCache.emplace(key, foldToName(head + ")", p)).first->second;
+    if (depth >= maxFoldDepth()) return gGenomeTextCache.emplace(key, foldToName(head + ")", p)).first->second;
 
     std::set<std::string> tTexts;  // dedup + lexicographic sort, same convention as collect.ts
     for (const Position& child : tChildrenOf(p, target))
@@ -703,6 +701,28 @@ std::vector<std::string> allFamilyNamesForCoreKey(const std::string& coreKey) {
 
 bool hasNamedFamilyEntry(const std::string& name) {
     return familyForName(name) != nullptr;
+}
+
+std::vector<std::string> allNamedFamilyNames() {
+    std::vector<std::string> names;
+    const auto& gd = genome_defs::genomeDefs();
+    for (const auto& entry : gd.families)
+        for (int shift = 0; shift <= gd.maxShift; ++shift) {
+            const std::string name = foldedNameOf(entry.first, shift);
+            if (hasNamedFamilyEntry(name)) names.push_back(name);
+        }
+    return names;
+}
+
+std::string rootGenomeText(const Position& p, const SpecDB& db) {
+    const auto g = classifyAlphaGenome(p, db);
+    if (!g) return "(UNCLASSIFIABLE)";
+    std::set<std::string> tTexts;  // T is a set: dedup + sort, same as genomeTextAt's own T list
+    for (const auto& child : tChildrenOf(p)) tTexts.insert(fullGenomeText(child, db));
+    std::string joined;
+    for (const auto& t : tTexts) joined += (joined.empty() ? "" : ",") + t;
+    return "(" + std::to_string(g->R) + "," + std::to_string(g->D) + ",{" + setStrBare(g->L) + "},{" +
+           setStrBare(g->Z) + "},[" + joined + "])";
 }
 
 // Testing-only: forces registryNameIndex()'s one-time lazy `static` build to happen NOW, unexcluded.
