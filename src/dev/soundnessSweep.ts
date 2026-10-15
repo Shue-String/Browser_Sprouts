@@ -98,7 +98,7 @@ function findRandomLegalMoveImpl(
       parallel: false, parens: null, brackets: null,
     };
     for (const stroke of shuffle(candidateStrokes(state, parsed))) {
-      if (!strokeCrossesEdges(state, stroke, undefined, v1, v2)) return { v1, v2, stroke };
+      if (!strokeCrossesEdges(state, stroke)) return { v1, v2, stroke };
     }
   }
   return null;

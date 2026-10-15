@@ -21,6 +21,7 @@
  */
 import type { GameState } from '../../src/model/types';
 import type { SpherePoint } from '../../src/math/sphere';
+import { arcsProperlyCross } from '../../src/math/sphere';
 import { createInitialState, cloneState } from '../../src/model/gameState';
 import { applyMove } from '../../src/model/moves';
 import { encodePositionDecompressed, resolveMoveVertices } from '../../src/model/encoding';
@@ -44,7 +45,7 @@ function mulberry32(a: number): () => number {
 type Synth = (state: GameState, parsed: ResolvedMove, targetCanon: string) => Promise<SpherePoint[] | null>;
 
 async function verifies(state: GameState, parsed: ResolvedMove, stroke: SpherePoint[], targetCanon: string): Promise<boolean> {
-  if (strokeCrossesEdges(state, stroke, undefined, parsed.lo, parsed.hi)) return false;
+  if (strokeCrossesEdges(state, stroke)) return false;
   const trial = cloneState(state);
   try {
     applyMove(trial, { v1: parsed.lo, v2: parsed.hi, stroke });
@@ -75,7 +76,7 @@ const SYNTHS: Record<string, Synth> = { pipeline: oldSynth, new: newSynth };
 export async function enumerateAll(state: GameState): Promise<Map<string, { v1: number; v2: number; stroke: SpherePoint[] }>> {
   const reach = new Map<string, { v1: number; v2: number; stroke: SpherePoint[] }>();
   for (const mv of allRoutedMoves(state, 9)) {
-    if (strokeCrossesEdges(state, mv.stroke, undefined, mv.v1, mv.v2)) continue;
+    if (strokeCrossesEdges(state, mv.stroke)) continue;
     const trial = cloneState(state);
     try { applyMove(trial, mv); } catch { continue; }
     const text = encodePositionDecompressed(trial).text;
@@ -86,6 +87,22 @@ export async function enumerateAll(state: GameState): Promise<Map<string, { v1: 
 }
 
 /** Let the layout physics settle the way the live render loop would after a commit. */
+/** Mid-edge crossings between existing edges (a broken drawing): edge pairs with a segment pair that
+ * properly crosses (arcsProperlyCross — meeting at a shared vertex doesn't count, and end segments
+ * are tested too). */
+export function edgeCrossings(s: GameState): string[] {
+  const E = [...s.edges.values()];
+  const out: string[] = [];
+  for (let a = 0; a < E.length; a++) for (let b = a + 1; b < E.length; b++) {
+    let hit = '';
+    for (let i = 0; !hit && i + 1 < E[a].points.length; i++) for (let j = 0; !hit && j + 1 < E[b].points.length; j++) {
+      if (arcsProperlyCross(E[a].points[i], E[a].points[i + 1], E[b].points[j], E[b].points[j + 1])) hit = `seg${i}/${E[a].points.length - 1} x seg${j}/${E[b].points.length - 1}`;
+    }
+    if (hit) out.push(`e${E[a].id}(${E[a].v1}-${E[a].v2}) x e${E[b].id}(${E[b].v1}-${E[b].v2}) [${hit}]`);
+  }
+  return out;
+}
+
 export function relax(state: GameState): void {
   resampleAllEdges(state);
   resetActivityTimer();

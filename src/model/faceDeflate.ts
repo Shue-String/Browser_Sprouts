@@ -30,7 +30,7 @@
  */
 
 import type { SpherePoint } from '../math/sphere';
-import { normalize, sphereAngle } from '../math/sphere';
+import { normalize, sphereAngle, dot, tangentFrame, fibonacciSphere } from '../math/sphere';
 
 /** Stereographic chart of the sphere centred on (projected from) `pole`: `fwd`
  * maps a sphere point to the plane, `inv` maps back. The pole itself goes to
@@ -40,10 +40,7 @@ export function stereoChart(pole: SpherePoint): {
   inv: (q: { x: number; y: number }) => SpherePoint;
 } {
   const R = normalize(pole);
-  const t: SpherePoint = Math.abs(R.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
-  const e1 = normalize({ x: R.y * t.z - R.z * t.y, y: R.z * t.x - R.x * t.z, z: R.x * t.y - R.y * t.x });
-  const e2: SpherePoint = { x: R.y * e1.z - R.z * e1.y, y: R.z * e1.x - R.x * e1.z, z: R.x * e1.y - R.y * e1.x };
-  const dot = (p: SpherePoint, q: SpherePoint) => p.x * q.x + p.y * q.y + p.z * q.z;
+  const { e1, e2 } = tangentFrame(R);
   return {
     fwd: p => {
       const d = Math.max(1 - dot(p, R), 1e-9);
@@ -263,10 +260,7 @@ export function buildFaceDeflation(loop: SpherePoint[], outside: SpherePoint): F
     return best;
   };
   let pole = outside, poleD = distToLoop(outside);
-  const N_FIB = 400;
-  for (let i = 0; i < N_FIB; i++) {
-    const y = 1 - 2 * (i + 0.5) / N_FIB, rr = Math.sqrt(1 - y * y), phi = i * Math.PI * (3 - Math.sqrt(5));
-    const c = { x: rr * Math.cos(phi), y, z: rr * Math.sin(phi) };
+  for (const c of fibonacciSphere(400)) {
     const d = distToLoop(c);
     if (d > poleD && !inside0(chart0.fwd(c))) { poleD = d; pole = c; }
   }
@@ -509,9 +503,15 @@ export function deflatePoint(def: FaceDeflation, theta: number, r: number): Sphe
  * (either order), traced exactly: starts at deflatePoint(theta0, r) and ends at
  * deflatePoint(theta1, r). */
 export function deflateArc(def: FaceDeflation, theta0: number, theta1: number, r: number): SpherePoint[] {
+  const path = boundaryPath(def, theta0, theta1).map(p => ({ x: r * p.x, y: r * p.y }));
+  return tracePath(def, path);
+}
+
+/** The disk boundary from angle `theta0` to `theta1` (either order): its two ends and every
+ * polygon corner strictly between them, in travel order. */
+function boundaryPath(def: FaceDeflation, theta0: number, theta1: number): Pt[] {
   const a0 = def.flip * theta0, a1 = def.flip * theta1;
   const lo = Math.min(a0, a1), hi = Math.max(a0, a1);
-  // Polygon corners strictly between the two angles, in travel order.
   const corners: number[] = [];
   for (let j = Math.floor(lo / (2 * Math.PI)) - 1; j <= Math.ceil(hi / (2 * Math.PI)) + 1; j++) {
     for (const b of def.boundaryThetas) {
@@ -520,8 +520,23 @@ export function deflateArc(def: FaceDeflation, theta0: number, theta1: number, r
     }
   }
   corners.sort((x, y) => (a1 >= a0 ? x - y : y - x));
-  const path = [a0, ...corners, a1].map(a => { const p = polygonPoint(def, a); return { x: r * p.x, y: r * p.y }; });
-  return tracePath(def, path);
+  return [a0, ...corners, a1].map(a => polygonPoint(def, a));
+}
+
+/** The boundary arc from `theta0` to `theta1` at depth `r` (as deflateArc), then a fraction `s`
+ * of the way (0 = the arc, 1 = the chord) toward the straight disk chord between its own two
+ * ends, traced exactly. The ends are unaffected by `s`. The disk polygon is convex, so every
+ * stage lies inside the face, and two arcs sharing the same ends close onto the same chord from
+ * opposite sides without ever crossing. */
+export function closeArc(def: FaceDeflation, theta0: number, theta1: number, s: number, r = 1): SpherePoint[] {
+  const path = boundaryPath(def, theta0, theta1).map(p => ({ x: r * p.x, y: r * p.y }));
+  const c0 = path[0], c1 = path[path.length - 1];
+  const cx = c1.x - c0.x, cy = c1.y - c0.y, len2 = cx * cx + cy * cy || 1;
+  return tracePath(def, path.map(p => {
+    const t = Math.max(0, Math.min(1, ((p.x - c0.x) * cx + (p.y - c0.y) * cy) / len2));
+    const fx = c0.x + cx * t, fy = c0.y + cy * t;
+    return { x: p.x + (fx - p.x) * s, y: p.y + (fy - p.y) * s };
+  }));
 }
 
 /** The track of the boundary point with angle `theta` from depth `r0` to depth `r1`, traced exactly. */

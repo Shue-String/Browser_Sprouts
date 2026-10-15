@@ -281,7 +281,7 @@ const std::vector<CritFamily>& multiCritFamilies() {
         {"2,2CD|CDa", {{"S_32", 0, {}}}},
         {"3C|2C2a", {{"S_37", 0, {}}}},
         {"3CD|2CaD", {{"S_38", 0, {}}}},
-        {"2C|222Ca", {{"S_54", 0, {}}}},
+        {"2223a", {{"S_54", 0, {}}}},
     };
     return families;
 }

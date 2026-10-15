@@ -33,6 +33,7 @@
 
 import type { GameState, VertexId, SpotLabel, SpotGroupInfo } from './types';
 import { findMoveRegion, findEnclosedSideRegion } from './moveCode';
+import type { ParsedMove, ResolvedMove } from './moveCodeParse';
 
 export function isSpotLabelRange(l: SpotLabel): l is { lo: number; hi: number } {
   return typeof l !== 'number';
@@ -109,7 +110,7 @@ export function recomputeSpotLabels(
   // run unconditionally rather than only when nothing departed.
   const isSplit = after.regions.size > before.regions.size;
   if (isSplit) {
-    const enclosed = findEnclosedSpots(before, after, v1, v2, survivingSpots);
+    const enclosed = findEnclosedSpots(before, after, v1, v2, survivingSpots, labels);
     if (enclosed && enclosed.size > 0 && enclosed.size < survivingSpots.size) {
       // Group surviving spots by their current block (identical range).
       const byBlock = new Map<string, VertexId[]>();
@@ -150,16 +151,19 @@ function findEnclosedSpots(
   v1: VertexId,
   v2: VertexId,
   survivingSpots: Set<VertexId>,
+  labels: Map<VertexId, SpotLabel>,
 ): Set<VertexId> | null {
-  const lo = Math.min(v1, v2);
-  const hi = Math.max(v1, v2);
+  // Same ordering and side rule as the labelled token's brackets (computeMoveCode's sortKeyOf),
+  // so the spots labelled "enclosed" are exactly the ones its bracket lists.
+  const key = (vid: VertexId): number => spotGroupInfo(vid, labels)?.sortKey ?? vid;
+  const [lo, hi] = key(v1) <= key(v2) ? [v1, v2] : [v2, v1];
   const found = findMoveRegion(before, after, lo, hi);
   if (!found) return null;
   const { regionR, mainComp } = found;
   // Joint subscripts aren't needed for identifying the enclosed side by spot
   // membership (spots are never joints — degree 0), so pass null/null; the
   // fallback forward-arc scoring in findEnclosedSideRegion still applies.
-  const loToHiReg = findEnclosedSideRegion(regionR, mainComp, lo, hi, before, after, null, null);
+  const loToHiReg = findEnclosedSideRegion(regionR, mainComp, lo, hi, before, after, null, null, false, key);
   if (!loToHiReg) return null;
 
   const enclosed = new Set<VertexId>();
@@ -306,6 +310,26 @@ export function resolveParensEntry(
   }
   members.sort((a, b) => a - b);
   return members[0] ?? entry.lo;
+}
+
+/**
+ * Resolve a labelled ("nL:") move to raw vertex ids against the live label state, for Recreate
+ * replay: endpoints (resolveMoveEndpoints), brackets and parens (against its contextLabels), and
+ * joint subscripts. A subscript names a neighbour along an edge, so it is always a fixed label
+ * (or a raw non-spot id) and resolves like a single label; left as the label, it would point
+ * candidate routing at whatever raw vertex happens to carry that number.
+ */
+export function resolveLabelledMove(mv: ParsedMove, spotLabels: Map<VertexId, SpotLabel>): ResolvedMove {
+  const { lo, hi, contextLabels } = resolveMoveEndpoints(mv.lo, mv.hi, spotLabels);
+  const sub = (s: VertexId | null): VertexId | null => s === null ? null : resolveLabelToVertexId(s, contextLabels) ?? s;
+  return {
+    ...mv,
+    lo, hi,
+    loSub: sub(mv.loSub),
+    hiSub: sub(mv.hiSub),
+    brackets: mv.brackets ? mv.brackets.flatMap(e => resolveBracketEntry(e, contextLabels)) : null,
+    parens: resolveParensEntry(mv.parens, contextLabels),
+  };
 }
 
 /** Build a computeMoveCode `labelFor` resolver from a post-move label map. */

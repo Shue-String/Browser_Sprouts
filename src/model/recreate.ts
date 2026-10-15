@@ -16,60 +16,44 @@ import type { GameState, VertexId, EdgeId, RegionId } from './types';
 import type { SpherePoint } from '../math/sphere';
 import { cloneState } from './gameState';
 import { applyMove } from './moves';
-import { computeMoveCode } from './moveCode';
+import { computeMoveCode, compWithBoth, findOccurrence, inBrackets } from './moveCode';
 import { recomputeSpotLabels, labelForFromMap, spotGroupForFromMap } from './vertexLabels';
 import { candidateStrokeStream, strokeCrossesEdges } from './strokeSynthesis';
 import type { ResolvedMove } from './moveCodeParse';
 
 /**
- * Find a stroke that reproduces `parsed` in the live `state`, or null.
- * `state` is never mutated — every trial runs on a clone.
- *
- * If `checkCrossings` is set, candidates that cross existing edges (tested
- * spherically) are skipped before the (more expensive) topological verify step.
+ * Try a stroke: the position it produces, on a clone of `state` — or null when the stroke crosses
+ * an existing edge (never a legal move) or the move fails to apply. `state` is never mutated. The
+ * one primitive behind every "try a stroke, check the result" loop (strokeReproduces here, the
+ * Position Browser's canon checks in main.ts).
  */
-export function synthesizeMove(
-  state: GameState,
-  parsed: ResolvedMove,
-  checkCrossings = false,
-  useLabels = false,
-): SpherePoint[] | null {
+export function applyTrial(state: GameState, v1: VertexId, v2: VertexId, stroke: SpherePoint[]): GameState | null {
+  if (strokeCrossesEdges(state, stroke)) return null;
+  const trial = cloneState(state);
+  try {
+    applyMove(trial, { v1, v2, stroke });
+  } catch {
+    return null;
+  }
+  return trial;
+}
+
+/** The first candidate stroke that reproduces `parsed` in `state` (see strokeReproduces), or null. */
+export function synthesizeMove(state: GameState, parsed: ResolvedMove, useLabels = false): SpherePoint[] | null {
   for (const stroke of candidateStrokeStream(state, parsed)) {
-    if (checkCrossings && strokeCrossesEdges(state, stroke, undefined, parsed.lo, parsed.hi)) continue;
     if (strokeReproduces(state, parsed, stroke, useLabels)) return stroke;
   }
   return null;
 }
 
 /**
- * True if applying `stroke` to a clone of `state` yields exactly the target
- * token. `parsed.lo`/`parsed.hi` must already be raw vertex IDs (resolve
+ * True if `stroke` is legal (applyTrial) and the move it makes records exactly as the target
+ * token (appliedMoveMatches). `parsed.lo`/`parsed.hi` must already be raw vertex IDs (resolve
  * labels via resolveLabelToVertexId before calling this, when useLabels).
- * When useLabels is set, the oracle comparison re-derives the move code using
- * the label state as it would be immediately AFTER this trial move (a
- * departing spot endpoint is only fixed to a concrete number post-move) — the
- * same computation live play performs — so labelled tokens compare correctly.
  */
 export function strokeReproduces(state: GameState, parsed: ResolvedMove, stroke: SpherePoint[], useLabels = false): boolean {
-  const before = cloneState(state);
-  const work = cloneState(state);
-  try {
-    applyMove(work, { v1: parsed.lo, v2: parsed.hi, stroke });
-  } catch {
-    return false;
-  }
-  try {
-    let labelFor: ((vid: VertexId) => VertexId) | undefined;
-    let spotGroupFor: ReturnType<typeof spotGroupForFromMap> | undefined;
-    if (useLabels) {
-      const afterLabels = recomputeSpotLabels(before.spotLabels, before, work, parsed.lo, parsed.hi);
-      labelFor = labelForFromMap(afterLabels);
-      spotGroupFor = spotGroupForFromMap(afterLabels);
-    }
-    return moveCodeMatches(before, work, parsed.lo, parsed.hi, parsed.token, labelFor, spotGroupFor);
-  } catch {
-    return false;
-  }
+  const trial = applyTrial(state, parsed.lo, parsed.hi, stroke);
+  return trial !== null && appliedMoveMatches(state, trial, parsed.lo, parsed.hi, parsed.token, useLabels);
 }
 
 /**
@@ -141,26 +125,18 @@ export function computeRecreateHints(state: GameState, parsed: ResolvedMove): Re
     arcEdgeIds: new Set(),
   };
 
-  // Find the living region whose boundary component contains both lo and hi.
+  // The living region whose boundary component contains both lo and hi.
   let outerComp: { entries: { vertexId: VertexId; side: string; edgeId?: EdgeId }[] } | null = null;
   for (const r of state.regions.values()) {
-    if (r.isDead) continue;
-    for (const b of r.boundaries) {
-      const ids = new Set(b.entries.map(e => e.vertexId));
-      if (parsed.lo === parsed.hi ? ids.has(parsed.lo) : ids.has(parsed.lo) && ids.has(parsed.hi)) {
-        outerComp = b;
-        break;
-      }
-    }
-    if (outerComp) break;
+    if (!r.isDead && (outerComp = compWithBoth(r, parsed.lo, parsed.hi))) break;
   }
 
   if (!outerComp) return hints;
 
   const entries = outerComp.entries;
   const N = entries.length;
-  const iLo = findOccurrence(entries, parsed.lo, parsed.loSub, N);
-  const iHi = parsed.lo === parsed.hi ? -1 : findOccurrence(entries, parsed.hi, parsed.hiSub, N);
+  const iLo = findOccurrence(entries, parsed.lo, parsed.loSub);
+  const iHi = parsed.lo === parsed.hi ? -1 : findOccurrence(entries, parsed.hi, parsed.hiSub);
 
   // Joint check: if side !== 'only', record the in/out edge pair for that visit.
   if (iLo >= 0 && entries[iLo].side !== 'only') {
@@ -177,26 +153,18 @@ export function computeRecreateHints(state: GameState, parsed: ResolvedMove): Re
   // Bracket geometry (enclosure moves only).
   if (!parsed.brackets || parsed.brackets.length === 0) return hints;
 
-  const bracketMins = new Set(parsed.brackets);
+  const bracketSet = new Set(parsed.brackets);
 
   for (const r of state.regions.values()) {
     if (r.isDead) continue;
     // Re-find this region's outer component to attach bracket subs to it.
-    let comp: typeof r.boundaries[0] | null = null;
-    for (const b of r.boundaries) {
-      const ids = new Set(b.entries.map(e => e.vertexId));
-      if (parsed.lo === parsed.hi ? ids.has(parsed.lo) : ids.has(parsed.lo) && ids.has(parsed.hi)) {
-        comp = b; break;
-      }
-    }
+    const comp = compWithBoth(r, parsed.lo, parsed.hi);
     if (!comp) continue;
 
     const localVertexIds = new Set<VertexId>();
     const localEdgeIds = new Set<EdgeId>();
     for (const sub of r.boundaries) {
-      if (sub === comp) continue;
-      const minId = Math.min(...sub.entries.map(e => e.vertexId));
-      if (!bracketMins.has(minId)) continue;
+      if (sub === comp || !inBrackets(sub, state, bracketSet)) continue;
       for (const e of sub.entries) {
         localVertexIds.add(e.vertexId);
         if (e.edgeId != null) localEdgeIds.add(e.edgeId);
@@ -216,8 +184,8 @@ export function computeRecreateHints(state: GameState, parsed: ResolvedMove): Re
     if (iLo >= 0 && iHi >= 0 && iLo !== iHi) {
       const compEntries = comp.entries;
       const M = compEntries.length;
-      const cLo = findOccurrence(compEntries, parsed.lo, parsed.loSub, M);
-      const cHi = findOccurrence(compEntries, parsed.hi, parsed.hiSub, M);
+      const cLo = findOccurrence(compEntries, parsed.lo, parsed.loSub);
+      const cHi = findOccurrence(compEntries, parsed.hi, parsed.hiSub);
       if (cLo >= 0 && cHi >= 0 && cLo !== cHi) {
         const arc = new Set<EdgeId>();
         for (let i = cLo; i !== cHi; i = (i + 1) % M) {
@@ -234,25 +202,6 @@ export function computeRecreateHints(state: GameState, parsed: ResolvedMove): Re
   return hints;
 }
 
-/**
- * Find the index of `vid` in `entries` using the subscript to pick the correct
- * occurrence for joint vertices. The subscript `sub` means "the occurrence where
- * the next entry has vertexId === sub." Falls back to findIndex when sub is null
- * or no subscript match is found.
- */
-function findOccurrence(
-  entries: { vertexId: VertexId }[],
-  vid: VertexId,
-  sub: VertexId | null,
-  n: number,
-): number {
-  if (sub !== null) {
-    for (let i = 0; i < n; i++) {
-      if (entries[i].vertexId === vid && entries[(i + 1) % n].vertexId === sub) return i;
-    }
-  }
-  return entries.findIndex(e => e.vertexId === vid);
-}
 
 /**
  * Verify a move that has ALREADY been applied (e.g. drawn by hand during the

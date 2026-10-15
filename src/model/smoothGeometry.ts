@@ -1,4 +1,5 @@
 import type { SpherePoint } from '../math/sphere';
+import { sphereAngle as angle, dot, cross } from '../math/sphere';
 
 /**
  * Pure geometry for the smoothing physics (see smooth.ts): distance from a point to a great-circle
@@ -6,8 +7,19 @@ import type { SpherePoint } from '../math/sphere';
  * around sharp bends.
  */
 
-const dot = (a: SpherePoint, b: SpherePoint): number => a.x * b.x + a.y * b.y + a.z * b.z;
-const angle = (a: SpherePoint, b: SpherePoint): number => Math.acos(Math.max(-1, Math.min(1, dot(a, b))));
+/** Distance (radians) from p to the (short) great-circle arc a→b (a === b allowed: a point) — the
+ * distance-only fast path of nearestOnArc, for hot clearance queries (the router's wall index). */
+export function distanceToArc(p: SpherePoint, a: SpherePoint, b: SpherePoint): number {
+  const n = cross(a, b);
+  const len = Math.hypot(n.x, n.y, n.z);
+  if (len > 1e-12) {
+    const nu = { x: n.x / len, y: n.y / len, z: n.z / len };
+    const s = dot(p, nu);
+    const f = { x: p.x - s * nu.x, y: p.y - s * nu.y, z: p.z - s * nu.z };
+    if (dot(cross(a, f), nu) >= 0 && dot(cross(f, b), nu) >= 0) return Math.asin(Math.min(1, Math.abs(s)));
+  }
+  return Math.min(angle(p, a), angle(p, b));
+}
 
 /** Nearest point on the (short) great-circle arc a→b to p: distance, arc fraction t, and the point. */
 export function nearestOnArc(p: SpherePoint, a: SpherePoint, b: SpherePoint): { d: number; t: number; q: SpherePoint } {

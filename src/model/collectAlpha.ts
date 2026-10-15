@@ -504,7 +504,8 @@ const GENOME_DEFS: Record<string, GenomeDef> = Object.fromEntries(
  * more. */
 const MAX_SHIFT = COLLECTION_GENOMES_JSON.maxShift;
 
-function nameOf(family: string, shift: number): string {
+/** A collection/offset group's display name: "S_1", "S_1⊕1". */
+export function nameOf(family: string, shift: number): string {
   return shift === 0 ? family : `${family}⊕${shift}`;
 }
 
@@ -688,7 +689,9 @@ function withCompactKeys(names: Record<string, string>): Record<string, string> 
  * "S_1⊕1"), its left-side elements across the single/double/multi sections, and the collection's
  * shared rep -- on the offset-0 group only; an offset group shares its base's rep, so it carries
  * "" here (KNOWN_COLLECTION_REP filters on that). */
-interface CollectionRosterEntry {
+export interface CollectionRosterEntry {
+  /** The collection this group belongs to ("S_1"). */
+  collection: string;
   name: string;
   offset: number;
   elements: string[];
@@ -701,8 +704,9 @@ interface CollectionElementsFile {
     offsets: ({ offset: number } & Partial<Record<'single' | 'double' | 'multi', { elements: { encoding: string }[] }>>)[];
   }[];
 }
-const COLLECTION_ROSTERS: CollectionRosterEntry[] = (collectionElementsJson as unknown as CollectionElementsFile).collections.flatMap(c =>
+export const COLLECTION_ROSTERS: CollectionRosterEntry[] = (collectionElementsJson as unknown as CollectionElementsFile).collections.flatMap(c =>
   c.offsets.map(o => ({
+    collection: c.name,
     name: nameOf(c.name, o.offset),
     offset: o.offset,
     elements: (['single', 'double', 'multi'] as const).flatMap(s => o[s]?.elements.map(e => e.encoding) ?? []),
@@ -865,14 +869,6 @@ export const KNOWN_COLLECTION_REP: Record<string, string> = Object.fromEntries(
   COLLECTION_ROSTERS.filter(r => r.rep).map(r => [rosterFolderName(r.name), leftSideDisplay(r.rep)]),
 );
 
-/** Same keys/values as KNOWN_COLLECTION_REP, but the roster's own RAW encoding (no Greek-letter/
- * bracket display conversion) -- for a caller that needs to feed the rep back into the engine
- * (computeAlphaGenome etc.), which expects collections.cpp's own literal 'a'/'b' port-letter
- * convention, not leftSideDisplay's rendering of it. */
-export const KNOWN_COLLECTION_REP_RAW: Record<string, string> = Object.fromEntries(
-  COLLECTION_ROSTERS.filter(r => r.rep).map(r => [rosterFolderName(r.name), r.rep]),
-);
-
 /** Folder names the roster JSON contributes to the Collections panel, in the JSON's own (authored)
  * order -- exported so collect.ts can render one folder per currently-registered collection (S_1,
  * S_1⊕1, Z_1, Z_2, and whatever's added later) even when no NAMED_GENOME_DEFS entry exists for it
@@ -893,13 +889,23 @@ export const NAMED_FAMILY_GENOME_TEXT: Record<string, string> = REGISTRY.genomeT
 /** A stored genome's own "(R,D,{L},{Z},[T])" text, T-children as names ("S_1⊕1") or nested tuples,
  * deduplicated and sorted by text -- the same shape genomeParts/registryGenomeTupleText in collect.ts
  * produce for a live genome. */
-export function storedGenomeText(g: StoredGenome): string {
+export function storedGenomeText(g: StoredGenome, tail?: string): string {
   const head = `(${g.R},${g.D},{${g.L.join(',')}},{${g.Z.join(',')}}`;
-  const children = new Set(
+  const children = [...new Set(
     g.T.map(t => ('name' in t ? nameOf(t.name, t.shift ?? 0) : storedGenomeText(t))),
-  );
-  return `${head},[${[...children].sort().join(',')}])`;
+  )].sort();
+  if (tail !== undefined) children.push(tail); // an extra last entry after the sorted T-genes
+  return `${head},[${children.join(',')}])`;
 }
+
+/** Every collection's stored genome (collectionElements.json), keyed by collection name; Z_n
+ * (double-crit) collections have none. */
+export const COLLECTION_STORED_GENOMES: Record<string, StoredGenome> = Object.fromEntries(
+  COLLECTION_GENOMES_JSON.collections.map(c => [c.name, c.genome]),
+);
+
+/** Highest ⊕n offset any collection group can carry (collectionElements.json's maxShift). */
+export const COLLECTION_MAX_SHIFT: number = COLLECTION_GENOMES_JSON.maxShift;
 
 /** EVERY collection's own genome text, keyed by collection name -- a superset of
  * NAMED_FAMILY_GENOME_TEXT (registry genomes resolve through it; the display-only ones with a

@@ -10,7 +10,15 @@
  *   loXhi(m)[s,…]     — split; both v1 and v2 are membranes spanning the same
  *                       two regions.  m = lowest vertex in the move region that
  *                       is NOT also a same-side membrane; () if none exist.
- *                       s,… = min vertex of each sub-boundary on the lo→hi arc side.
+ *                       s,… = min vertex of each sub-boundary on the bracket side.
+ *
+ * Bracket side of a split: the new face whose arc between the endpoints — read from the endpoint
+ * with the smaller key (label when labelled, else raw id) — is lexicographically smaller by key.
+ * It is chosen by NAMES, not by boundary orientation, so a position and its mirror image record
+ * the same bracket: an earlier move can leave the drawing's handedness undetermined (e.g. a second
+ * edge between the same two spots may go either side of the first) and Recreate may then draw the
+ * mirror image, which an orientation-based side ("forward arc lo→hi") reads the other way round.
+ * Only when both arcs read identically, the genuinely mirror-symmetric case, does orientation decide.
  *
  * Joint subscripts:
  *   If an endpoint vertex is a joint (appears ≥2 times on a single boundary),
@@ -103,13 +111,17 @@ export function computeMoveCode(
   // rendering artifacts for curved parallel-edge geometry (see the
   // pseudo-vertex system) — not real combinatorial structure, so they must
   // never be nameable in the token (mirrors encoding.ts's availableCount,
-  // which skips isPseudo for the same reason).
+  // which skips isPseudo for the same reason). Invisible (Dead) vertices are
+  // skipped too: the encoder emits nothing for them, so a face holding only
+  // dead structure must code like an empty one, or the same position records
+  // as `[]` when drawn on one side of the dead stuff and `()[]` on the other.
   const otherVerts = new Set<VertexId>();
   for (const b of regionR.boundaries)
     for (const e of b.entries)
-      if (e.vertexId !== lo && e.vertexId !== hi && !before.vertices.get(e.vertexId)?.isPseudo) otherVerts.add(e.vertexId);
+      if (e.vertexId !== lo && e.vertexId !== hi && !before.vertices.get(e.vertexId)?.isPseudo
+        && classifyVertexFull(e.vertexId, before) !== VertexType.Dead) otherVerts.add(e.vertexId);
 
-  // [] case: only lo and hi exist in this region (parallel-arc lens, nothing inside).
+  // [] case: only lo and hi are visible in this region (parallel-arc lens, nothing inside).
   if (otherVerts.size === 0) return `${base}[]`;
 
   // Always build the [s,…] bracket for enclosures.
@@ -143,12 +155,14 @@ export function computeMoveCode(
   for (const vid of otherVerts)
     if (!sameSideMems.has(vid) && classifyVertexFull(vid, before) !== VertexType.Dead) candidates.push(vid);
 
-  // Selection ("lowest") is a structural/raw-id concept; only the displayed
-  // text substitutes through spotGroupFor/disp() — m can be a still-live spot
-  // (range text) or a formerly-spot, now-fixed vertex (its fixed number).
+  // "Lowest" by the same key that orders lo/hi (label sort key when labelled):
+  // raw ids of spots are creation-time artifacts, so a raw-id minimum can name a
+  // still-live spot in one game and a fixed vertex in a replay of the same
+  // position. m can be a still-live spot (range text) or a formerly-spot,
+  // now-fixed vertex (its fixed number).
   const mStr = candidates.length === 0
     ? '()'
-    : `(${dispText(Math.min(...candidates))})`;
+    : `(${dispText(candidates.reduce((a, b) => (sortKeyOf(b) < sortKeyOf(a) ? b : a)))})`;
 
   return `${base}${mStr}${brackets}`;
 }
@@ -181,7 +195,8 @@ function buildBrackets(
   const subBounds = regionR.boundaries.filter(b => b !== mainComp);
   if (subBounds.length === 0) return '[]';
 
-  const loToHiReg = findEnclosedSideRegion(regionR, mainComp, lo, hi, before, after, loSub, hiSub, selfLoopOtherSide);
+  const key = (vid: VertexId): number => spotGroupFor?.(vid)?.sortKey ?? disp(vid);
+  const loToHiReg = findEnclosedSideRegion(regionR, mainComp, lo, hi, before, after, loSub, hiSub, selfLoopOtherSide, key);
   if (!loToHiReg) return '[]';
 
   const loToHiVids = new Set<VertexId>();
@@ -190,8 +205,14 @@ function buildBrackets(
 
   const entries: { sortKey: number; text: string }[] = [];
   const spotGroups = new Map<string, { sortKey: number; text: string }>();
+  // Nameable sub-boundaries in R / on the recorded side. An all-invisible one (rep null) is never
+  // listed, and several interchangeable spots share one range entry, so entries.length counts neither.
+  const nameable = (b: Boundary): boolean => bracketRepOf(b, before) !== null;
+  const nameableInR = subBounds.filter(nameable).length;
+  let nameableOnSide = 0;
   for (const sub of subBounds) {
     if (!sub.entries.some(e => loToHiVids.has(e.vertexId))) continue;
+    if (nameable(sub)) nameableOnSide++;
     // A single-entry sub-boundary is always an isolated (spot) vertex — see
     // "isolated vertices" handling in recomputeRegions (moves.ts).
     if (sub.entries.length === 1 && spotGroupFor) {
@@ -201,18 +222,11 @@ function buildBrackets(
         continue;
       }
     }
-    // Selection ("lowest") is a structural/raw-id concept; only the displayed
-    // text substitutes through disp() (min can be a formerly-spot, now-fixed vertex).
-    // Invisible vertices (classified Dead — no token emitted by the encoder) and
-    // pseudo-vertices (synthetic parallel-edge rendering artifacts, never real
-    // structure) can't stand in as the sub-boundary's representative; skip them,
-    // and skip the whole sub-boundary if every entry on it is invisible.
-    const visibleIds = sub.entries
-      .map(e => e.vertexId)
-      .filter(vid => !before.vertices.get(vid)?.isPseudo && classifyVertexFull(vid, before) !== VertexType.Dead);
-    if (visibleIds.length === 0) continue;
-    const min = Math.min(...visibleIds);
-    entries.push({ sortKey: min, text: String(disp(min)) });
+    // "Lowest" by the label key, like the entry order below (min can be a
+    // formerly-spot, now-fixed vertex; its text substitutes through disp()).
+    const min = bracketRepOf(sub, before, key);
+    if (min === null) continue;
+    entries.push({ sortKey: key(min), text: String(disp(min)) });
   }
   entries.push(...spotGroups.values());
   entries.sort((a, b) => a.sortKey - b.sortKey);
@@ -220,16 +234,46 @@ function buildBrackets(
   // Self-loop at a bare spot: a simple closed curve on a sphere has no
   // intrinsic "inside" — the two faces it creates are interchangeable, so
   // "encloses everything else in R" and "encloses nothing" describe the same
-  // move. When every other component in R ended up on the recorded side,
-  // normalize to the empty bracket: that's what a trivial small loop (the
+  // move. When every other (nameable) component in R ended up on the recorded
+  // side, normalize to the empty bracket: that's what a trivial small loop (the
   // default/easiest candidate stroke) actually produces, so recording it
   // this way keeps the token replayable by that same natural candidate.
   // Not at an appendage tip: there the tail marks one face, and "everything
   // with the loop" vs "nothing with the loop" are different positions.
   const bareSpot = (before.vertices.get(lo)?.degree ?? 0) === 0;
-  if (lo === hi && bareSpot && subBounds.length > 0 && entries.length === subBounds.length) return '[]';
+  if (lo === hi && bareSpot && nameableInR > 0 && nameableOnSide === nameableInR) return '[]';
 
   return `[${entries.map(e => e.text).join(',')}]`;
+}
+
+/** A boundary's VISIBLE vertices: no pseudo-vertices (synthetic parallel-edge midpoints, ids near
+ *  -9999) and no invisible vertices (classified Dead — the encoder emits no token for them). */
+function visibleVertices(boundary: { entries: { vertexId: VertexId }[] }, state: GameState): VertexId[] {
+  return boundary.entries
+    .map(e => e.vertexId)
+    .filter(vid => !state.vertices.get(vid)?.isPseudo && classifyVertexFull(vid, state) !== VertexType.Dead);
+}
+
+/**
+ * The vertex a move code's [s,…] bracket names a sub-boundary by: its lowest VISIBLE vertex by
+ * `key` (the label sort key when labelled; raw id by default). Raw ids of spots are creation-time
+ * artifacts, so a raw-id minimum could print a different label in a replay of the same position.
+ * Null when the whole boundary is invisible. Readers don't need the key: see inBrackets.
+ */
+export function bracketRepOf(
+  boundary: { entries: { vertexId: VertexId }[] },
+  state: GameState,
+  key: (vid: VertexId) => number = vid => vid,
+): VertexId | null {
+  const visible = visibleVertices(boundary, state);
+  return visible.length > 0 ? visible.reduce((a, b) => (key(b) < key(a) ? b : a)) : null;
+}
+
+/** Is this boundary one a bracket list (raw vertex ids) names? A vertex belongs to exactly one
+ *  component, so the component is named iff ANY of its visible vertices is listed — whichever one
+ *  bracketRepOf picked, in labelled or raw mode alike. */
+export function inBrackets(boundary: { entries: { vertexId: VertexId }[] }, state: GameState, brackets: ReadonlySet<VertexId>): boolean {
+  return visibleVertices(boundary, state).some(vid => brackets.has(vid));
 }
 
 /**
@@ -287,10 +331,14 @@ export function findMoveRegion(
 }
 
 /**
- * Identify the arc-side (lo→hi) region of a split using joint subscripts when
- * available.
+ * The bracket side of a split: for lo ≠ hi, the new face whose arc reads smaller by `key`
+ * (bracketSideByName — mirror-invariant, see the header); only when the two arcs read identically
+ * does it fall back to the orientation-based lo→hi arc side below. `key` must be the token's own
+ * ordering (label when labelled, raw id otherwise) so the brackets and the spot labels' enclosed
+ * side (vertexLabels.ts) agree.
  *
- * In the rotation-system split, the two new face boundaries have the patterns:
+ * Orientation fallback — identify the arc-side (lo→hi) region using joint subscripts when
+ * available. In the rotation-system split, the two new face boundaries have the patterns:
  *   Arc-side:     ... lo, W, hi, hiSub, ...   → contains [W, hi, hiSub]
  *   Non-arc-side: ... hi, W, lo, loSub, ...   → contains [W, lo, loSub]
  *
@@ -307,6 +355,7 @@ export function findEnclosedSideRegion(
   loSub: VertexId | null,
   hiSub: VertexId | null,
   selfLoopOtherSide = false,
+  key: (vid: VertexId) => number = vid => vid,
 ): Region | null {
   const subBounds = regionR.boundaries.filter(b => b !== mainComp);
   const w = findNewVertex(before, after);
@@ -347,7 +396,8 @@ export function findEnclosedSideRegion(
     // side's bracket; Recreate's matcher asks for the other one when the first doesn't match.
     if (selfLoopOtherSide && newRegsWithW.length === 2) loToHiReg = newRegsWithW.find(r => r !== loToHiReg) ?? loToHiReg;
   } else {
-    if (hiSub !== null) {
+    loToHiReg = bracketSideByName(newRegsWithW, w, lo, hi, after, key);
+    if (loToHiReg === null && hiSub !== null) {
       for (const r of newRegsWithW) {
         if (boundaryContainsPattern(r, w, hi, hiSub)) { loToHiReg = r; break; }
       }
@@ -485,6 +535,21 @@ export function computeEnclosureCoverage(
   });
 }
 
+/**
+ * Index of `vid` in a boundary walk, using a joint subscript to pick the occurrence: `sub` names
+ * the vertex that follows the wanted occurrence (see the "_n" notation above). Falls back to the
+ * first occurrence when sub is null or matches nothing; -1 when vid is absent.
+ */
+export function findOccurrence(entries: { vertexId: VertexId }[], vid: VertexId, sub: VertexId | null): number {
+  const n = entries.length;
+  if (sub !== null) {
+    for (let i = 0; i < n; i++) {
+      if (entries[i].vertexId === vid && entries[(i + 1) % n].vertexId === sub) return i;
+    }
+  }
+  return entries.findIndex(e => e.vertexId === vid);
+}
+
 /** Return the boundary component of r that contains both lo and hi. */
 export function compWithBoth(r: Region, lo: VertexId, hi: VertexId): Boundary | null {
   for (const b of r.boundaries) {
@@ -524,15 +589,7 @@ function forwardArc(
   const entries = comp.entries;
   const n = entries.length;
   // Use subscript to find the correct lo occurrence for joint vertices.
-  let loIdx = -1;
-  if (loSub !== null) {
-    for (let i = 0; i < n; i++) {
-      if (entries[i].vertexId === lo && entries[(i + 1) % n].vertexId === loSub) {
-        loIdx = i; break;
-      }
-    }
-  }
-  if (loIdx === -1) loIdx = entries.findIndex(e => e.vertexId === lo);
+  const loIdx = findOccurrence(entries, lo, loSub);
   if (loIdx === -1) return [];
   // Walk forward until we see hi at the hiSub occurrence.
   const result: VertexId[] = [];
@@ -546,6 +603,48 @@ function forwardArc(
     result.push(vid);
   }
   return result;
+}
+
+/**
+ * Of a split's two new faces, the one whose arc between the endpoints reads lexicographically
+ * smaller by `key`, each arc read from the endpoint with the smaller key. Null when that can't
+ * decide: not exactly two faces, an unreadable walk, or two arcs that read identically.
+ */
+function bracketSideByName(
+  newRegs: Region[],
+  w: VertexId,
+  lo: VertexId,
+  hi: VertexId,
+  after: GameState,
+  key: (vid: VertexId) => number,
+): Region | null {
+  if (newRegs.length !== 2) return null;
+  const start = key(lo) < key(hi) || (key(lo) === key(hi) && lo < hi) ? lo : hi;
+  const arcs = newRegs.map(r => arcThroughFace(r, w, start, after));
+  const [a, b] = arcs;
+  if (!a || !b) return null;
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    const d = key(a[i]) - key(b[i]);
+    if (d !== 0) return d < 0 ? newRegs[0] : newRegs[1];
+  }
+  return a.length === b.length ? null : a.length < b.length ? newRegs[0] : newRegs[1];
+}
+
+/**
+ * The real (non-pseudo) vertices of face `r`'s walk between the new edge's endpoints, read from
+ * endpoint `start`: the walk through W is W, start, …arc…, other (or the reverse). Null if W isn't
+ * on exactly one walk position or its neighbours aren't `start` and another vertex.
+ */
+function arcThroughFace(r: Region, w: VertexId, start: VertexId, after: GameState): VertexId[] | null {
+  const b = r.boundaries.find(bd => bd.entries.some(e => e.vertexId === w));
+  if (!b) return null;
+  const ids = b.entries.map(e => e.vertexId).filter(v => !after.vertices.get(v)?.isPseudo);
+  const i = ids.indexOf(w);
+  if (i < 0 || ids.lastIndexOf(w) !== i || ids.length < 3) return null;
+  const rest = [...ids.slice(i + 1), ...ids.slice(0, i)];
+  if (rest[0] === start) return rest.slice(1, -1);
+  if (rest[rest.length - 1] === start) return rest.slice(1, -1).reverse();
+  return null;
 }
 
 /**

@@ -10,6 +10,9 @@ export const DEBUG = {
   recreate: false,
   /** Tracked-encoding check match/mismatch/status logging. */
   tracked: false,
+  /** Test hook: make the next dead-region surgery's encoding check refuse (as a buggy collapse
+   *  would), to exercise the revert-and-disable path. Clears itself. */
+  failNextCollapseGate: false,
 };
 
 if (typeof window !== 'undefined') {

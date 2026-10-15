@@ -17,9 +17,14 @@ import type { GameState, VertexId, EdgeId, RegionId, Edge, BoundaryEntry } from 
 import { VertexType, VertexVisualState } from './types';
 import type { SpherePoint, CanvasPoint } from '../math/sphere';
 
+/** Does this (non-pseudo-half) entry walk its edge v1→v2? */
+export function entryIsForward(entry: BoundaryEntry, edge: Edge): boolean {
+  return edge.v1 === entry.vertexId && !entry.selfLoopRev;
+}
+
 /**
  * Returns the slice of edge.points that a BoundaryEntry should traverse.
- * For ordinary entries the full edge is returned (direction from vertexId==e.v1).
+ * For ordinary entries the full edge is returned (direction from entryIsForward).
  * For entries with pseudoHalf set, only the relevant half is returned.
  * Callers should render pts[0..pts.length-2] (omit last — start of next entry).
  */
@@ -30,11 +35,12 @@ export function edgePtsForEntry(entry: BoundaryEntry, edge: Edge): SpherePoint[]
     case 'second-fwd': return edge.points.slice(mid);
     case 'first-rev':  return [...edge.points].reverse().slice(0, edge.points.length - mid);
     case 'second-rev': return [...edge.points].reverse().slice(edge.points.length - 1 - mid);
-    default: return edge.v1 === entry.vertexId ? edge.points : [...edge.points].reverse();
+    default: return entryIsForward(entry, edge) ? edge.points : [...edge.points].reverse();
   }
 }
-import { normalize } from '../math/sphere';
+import { normalize, dot, cross, tangentFrame, fibonacciSphere, sphereAngle } from '../math/sphere';
 import { signedArea } from '../math/intersect';
+import { UnionFind } from '../math/unionFind';
 import { allocVertexId, allocEdgeId } from './gameState';
 import { beginTrace, trace, snapshotRegions, recordMove } from '../debug/moveLog';
 import { canonicalEncoding } from './encoding';
@@ -57,17 +63,7 @@ export function applyMove(state: GameState, move: MoveInput): void {
   const before = snapshotRegions(state);
 
   // --- Place new vertex at arc-length midpoint of stroke ---
-  const cumLen: number[] = [0];
-  for (let i = 1; i < stroke.length; i++) {
-    const a = stroke[i - 1], b = stroke[i];
-    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
-    cumLen.push(cumLen[i - 1] + Math.sqrt(dx * dx + dy * dy + dz * dz));
-  }
-  const half = cumLen[cumLen.length - 1] / 2;
-  let midIdx = 0;
-  for (let i = 1; i < cumLen.length; i++) {
-    if (Math.abs(cumLen[i] - half) < Math.abs(cumLen[midIdx] - half)) midIdx = i;
-  }
+  const midIdx = strokeMidIndex(stroke);
   const midPos = normalize(stroke[midIdx]);
   const newVid = allocVertexId(state);
 
@@ -100,17 +96,25 @@ export function applyMove(state: GameState, move: MoveInput): void {
   recordMove(state, { v1, v2, isLoop: v1 === v2 }, 'recompute', before, canonicalEncoding(state));
 }
 
+/** Index of the stroke sample nearest its arc-length midpoint — where applyMove puts the new spot. */
+export function strokeMidIndex(stroke: SpherePoint[]): number {
+  const cumLen: number[] = [0];
+  for (let i = 1; i < stroke.length; i++) {
+    const a = stroke[i - 1], b = stroke[i];
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    cumLen.push(cumLen[i - 1] + Math.sqrt(dx * dx + dy * dy + dz * dz));
+  }
+  const half = cumLen[cumLen.length - 1] / 2;
+  let midIdx = 0;
+  for (let i = 1; i < cumLen.length; i++) {
+    if (Math.abs(cumLen[i] - half) < Math.abs(cumLen[midIdx] - half)) midIdx = i;
+  }
+  return midIdx;
+}
+
 // ===========================================================================
 // Rotation-system face recomputation
 // ===========================================================================
-
-type V3 = { x: number; y: number; z: number };
-const dot = (a: V3, b: V3) => a.x * b.x + a.y * b.y + a.z * b.z;
-const cross = (a: V3, b: V3): V3 => ({
-  x: a.y * b.z - a.z * b.y,
-  y: a.z * b.x - a.x * b.z,
-  z: a.x * b.y - a.y * b.x,
-});
 
 /** One directed half-edge (dart). */
 interface Dart {
@@ -118,6 +122,10 @@ interface Dart {
   edge: Edge;
   origin: VertexId;
   head: VertexId;
+  /** Walks along edge.points (the v1→v2 direction) — the ONE direction convention for darts; a
+   *  self-loop's two darts can't be told apart by origin/head, and a pseudo-split half's origin may
+   *  be the pseudo-vertex, so never derive it from endpoints. */
+  forward: boolean;
   twin: number;     // index of the reverse dart
   angle: number;    // CCW angle (from outside the sphere) of the tangent leaving origin
 }
@@ -127,7 +135,6 @@ interface Cycle {
   comp: number;          // connected-component id of the cycle's vertices
   poly: CanvasPoint[];   // projected boundary polygon (2D tie-break area only — never used for containment)
   area: number;          // |signed area| of poly
-  rep: CanvasPoint;      // a representative interior-ish point (poly centroid)
   leftInside: boolean;   // is the face (LEFT of the walk) the side without the projection pole?
   entries: BoundaryEntry[]; // this cycle's boundary entries (same as entriesFromDarts(darts, ...))
   loop3: SpherePoint[];     // the cycle's raw 3D boundary loop, in walk direction (loopFromDarts)
@@ -136,12 +143,10 @@ interface Cycle {
 
 /** Bearing (CCW angle, tangent-plane) from a point ON the sphere toward another point. */
 export function bearingFrom(from: SpherePoint, to: SpherePoint): number {
-  const n = from as V3;
-  const d: V3 = { x: to.x - n.x, y: to.y - n.y, z: to.z - n.z };
-  const t: V3 = { x: d.x - dot(d, n) * n.x, y: d.y - dot(d, n) * n.y, z: d.z - dot(d, n) * n.z };
-  const up: V3 = Math.abs(n.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
-  const e1 = normalize({ x: up.x - dot(up, n) * n.x, y: up.y - dot(up, n) * n.y, z: up.z - dot(up, n) * n.z }) as V3;
-  const e2 = cross(n, e1);
+  const n = from;
+  const d: SpherePoint = { x: to.x - n.x, y: to.y - n.y, z: to.z - n.z };
+  const t: SpherePoint = { x: d.x - dot(d, n) * n.x, y: d.y - dot(d, n) * n.y, z: d.z - dot(d, n) * n.z };
+  const { e1, e2 } = tangentFrame(n);
   return Math.atan2(dot(t, e2), dot(t, e1));
 }
 
@@ -153,11 +158,9 @@ export function bearingFrom(from: SpherePoint, to: SpherePoint): number {
  * guaranteed to point where the real rotation-order code thinks it does.
  */
 export function pointAtBearing(from: SpherePoint, bearing: number, dist: number): SpherePoint {
-  const n = from as V3;
-  const up: V3 = Math.abs(n.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
-  const e1 = normalize({ x: up.x - dot(up, n) * n.x, y: up.y - dot(up, n) * n.y, z: up.z - dot(up, n) * n.z }) as V3;
-  const e2 = cross(n, e1);
-  const dir: V3 = { x: Math.cos(bearing) * e1.x + Math.sin(bearing) * e2.x,
+  const n = from;
+  const { e1, e2 } = tangentFrame(n);
+  const dir: SpherePoint = { x: Math.cos(bearing) * e1.x + Math.sin(bearing) * e2.x,
                      y: Math.cos(bearing) * e1.y + Math.sin(bearing) * e2.y,
                      z: Math.cos(bearing) * e1.z + Math.sin(bearing) * e2.z };
   return normalize({ x: n.x * Math.cos(dist) + dir.x * Math.sin(dist),
@@ -186,10 +189,11 @@ export function stablePt(pts: SpherePoint[], startIdx: number, dir: 1 | -1): Sph
 }
 
 interface SpliceSlot {
-  /** The OLD edge (departing this vertex) that the new dart(s) must be inserted
-   *  immediately after in ring order. Null means the vertex had no prior ring
+  /** The OLD dart (departing this vertex) that the new dart(s) must be inserted
+   *  immediately after in ring order, named by its edge and direction (a self-loop's two darts
+   *  share one edge, so the edge alone is ambiguous). Null means the vertex had no prior ring
    *  (degree 0) — the new dart becomes the whole ring. */
-  afterEdgeId: EdgeId | null;
+  after: { edgeId: EdgeId; forward: boolean } | null;
 }
 
 /** The raw SpherePoint loop a boundary walk traces, following each entry's
@@ -252,7 +256,7 @@ export function loopsNearestFeature(
 ): { dist: number; inside: boolean } {
   const TAU = Math.PI * 2;
   const TIE = 1e-9;
-  const p = point as V3;
+  const p = point;
   let bestDist = Infinity;
   let bestInside = false;
   const consider = (dist: number, inside: boolean) => {
@@ -263,17 +267,17 @@ export function loopsNearestFeature(
     const n = loop.length;
     if (n < 2) continue; // an isolated spot has no sides — it can't decide membership
     for (let i = 0; i < n; i++) {
-      const u = loop[i] as V3;
-      const prev = loop[(i + n - 1) % n] as V3;
-      const next = loop[(i + 1) % n] as V3;
+      const u = loop[i];
+      const prev = loop[(i + n - 1) % n];
+      const next = loop[(i + 1) % n];
 
       // Boundary segment u -> next (great-circle arc), region on its left.
       const nrm = cross(u, next);
       const nLen = Math.hypot(nrm.x, nrm.y, nrm.z);
       if (nLen > 1e-12) {
-        const nu: V3 = { x: nrm.x / nLen, y: nrm.y / nLen, z: nrm.z / nLen };
+        const nu: SpherePoint = { x: nrm.x / nLen, y: nrm.y / nLen, z: nrm.z / nLen };
         const s = dot(p, nu);
-        const f: V3 = { x: p.x - s * nu.x, y: p.y - s * nu.y, z: p.z - s * nu.z };
+        const f: SpherePoint = { x: p.x - s * nu.x, y: p.y - s * nu.y, z: p.z - s * nu.z };
         // Foot of p on the arc's great circle, valid only if it falls between u and next.
         if (dot(cross(u, f), nu) >= 0 && dot(cross(f, next), nu) >= 0) {
           consider(Math.asin(Math.min(1, Math.abs(s))), s > 0);
@@ -285,11 +289,11 @@ export function loopsNearestFeature(
       // stub (toward next) to the incoming stub (toward prev).
       if (Math.hypot(next.x - u.x, next.y - u.y, next.z - u.z) < 1e-12) continue;
       if (Math.hypot(prev.x - u.x, prev.y - u.y, prev.z - u.z) < 1e-12) continue;
-      const dist = Math.acos(Math.max(-1, Math.min(1, dot(p, u))));
+      const dist = sphereAngle(p, u);
       if (dist > bestDist + TIE) continue; // can't win or tie — skip the bearing math
-      const bOut = bearingFrom(u as SpherePoint, next as SpherePoint);
-      const bIn = bearingFrom(u as SpherePoint, prev as SpherePoint);
-      const bP = bearingFrom(u as SpherePoint, point);
+      const bOut = bearingFrom(u, next);
+      const bIn = bearingFrom(u, prev);
+      const bP = bearingFrom(u, point);
       const mod = (x: number) => ((x % TAU) + TAU) % TAU;
       let sweep = mod(bIn - bOut);
       if (sweep < 1e-12) sweep = TAU; // pendant tip: the face wraps all the way round
@@ -380,8 +384,7 @@ function computeSpliceSlots(
     containing = candidates[0];
   } else if (candidates.length > 1) {
     // Both endpoints are shared by more than one region (a joint) — only now
-    // does the ambiguity need resolving, and it's done sphere-natively (3D
-    // winding number around midPos), never via a projected 2D polygon.
+    // does the ambiguity need resolving: the nearest-boundary-feature test above.
     containing = pickContaining(candidates) ?? candidates[0];
   } else {
     // Neither endpoint's bookkeeping matched anything (shouldn't happen for a
@@ -424,20 +427,23 @@ function computeSpliceSlots(
     // sides locally makes these bearings live in the identical metric as the
     // oldDarts angle-sort in recomputeRegions, so the slot we pick lines up with
     // where the dart actually lands.
-    const localBearing = (edge: Edge): number =>
-      bearingFrom(vPos, edge.v1 === vid
+    // Each candidate is the dart this entry walks out along — for a self-loop the entry's own
+    // direction (entryIsForward) says which end of the edge leaves this side.
+    const localBearing = (edge: Edge, forward: boolean): number =>
+      bearingFrom(vPos, forward
         ? stablePt(edge.points, 0, 1)
         : stablePt(edge.points, edge.points.length - 1, -1));
-    const candidates: { edgeId: EdgeId; bearing: number }[] = [];
+    const candidates: { edgeId: EdgeId; forward: boolean; bearing: number }[] = [];
     for (const b of containing!.boundaries) {
       for (const entry of b.entries) {
         if (entry.vertexId !== vid || entry.edgeId === undefined) continue;
         const edge = state.edges.get(entry.edgeId);
         if (!edge || edge.points.length < 2) continue;
-        candidates.push({ edgeId: entry.edgeId, bearing: localBearing(edge) });
+        const forward = entryIsForward(entry, edge);
+        candidates.push({ edgeId: entry.edgeId, forward, bearing: localBearing(edge, forward) });
       }
     }
-    if (candidates.length === 0) { result.set(vid, { afterEdgeId: null }); return; }
+    if (candidates.length === 0) { result.set(vid, { after: null }); return; }
     const targetPt = localTarget(vid) ?? midPos;
     const target = bearingFrom(vPos, targetPt);
     // Splice the new dart at its TRUE angular position in the ring: pick the
@@ -455,7 +461,7 @@ function computeSpliceSlots(
       const gap = (((target - c.bearing) % TAU) + TAU) % TAU;
       if (gap < bestGap) { bestGap = gap; best = c; }
     }
-    result.set(vid, { afterEdgeId: best.edgeId });
+    result.set(vid, { after: { edgeId: best.edgeId, forward: best.forward } });
   };
 
   pickSlot(moveInfo.v1);
@@ -467,17 +473,17 @@ function computeSpliceSlots(
  * Recompute regions, subpositions, edge sides, vertex degrees and types entirely
  * from the current vertices+edges, treating the drawing as a planar graph on the
  * sphere. Faces are traced via a per-vertex rotation system; disconnected pieces
- * (isolated spots, separate clusters) are nested into their containing face by
- * point-in-polygon.
+ * (isolated spots, separate clusters) are nested into their containing face by the
+ * sphere-native nearest-boundary-feature test (loopsNearestFeature).
  */
 export function recomputeRegions(
   state: GameState,
   moveInfo?: { v1: VertexId; v2: VertexId; newEdgeIds: [EdgeId, EdgeId]; midVid: VertexId },
 ): void {
   // Determination must NOT depend on the camera (twisting the view must never
-  // change the combinatorics). Use a CAMERA-INDEPENDENT, pole-safe stereographic
-  // projection whose pole points away from every vertex, so no edge passes near
-  // the projection singularity and all point-in-polygon tests are well-conditioned.
+  // change the combinatorics). The pole of a CAMERA-INDEPENDENT stereographic
+  // projection, chosen far from every vertex, decides which side of each face cycle
+  // is bounded; the projection itself only feeds 2D area tie-breaks (never containment).
   const pole = safeProjectionPole(state);
   const proj = makeSafeProjection(state, pole);
 
@@ -487,10 +493,9 @@ export function recomputeRegions(
   // region state.regions held before this call. Rather than trusting a raw
   // tangent-angle comparison of the new dart against a crowded vertex's other
   // darts (fragile: a hooked/near-vertex stroke sample can land ~180° off), find
-  // that region by point-in-polygon on the new edge's midpoint vertex, then read
-  // off exactly which two OLD, stable darts the new dart must be inserted
-  // between at each endpoint. See conversation 2026-07-08 (region determination
-  // near-vertex tangent bug).
+  // that region (endpoint bookkeeping first, then the nearest-boundary-feature
+  // test on the new midpoint — see computeSpliceSlots), then read off exactly
+  // which OLD, stable dart the new dart must be inserted after at each endpoint.
   const spliceSlots = moveInfo ? computeSpliceSlots(state, moveInfo) : null;
 
   // --- Degrees from the edge set (self-loop edges count twice). ---
@@ -503,15 +508,8 @@ export function recomputeRegions(
   for (const v of state.vertices.values()) v.degree = degree.get(v.id) ?? 0;
 
   // --- Connected components over the graph (isolated vertices are singletons). ---
-  const parent = new Map<VertexId, VertexId>();
-  const find = (x: VertexId): VertexId => {
-    let r = x;
-    while (parent.get(r)! !== r) r = parent.get(r)!;
-    while (parent.get(x)! !== r) { const n = parent.get(x)!; parent.set(x, r); x = n; }
-    return r;
-  };
-  for (const v of state.vertices.keys()) parent.set(v, v);
-  for (const e of state.edges.values()) { parent.set(find(e.v1), find(e.v2)); }
+  const comps = new UnionFind<VertexId>();
+  for (const e of state.edges.values()) comps.union(e.v1, e.v2);
 
   // --- Pseudo-vertices for parallel edges (rotation-system orientation fix). ---
   // Two parallel edges between A and B produce darts at A with nearly-identical
@@ -552,8 +550,7 @@ export function recomputeRegions(
                    degree: 0, visual: VertexVisualState.Saturated, isPseudo: true, pseudoEdgeId: e.id };
       state.vertices.set(pv.id, pv);
       pseudoOfEdge.set(e.id, pv.id);
-      parent.set(pv.id, pv.id);
-      parent.set(find(A), find(pv.id)); // union pseudo into the component
+      comps.union(A, pv.id); // union pseudo into the component
     }
   }
 
@@ -576,14 +573,14 @@ export function recomputeRegions(
       const pvAward = e.points[Math.max(0, midIdx - 1)]; // direction from P toward A
       const pvBward = e.points[Math.min(e.points.length - 1, midIdx + 1)]; // direction from P toward B
       const ai = darts.length;
-      darts.push({ idx: ai,     edge: e, origin: e.v1, head: pvId,  twin: ai + 1, angle: tangentAngle(e.v1, aNbr) });
-      darts.push({ idx: ai + 1, edge: e, origin: pvId,  head: e.v1, twin: ai,     angle: tangentAngle(pvId,  pvAward) });
-      darts.push({ idx: ai + 2, edge: e, origin: pvId,  head: e.v2, twin: ai + 3, angle: tangentAngle(pvId,  pvBward) });
-      darts.push({ idx: ai + 3, edge: e, origin: e.v2, head: pvId,  twin: ai + 2, angle: tangentAngle(e.v2,  bNbr) });
+      darts.push({ idx: ai,     edge: e, origin: e.v1, head: pvId,  forward: true,  twin: ai + 1, angle: tangentAngle(e.v1, aNbr) });
+      darts.push({ idx: ai + 1, edge: e, origin: pvId,  head: e.v1, forward: false, twin: ai,     angle: tangentAngle(pvId,  pvAward) });
+      darts.push({ idx: ai + 2, edge: e, origin: pvId,  head: e.v2, forward: true,  twin: ai + 3, angle: tangentAngle(pvId,  pvBward) });
+      darts.push({ idx: ai + 3, edge: e, origin: e.v2, head: pvId,  forward: false, twin: ai + 2, angle: tangentAngle(e.v2,  bNbr) });
     } else {
       const ai = darts.length;
-      darts.push({ idx: ai,     edge: e, origin: e.v1, head: e.v2, twin: ai + 1, angle: tangentAngle(e.v1, aNbr) });
-      darts.push({ idx: ai + 1, edge: e, origin: e.v2, head: e.v1, twin: ai,     angle: tangentAngle(e.v2, bNbr) });
+      darts.push({ idx: ai,     edge: e, origin: e.v1, head: e.v2, forward: true,  twin: ai + 1, angle: tangentAngle(e.v1, aNbr) });
+      darts.push({ idx: ai + 1, edge: e, origin: e.v2, head: e.v1, forward: false, twin: ai,     angle: tangentAngle(e.v2, bNbr) });
     }
   }
 
@@ -604,8 +601,9 @@ export function recomputeRegions(
     const newDarts = list.filter(di => newEdgeIdSet.has(darts[di].edge.id));
     oldDarts.sort((a, b) => darts[a].angle - darts[b].angle);
     let insertAt = oldDarts.length;
-    if (slot.afterEdgeId !== null) {
-      const pos = oldDarts.findIndex(di => darts[di].edge.id === slot.afterEdgeId);
+    if (slot.after !== null) {
+      const { edgeId, forward } = slot.after;
+      const pos = oldDarts.findIndex(di => darts[di].edge.id === edgeId && darts[di].forward === forward);
       if (pos >= 0) insertAt = pos + 1;
     }
     // A self-loop splices BOTH its darts into the one slot. Order them by CCW offset from the
@@ -679,7 +677,6 @@ export function recomputeRegions(
     } while (cur !== s && !visited.has(cur));
 
     const poly = polyFromDarts(seq, darts, proj, pseudoIds);
-    const rep = poly.length ? poly[0] : { px: 0, py: 0 };
     const entries = entriesFromDarts(seq, darts, pseudoIds);
     const loop3 = loopFromDarts(seq, darts);
     // Bounded (in the safe projection) ⇔ the face — the LEFT side of the walk — is the side
@@ -687,7 +684,7 @@ export function recomputeRegions(
     // exact for a cycle of any size; the old 2D probe vote (fixed ~3px probes) misread loops
     // that project to a few pixels, e.g. a small self-loop at a pendant tip.
     const leftInside = loop3.length >= 2 ? !loopsNearestFeature([loop3], pole).inside : true;
-    cycles.push({ darts: seq, comp: find(darts[s].origin), poly, area: Math.abs(signedArea(poly)), rep, leftInside, entries, loop3, repPoint: realVertexPos(seq) });
+    cycles.push({ darts: seq, comp: comps.find(darts[s].origin), poly, area: Math.abs(signedArea(poly)), leftInside, entries, loop3, repPoint: realVertexPos(seq) });
   }
 
   // --- Classify each cycle as a bounded face vs its component's exterior cycle.
@@ -728,9 +725,10 @@ export function recomputeRegions(
   const cycleToFace = new Map<number, number>(); // bounded cycle idx → face index
   for (const ci of boundedIdx) {
     cycleToFace.set(ci, faces.length);
-    faces.push({ boundaries: [entriesFromDarts(cycles[ci].darts, darts, pseudoIds)], isOuter: false });
+    faces.push({ boundaries: [cycles[ci].entries], isOuter: false });
   }
   const globalOuter: Face = { boundaries: [], isOuter: true };
+  const globalOuterIdx = faces.length; // pushed last, below
 
   // Smallest bounded face (from another component) that sphere-natively contains
   // pt — loopsNearestFeature against each candidate's own 3D boundary loop
@@ -752,12 +750,15 @@ export function recomputeRegions(
     return best;
   };
 
-  // Outer cycles → attach as a boundary of their containing face (a hole).
-  cycles.forEach((c, i) => {
-    if (!isOuterCycle[i]) return;
+  // Every cycle's face, resolved ONCE: a bounded cycle is its own face; an outer cycle attaches
+  // as a boundary (a hole) of its containing face, or of the global outer face.
+  const faceOfCycle = cycles.map((c, i) => {
+    if (!isOuterCycle[i]) return cycleToFace.get(i)!;
     const fi = containingFace(c.repPoint, c.comp);
-    const entries = entriesFromDarts(c.darts, darts, pseudoIds);
-    (fi >= 0 ? faces[fi] : globalOuter).boundaries.push(entries);
+    return fi >= 0 ? fi : globalOuterIdx;
+  });
+  cycles.forEach((c, i) => {
+    if (isOuterCycle[i]) (faceOfCycle[i] === globalOuterIdx ? globalOuter : faces[faceOfCycle[i]]).boundaries.push(c.entries);
   });
 
   // Isolated vertices (degree 0) → single-entry boundary in their containing face.
@@ -821,20 +822,19 @@ export function recomputeRegions(
   });
   state.nextRegionId = faces.length;
 
-  // --- Edge left/right regions from the dart→face map (no longer stale). ---
+  // --- Edge left/right regions from the dart→face map (no longer stale). The first dart pushed
+  //     for an edge walks it forward (face on its left), the second is the first's twin. ---
   const faceOfDart = new Map<number, RegionId>();
-  cycles.forEach((c, i) => {
-    const rid = isOuterCycle[i]
-      ? outerCycleFace(i, cycles, boundedIdx, cycleToFace, globalOuterId(faces))
-      : cycleToFace.get(i)!;
-    for (const di of c.darts) faceOfDart.set(di, rid);
-  });
+  cycles.forEach((c, i) => { for (const di of c.darts) faceOfDart.set(di, faceOfCycle[i]); });
+  const dartsOfEdge = new Map<Edge, number[]>();
+  for (const d of darts) {
+    const l = dartsOfEdge.get(d.edge);
+    if (l) { if (l.length < 2) l.push(d.idx); } else dartsOfEdge.set(d.edge, [d.idx]);
+  }
   for (const e of state.edges.values()) {
-    // find the two darts of this edge
-    let da = -1, db = -1;
-    for (const d of darts) { if (d.edge === e) { if (da < 0) da = d.idx; else db = d.idx; } }
-    e.leftRegion  = da >= 0 ? (faceOfDart.get(da) ?? -1) : -1;
-    e.rightRegion = db >= 0 ? (faceOfDart.get(db) ?? -1) : -1;
+    const [da, db] = dartsOfEdge.get(e) ?? [];
+    e.leftRegion  = da !== undefined ? (faceOfDart.get(da) ?? -1) : -1;
+    e.rightRegion = db !== undefined ? (faceOfDart.get(db) ?? -1) : -1;
   }
 
   // --- Subpositions: regions linked when they share a living (degree<3) vertex. ---
@@ -844,34 +844,6 @@ export function recomputeRegions(
   for (const v of state.vertices.values()) classifyVertexByDegree(state, v.id);
 
   trace(`recompute: ${state.regions.size} regions, ${state.subpositions.length} subpositions, ${cycles.length} face cycles`);
-}
-
-/** Region id that an outer cycle's darts border (the face it nests into). Same
- *  sphere-native nearest-feature containment as containingFace above — see it and
- *  [[feedback_sphere_native_containment]]. */
-function outerCycleFace(
-  i: number,
-  cycles: Cycle[],
-  boundedIdx: number[],
-  cycleToFace: Map<number, number>,
-  globalOuterFace: number,
-): RegionId {
-  const pt = cycles[i].repPoint;
-  if (!pt) return globalOuterFace;
-  let best = -1, bestArea = Infinity;
-  for (const ci of boundedIdx) {
-    if (cycles[ci].comp === cycles[i].comp) continue;
-    if (cycles[ci].loop3.length >= 2 && cycles[ci].area < bestArea && loopsNearestFeature([cycles[ci].loop3], pt).inside) {
-      bestArea = cycles[ci].area; best = cycleToFace.get(ci)!;
-    }
-  }
-  return best >= 0 ? best : globalOuterFace;
-}
-
-/** The face index used as the global outer region (always last in `faces`). */
-function globalOuterId(faces: { isOuter: boolean }[]): RegionId {
-  for (let i = faces.length - 1; i >= 0; i--) if (faces[i].isOuter) return i;
-  return faces.length - 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -888,11 +860,12 @@ function entriesFromDarts(seq: number[], darts: Dart[], pseudoIds: Set<VertexId>
     const pseudoHead   = pseudoIds.has(d.head);
     let pseudoHalf: BoundaryEntry['pseudoHalf'];
     if (pseudoOrigin) {
-      pseudoHalf = d.head === d.edge.v2 ? 'second-fwd' : 'second-rev';
+      pseudoHalf = d.forward ? 'second-fwd' : 'second-rev';
     } else if (pseudoHead) {
-      pseudoHalf = d.origin === d.edge.v1 ? 'first-fwd' : 'first-rev';
+      pseudoHalf = d.forward ? 'first-fwd' : 'first-rev';
     }
-    return { vertexId: d.origin, side: 'only' as const, edgeId: d.edge.id, ...(pseudoHalf ? { pseudoHalf } : {}) };
+    const selfLoopRev = !pseudoHalf && !d.forward && d.edge.v1 === d.edge.v2;
+    return { vertexId: d.origin, side: 'only' as const, edgeId: d.edge.id, ...(pseudoHalf ? { pseudoHalf } : {}), ...(selfLoopRev ? { selfLoopRev: true as const } : {}) };
   });
 }
 
@@ -905,7 +878,7 @@ function polyFromDarts(seq: number[], darts: Dart[], project: (p: SpherePoint) =
   for (const di of seq) {
     const d = darts[di];
     if (pseudoIds.has(d.origin)) continue; // pseudo-vertex dart: partner dart covers this edge
-    const pts = d.origin === d.edge.v1 ? d.edge.points : [...d.edge.points].reverse();
+    const pts = d.forward ? d.edge.points : [...d.edge.points].reverse();
     for (let j = 0; j < pts.length - 1; j++) poly.push(project(pts[j]));
   }
   return poly;
@@ -941,13 +914,10 @@ export function polyFromEntries(
  */
 export function makeSafeProjection(state: GameState, pole: SpherePoint = safeProjectionPole(state)): (p: SpherePoint) => CanvasPoint {
   const verts = [...state.vertices.values()];
-  const up: V3 = Math.abs(pole.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
-  const u = normalize({ x: up.x - dot(up, pole) * pole.x, y: up.y - dot(up, pole) * pole.y, z: up.z - dot(up, pole) * pole.z }) as V3;
-  const ww = cross(pole, u);
+  const { e1: u, e2: ww } = tangentFrame(pole);
   const raw = (p: SpherePoint): CanvasPoint => {
-    const dz = dot(p as V3, pole);
-    const den = Math.max(1 - dz, 1e-6);
-    return { px: dot(p as V3, u) / den, py: dot(p as V3, ww) / den };
+    const den = Math.max(1 - dot(p, pole), 1e-6);
+    return { px: dot(p, u) / den, py: dot(p, ww) / den };
   };
   // Scale to a pixel-like magnitude (consumers are scale-invariant; this just keeps
   // the numbers readable in traces).
@@ -964,17 +934,11 @@ export function makeSafeProjection(state: GameState, pole: SpherePoint = safePro
  */
 export function safeProjectionPole(state: GameState): SpherePoint {
   const verts = [...state.vertices.values()];
-  const N = 64;
-  const ga = Math.PI * (3 - Math.sqrt(5));
-  let pole: V3 = { x: 0, y: 0, z: 1 };
+  let pole: SpherePoint = { x: 0, y: 0, z: 1 };
   let bestMaxDot = Infinity;
-  for (let i = 0; i < N; i++) {
-    const y = 1 - (2 * i + 1) / N;
-    const r = Math.sqrt(Math.max(0, 1 - y * y));
-    const th = ga * i;
-    const c: V3 = { x: Math.cos(th) * r, y, z: Math.sin(th) * r };
+  for (const c of fibonacciSphere(64)) {
     let maxDot = -Infinity;
-    for (const v of verts) { const d = dot(c, v.pos as V3); if (d > maxDot) maxDot = d; }
+    for (const v of verts) { const d = dot(c, v.pos); if (d > maxDot) maxDot = d; }
     if (maxDot < bestMaxDot) { bestMaxDot = maxDot; pole = c; }
   }
   return pole;
@@ -984,9 +948,8 @@ export function safeProjectionPole(state: GameState): SpherePoint {
  * A face cycle's raw 3D loop, following each dart's curve in WALK direction (face on the left).
  * Unlike boundarySphereLoop over the cycle's entries, this gets a true self-loop edge (v1 === v2,
  * from dead-region collapse — not split by a pseudo-vertex) right: its two darts traverse the same
- * points in opposite directions, which an entry's vertexId alone can't tell apart. The dart
- * builder pushes each edge's forward dart(s) before their twins, so a dart runs along
- * edge.points exactly when idx < twin; a pseudo-split dart covers the half on its own side.
+ * points in opposite directions (Dart.forward), which an entry's vertexId alone can't tell apart;
+ * a pseudo-split dart covers the half on its own side.
  */
 function loopFromDarts(seq: number[], darts: Dart[]): SpherePoint[] {
   const loop: SpherePoint[] = [];
@@ -994,7 +957,7 @@ function loopFromDarts(seq: number[], darts: Dart[]): SpherePoint[] {
     const d = darts[di];
     const pts = d.edge.points;
     const mid = Math.floor(pts.length / 2);
-    const fwd = d.idx < d.twin;
+    const fwd = d.forward;
     const ordered = fwd ? pts : [...pts].reverse();
     const fromPseudo = d.origin !== d.edge.v1 && d.origin !== d.edge.v2;
     const toPseudo = d.head !== d.edge.v1 && d.head !== d.edge.v2;
@@ -1015,7 +978,7 @@ function assignSides(entries: BoundaryEntry[]): BoundaryEntry[] {
     const c = counts.get(e.vertexId) ?? 1;
     let side: BoundaryEntry['side'] = 'only';
     if (c > 1) { side = seen.has(e.vertexId) ? 'secondVisit' : 'firstVisit'; seen.add(e.vertexId); }
-    return { vertexId: e.vertexId, side, edgeId: e.edgeId, ...(e.pseudoHalf ? { pseudoHalf: e.pseudoHalf } : {}) };
+    return { ...e, side };
   });
 }
 
@@ -1044,25 +1007,15 @@ function assignSides(entries: BoundaryEntry[]): BoundaryEntry[] {
  */
 function buildSubpositions(state: GameState, degree: Map<VertexId, number>): { regionIds: RegionId[] }[] {
   const ids = [...state.regions.keys()];
-  const parent = new Map<RegionId, RegionId>();
-  const find = (x: RegionId): RegionId => {
-    let r = x;
-    while (parent.get(r)! !== r) r = parent.get(r)!;
-    return r;
-  };
-  const union = (a: RegionId, b: RegionId) => {
-    const ra = find(a), rb = find(b);
-    if (ra !== rb) parent.set(ra, rb);
-  };
-  for (const id of ids) parent.set(id, id);
+  const uf = new UnionFind<RegionId>();
   for (const e of state.edges.values()) {
     const d1 = degree.get(e.v1) ?? 0, d2 = degree.get(e.v2) ?? 0;
-    if (d1 < 3 || d2 < 3) union(e.leftRegion, e.rightRegion);
+    if (d1 < 3 || d2 < 3) uf.union(e.leftRegion, e.rightRegion);
   }
 
   const groups = new Map<RegionId, RegionId[]>();
   for (const id of ids) {
-    const root = find(id);
+    const root = uf.find(id);
     const g = groups.get(root);
     if (g) g.push(id); else groups.set(root, [id]);
   }

@@ -23,8 +23,22 @@ Internal helpers are listed only when they're large enough to be worth knowing.
 | `normalize(p)` | Normalize p back onto the unit sphere |
 | `sphereCentroid(points)` | Average + renormalize a set of sphere points |
 | `slerp(a, b, t)` | Spherical linear interpolation between a and b |
-| `arcsCross(a0, a1, b0, b1)` | True if two spherical arc segments intersect (antipode-safe) |
+| `sphereAngle(a, b)` | Great-circle angular distance (radians, [0, π]) |
+| `dot` / `cross` / `add` / `scale` / `chord2` | Vector helpers; `chord2` = squared chord distance (cheap "same point?" / broad-phase test) |
+| `tangentFrame(n)` | Orthonormal tangent basis (e1, e2 = n × e1) at a unit point — every bearing / small-circle / stereographic construction uses it |
+| `fibonacciSphere(count)` | Near-uniform points on the sphere (golden-angle lattice) |
+| `polylineLength(pts)` / `resamplePolyline(pts, count)` | Geodesic length of a polyline / resample to `count` points evenly by arc length (endpoints exact). Moved here from smooth.ts/smoothGeometry.ts 2026-10-12 |
+| `arcsCross(a0, a1, b0, b1)` | True if two spherical arc segments intersect. Never reports the antipodal "ghost" intersection (checked on 2M random pairs, 2026-10-12), so callers need no hemisphere/midpoint guard — the old per-caller guards were removed |
+| `arcsProperlyCross(a0, a1, b0, b1)` / `polylinesProperlyCross(a, b)` | THE "does this polyline cross that one" test: segments meeting at a shared end point (`SAME_POINT2`) are skipped as a PAIR, never by skipping whole end segments (which hid real crossings near a vertex). Used by `strokeCrossesEdges`, smooth.ts's crossing guards, `routeHarness.ts`'s `edgeCrossings` |
 | `segCrossesPolylineSphere(...)` | Test a single arc segment against a sphere polyline |
+
+---
+
+## `src/math/unionFind.ts` — Disjoint sets
+
+| Export | Description |
+|---|---|
+| `UnionFind<K>` | Disjoint-set forest over arbitrary keys (path compression; keys added on first use): `find`, `union`. Shared by moves.ts, moveRouter.ts and deadRegions.ts (each used to have its own) |
 
 ---
 
@@ -89,6 +103,9 @@ Pseudo-vertex fields (parallel-edge orientation fix; see memory `reference_pseud
 | `allocVertexId(state)` | Increment and return next vertex ID (positive integers; originals are negative) |
 | `allocEdgeId(state)` | Increment and return next edge ID |
 | `cloneState(s)` | Deep-clone the entire GameState for undo snapshots or rollback guards |
+| `addEdge(state, v1, v2, points)` / `deleteVertices(state, ids)` | Graph-surgery helpers shared by the collapses and the physics: add an edge (regions left for `recomputeRegions`) / delete vertices plus every edge touching them |
+| `anchorEdge(state, e)` / `pointsFrom(e, from)` | Snap an edge's end points onto its vertices / an edge's points oriented to start at an endpoint (not for a self-loop) |
+| `syncPseudoVertices(state, edgeIds?)` | Put pseudo-vertices back on their edge's index-midpoint |
 
 ---
 
@@ -96,8 +113,10 @@ Pseudo-vertex fields (parallel-edge orientation fix; see memory `reference_pseud
 
 | Function | Description |
 |---|---|
-| `edgePtsForEntry(entry, edge)` | Slice of `edge.points` a boundary entry traverses — full edge for ordinary entries, or just the relevant half when `pseudoHalf` is set |
+| `entryIsForward(entry, edge)` | Does this (non-pseudo-half) boundary entry walk its edge v1→v2? Reads `BoundaryEntry.selfLoopRev` — a raw self-loop's two faces can't be told apart by endpoints. Use it instead of `edge.v1 === entry.vertexId` |
+| `edgePtsForEntry(entry, edge)` | Slice of `edge.points` a boundary entry traverses — full edge for ordinary entries (direction from `entryIsForward`), or just the relevant half when `pseudoHalf` is set |
 | `applyMove(state, move)` | Apply a committed move: add midpoint vertex + two edges, then recompute regions |
+| `strokeMidIndex(stroke)` | Index of the stroke sample nearest its arc-length midpoint, where `applyMove` puts the new spot |
 | `bearingFrom(from, to)` | Compass bearing from one sphere point to another |
 | `pointAtBearing(from, bearing, dist)` | Sphere point reached by walking a bearing/distance from `from` |
 | `stablePt(pts, startIdx, dir)` | Pick a numerically stable reference point along a polyline for tangent/bearing math |
@@ -111,7 +130,12 @@ Key internal helpers: `entriesFromDarts` (dart cycle → boundary), `assignSides
 unlike `boundarySphereLoop`/`edgePtsForEntry`, gets a raw self-loop edge's reverse dart right),
 cycle handedness = `!loopsNearestFeature([loop3], pole).inside` (exact; replaced the 2D
 `probeLeftInside` vote 2026-10-03, which misread loops projecting to a few pixels),
-`outerCycleFace` / `globalOuterId` (find the outer face), `buildSubpositions`
+`containingFace` / `faceOfCycle` (each outer cycle resolved once to the smallest bounded face of another
+component that contains it, else the global outer face; `outerCycleFace` was removed 2026-10-12),
+`Dart.forward` (walks along `edge.points` — THE dart direction convention; never derive it from
+origin/head, which can't tell a self-loop's two darts apart), `SpliceSlot.after = {edgeId, forward}`
+(`computeSpliceSlots`: the old dart a new dart is inserted after, named by edge AND direction since a
+self-loop's two darts share one edge; null at a degree-0 vertex), `buildSubpositions`
 (group regions into subpositions by connected component via edge `leftRegion`/`rightRegion`
 adjacency), `classifyVertexByDegree` (degree-only cache update; authoritative classification
 is `classifyVertexFull` in encoding.ts).
@@ -125,6 +149,7 @@ is `classifyVertexFull` in encoding.ts).
 | `canonicalEncoding(state)` | The canonical position string — topological invariant; used as gate for dead-region surgery |
 | `encodePosition(state)` | Full encoding: returns `EncodingResult { text, vertexSymbols, charInfo, ... }` |
 | `encodePositionDecompressed(state)` | Encoding variant without the compact bracket/⊕ compression passes, for display/debugging |
+| `trackedLayout(state)` | "Which board vertex is each canonical token": the engine's canonical spelling of the DECOMPRESSED live encoding with every token traced to its live vertex/edge — `comps` ([component][region][boundary][token] → `TokenInfo`) and per-character `charInfo` (separators and `N` carry none). THE one walk of `canonicalizeTrackedProvenanceSync`'s output (used by `resolveViaProvenance`, occurrenceMap.ts, main.ts's encoding-bar hover); null until the engine loads. Its per-component walk also fixed the `wrapCanonDisplay` hover misalignment after a `⊕` |
 | `classifyVertexFull(vid, state)` | Authoritative region-aware vertex classification (Spot/Appendage/Scab/Membrane/Joint/Dead) |
 | `resolveMoveVertices(state, move)` | Resolve a `MoveInfo` move descriptor to concrete `ResolvedMoveVertices` against a given state. First tries `resolveViaProvenance` (exact: the engine's own `canonicalizeTrackedProvenance` of the decompressed encoding, used for any component canon spells identically decompressed); otherwise the TS re-derivation, with engine component → live subposition matched by each subposition's own canon (`liveComponentIndex`) |
 
@@ -141,9 +166,11 @@ Internal pipeline: `assignMembraneLetters` → `buildVertexSymbols` → `buildRe
 | `computeMoveCode(before, v1, v2, after)` | Encode a single move as a string (loXhi format; parallel-lens move uses the `[]` suffix, with optional split/enclosure brackets) |
 | `findNewVertex(before, after)` | Locate the midpoint vertex a move created, by diffing two states |
 | `findMoveRegion(...)` | Locate the region a move's stroke passed through |
-| `findEnclosedSideRegion(...)` | Locate the region enclosed on one side of an enclosure-style move. Self-loop at an appendage tip: always the face bounded by the loop alone (the tail's face is a different position); at a bare spot: first face holding sub-boundaries (faces interchangeable) |
+| `findEnclosedSideRegion(...)` | Locate the region enclosed on one side of an enclosure-style move. Self-loop at an appendage tip: always the face bounded by the loop alone (the tail's face is a different position); at a bare spot: first face holding sub-boundaries (faces interchangeable). Two-endpoint split (2026-10-13): `bracketSideByName` — the new face whose endpoint-to-endpoint arc, read from the smaller-key endpoint, is lexicographically smaller by `key` (label when labelled, raw id otherwise); mirror-invariant. Falls back to the orientation-based lo→hi arc (joint-subscript patterns, then `forwardArc`) only when both arcs read identically. Callers pass the token's own key: `buildBrackets`, and vertexLabels' `findEnclosedSpots` (so labels' enclosed side = bracket side) |
 | `computeEnclosureSideColoring(...)` | Build the two-side region coloring used for enclosure move-code brackets |
 | `computeEnclosureCoverage(...)` | Determine which vertices/regions an enclosure move's bracket covers |
+| `bracketRepOf(boundary, state)` / `inBrackets(boundary, state, brackets)` | THE bracket rule: a `[s,…]` bracket names a sub-boundary by its lowest VISIBLE vertex (never a pseudo-vertex or a Dead-classified one the encoder doesn't emit); `inBrackets` asks whether a boundary is one a raw-id bracket list names. Every reader of a bracket list (moveCode, recreate, strokeSynthesis, subregionHighlight) goes through these |
+| `findOccurrence(entries, vid, sub)` | Index of `vid` in a boundary walk, the joint subscript `sub` (the vertex after the wanted occurrence) picking which visit |
 | `compWithBoth(r, lo, hi)` | Find the boundary of region `r` that touches both `lo` and `hi` |
 | `isJoint(vid, state)` | True if vertex `vid` classifies as a Joint |
 | `jointSub(vid, w, after)` | Resolve which post-move subposition a joint's neighbor `w` ends up in |
@@ -180,7 +207,7 @@ resolved to concrete vertex IDs), `ParsedSequence`.
 | `enforceClearance(state, skip, dragId)` (internal) | Hard minimum spacing after the forces: vertex >= `tunables.edgeClearance` from every non-incident segment, vertices >= 2x that apart; shared between the parties, dragged vertex never moved, dead (`skip`) and pseudo vertices exempt, every move behind the crossing guards |
 | `SegmentIndex.sweepsSpot` / `pointMoveCrosses` | Edge-point moves also rejected when they would sweep over an isolated spot (a lone spot has no edges to fence it in) |
 | `interiorTargets(e, vertices)` / `edgeNeedsResample` (internal) | Point count an edge should have: arc-length ideal, raised by `refinementSpacing` (smoothGeometry.ts) near non-attached vertices. The net-bend trigger (`curveRefineAngle`) is OFF by default: on, Recreate replays 14/40 sweep games faithfully vs 37/40 |
-| `src/model/smoothGeometry.ts` | `nearestOnArc(p,a,b)` point-to-arc distance; `refinementSpacing` |
+| `src/model/smoothGeometry.ts` | `nearestOnArc(p,a,b)` nearest point on an arc + distance; `distanceToArc(p,a,b)` its distance-only fast path for hot clearance queries (the router's wall index — with `nearestOnArc` there the router is ~47% slower); `refinementSpacing`. `polylineLength` now lives in `math/sphere.ts` |
 
 Tuning constants live in `src/model/tunables.ts` (see below), not inline in this file anymore.
 
@@ -207,10 +234,12 @@ Tuning constants live in `src/model/tunables.ts` (see below), not inline in this
 
 | Function | Description |
 |---|---|
+| `detectSpecialCollapse(state)` / `stepSpecialCollapse(state, c)` / `specialCollapseVertices(c)` | The collapse registry (`COLLAPSE_KINDS` + `DETECT_ORDER`): the next special collapse to animate (first matching kind in priority order — louse, parallel-dead, triple-parallel-dead, triangle-dead, enclosed-triangle, quad-dead, bigon-tip, self-connected-dead), one frame of it (`label` names it for the trace), the vertices it owns. `SpecialCollapse` is the union of the per-kind interfaces below. main.ts and the headless drivers call only these three |
+| `takeEncodingGateRefusal()` | Read-and-clear: did a surgery's encoding gate (`commitIfEncodingPreserved`) roll back an encoding-CHANGING surgery since the last call — i.e. a collapse bug, not an engine-not-loaded hiccup. main.ts's `revertIfCollapseRefused` acts on it. Test hook: `DEBUG.failNextCollapseGate` |
 | `fullyDeadVertexIds(state)` | Set of all vertices in fully-dead connected components (used by smooth.ts to skip them) |
 | `deadRegionStep(state, skip?, focus?)` | One frame for ONE fully-dead component (the `focus` one first, jammed/refused ones passed over): shrink toward centroid, pop when small enough. Returns `{ moving, popped, popCentroids, focus }`; main.ts feeds `focus` back so a component runs to its pop before the next starts |
 | `eliminateIsolatedVertex(state, skip?)` | Splice out one degree-2 dead vertex between two non-bigon neighbors; returns pop position or null |
-| `scabAloneCollapse(state, skipVertices?)` | To fixpoint: for each dead boundary with exactly one live vertex (a scab), delete the dead neighbors and create a self-loop edge on the scab |
+| `scabAloneCollapse(state, skipVertices?)` | To fixpoint: for each dead boundary with exactly one live vertex (a scab), delete the dead neighbors and create a self-loop edge on the scab. Skipped when a pocket of the structure that would merge into the scab's face holds anything alive (`holdsNothingAlive`). Runs only while Collapsing is on |
 
 ### Collapse animators (each is a detect + step pair)
 
@@ -222,8 +251,18 @@ Tuning constants live in `src/model/tunables.ts` (see below), not inline in this
 | `detectTriangleDead(state)` | `triangleDeadStep(state, collapse)` | Triangle: 3-vertex dead boundary, each vertex with one external edge. Animated by deflate-in-place (below); pop re-roots B/C external edges at A on the centre |
 | `detectQuadDead(state)` | `quadDeadStep(state, collapse)` | Quadrilateral: 4-vertex dead boundary; collapses to 2 new vertices + 5 edges |
 | `detectBigonTip(state)` | `bigonTipStep(state, collapse)` | Degree-2 vertex hanging off a degree-3 vertex where both edges go to the same neighbor |
-| `detectEnclosedTriangle(state)` | `enclosedTriangleStep(state, collapse)` | Triangle with one vertex also connected to external graph |
-| `detectSelfConnectedDead(state)` | `selfConnectedDeadStep(state, collapse)` | Dead S–T pair where S is degree-3 with a self-loop plus one edge to dead vertex T (case A: T has two external edges; case B: T is also self-connected) |
+| `detectEnclosedTriangle(state)` | `enclosedTriangleStep(state, collapse)` | Dead triangle A-B-C where only A has a true external edge and B, C's other edge is a second B–C edge (a bigon); shrinks toward A by one homothety, pop makes a self-loop on A. Requires the bigon's far face F1 dead AND empty (2026-10-12: `failureSaves/fail-s4-g11-m11.json` step 11 had a whole component nested in F1; the shrink dragged BC1/BC2 across it and the gate refused every pop) |
+| `detectSelfConnectedDead(state)` | `selfConnectedDeadStep(state, collapse)` | Dead S–T pair where S is degree-3 with a self-loop plus one edge to dead vertex T (case A: T has two external edges; case B: T is also self-connected). Animation (2026-10-13): S (and T, case B) RIDE the S–T edge frozen as a track (`scdAnimFor`/`trackPointAt`); the edge is the uncovered stretch; each loop is carried heading-relative (`loopShape`/`carryLoop`), shrunk with the gap and capped at 0.7× its vertex's clearance, halved while it crosses anything, and replaced by a `wedgeTeardrop` in its own wedge when halving can't clear a sphere-wrapping loop. Replaced a straight slerp that dragged curved S–T edges across other structure |
+
+**Empty-face guards** (2026-10-12): a collapse never shrinks a face away or merges it into another unless that face is
+empty — anything nested in it would be swept over or change face, and the gate would refuse (which now switches
+Collapsing off). Animated collapses use the strict `faceIsEmpty` (one boundary: the shrink drags edges across even dead
+content): enclosed-triangle's F1, bigon-tip's bigon face, self-connected-dead's self-loop insides (`selfLoopInsideFace`),
+and for whole-component deletions (louse, `deadRegionStep`) `deletableComponent` — at most one of the component's faces
+may hold anything. The instant scab uses the weaker `holdsNothingAlive` (dead-only content is invisible to the
+encoding); over every scab in the test saves it rejects exactly the ones the gate refuses (3996 of 3996) and none it
+accepts (11 of 11). Deflate-in-place collapses (parallel, triangle, triple) and quad only ever eliminate their own
+already-empty face.
 
 Each `Collapse` type above (`LouseCollapse`, `ParallelDeadCollapse`, `TripleParallelDeadCollapse`,
 `TriangleDeadCollapse`, `QuadDeadCollapse`, `BigonTipCollapse`, `EnclosedTriangleCollapse`,
@@ -241,6 +280,12 @@ vertices/boundary edges/external-edge growth at depth r), `deflateRadius` (pop t
 component) are mutually exclusive (`collapseActive()`); `checkForCollapses` does nothing while either runs and is
 re-run when a general shrink ends. The instant surgeries (`scabAloneCollapse`, `eliminateIsolatedVertex`) are not
 queued. `window.__sprouts.collapse` reports the active one.
+
+**Refused surgery** (main.ts `revertIfCollapseRefused`, after every surgery path): when `takeEncodingGateRefusal()`
+reports a real refusal, the refused surgery is already rolled back; if it was the special collapse that just finished,
+the board also goes back to `collapseSnapshot` (taken at detection — the animation moved geometry the gate's rollback
+doesn't cover). Then Collapsing is switched off and `#collapse-off-note` shows. Every surgery, the scab included, runs
+only while Collapsing is on, so once off nothing re-fires it.
 
 Key internal helpers: `occupiedCentroidAntipode` (steering waypoint away from the occupied side
 of the sphere, used by `quadDeadStep`), and a shared path-deformation group used by
@@ -297,12 +342,13 @@ smoothing. Joins (two different boundaries) are a clearance-weighted shortest pa
 
 | Function | Description |
 |---|---|
-| `candidateStrokeStream(state, parsed)` | LAZY generator of candidate sphere-point strokes reproducing a parsed move (for Recreate/preview); each group is built only when iteration reaches it. Order: plain geodesic / round loop first when nothing must be enclosed, then `routedCandidates`, then the legacy bowed/Voronoi candidates. First-hit callers (synthesizeMove, Recreate no-pause, PB hover/precompute) iterate this — simple moves then never build router meshes (~100 ms → <5 ms per move) |
+| `candidateStrokeStream(state, parsed)` | LAZY generator of candidate sphere-point strokes reproducing a parsed move (for Recreate/preview); each group is built only when iteration reaches it. Order: plain geodesic / round loop first when nothing must be enclosed, then `routedCandidates`, then the legacy bowed/Voronoi candidates. Every candidate passes through `withMidClearance`. First-hit callers (synthesizeMove, Recreate no-pause, PB hover/precompute) iterate this — simple moves then never build router meshes (~100 ms → <5 ms per move) |
+| `withMidClearance(state, stroke)` (internal generator) | When a candidate's new spot (`strokeMidIndex`) would land within `MID_CROWDED` (0.04 rad) of an existing edge or spot (e.g. a geodesic beside a near-geodesic edge joining the same spots, or one passing over an intermediate spot), yields copies nudged off it to ~`MID_TARGET` (0.07 rad) before the original: same side first (same topology), then the far side. A nudge is kept only if it improves clearance. Helpers: `nearestObstacle`, `bumpStroke` (sin-tapered sideways push) |
 | `candidateStrokes(state, parsed)` | `[...candidateStrokeStream()]` — for callers needing every candidate (Recreate pause-mode display, debug, scripts) |
 | `smallCircleSelfLoop(v, hint, radius, sampleCount?)` | Synthesize a small-circle self-loop stroke at vertex `v`, biased toward `hint` |
 | `enclosureCandidates(state, parsed)` | Candidate strokes specifically for enclosure-style moves |
-| `strokeCrossesEdges(...)` | Test whether a candidate stroke crosses any existing edge (validity check) |
-| `candidateSelfLoopArcsWithSeeds(...)` | Self-loop stroke candidates seeded from specific directions, used when the plain small-circle synthesis doesn't reproduce the target move |
+| `strokeCrossesEdges(state, stroke, skipEdgeId?)` | Does the stroke cross or TOUCH any existing edge — spherical, camera-independent, via `arcsProperlyCross` (meeting at a shared vertex doesn't count; end segments ARE tested) plus `polylinesTouch` (within `STROKE_TOUCH` = 1e-4 rad away from the stroke's end vertices). 2026-10-12: the old endpoint-skip arguments are gone, every caller uses this one rule. 2026-10-13: touching added — a plain geodesic between two vertices already joined by a geodesic edge lay ON that edge, a zero-width face that relax then recomputed inside out (seed 11 game 23) |
+| `junctionVoronoiCandidates(state, parsed)` (internal generator) | The last group of `candidateStrokeStream` for an enclosing move: subregion-highlight + Voronoi junction-graph route, then (self-loop) the Voronoi loop arcs re-run with the junction graph's clustered extra seeds. Absorbed the extra-seed loops that used to live in recreate.ts/main.ts (`candidateSelfLoopArcsWithSeeds` is no longer exported) |
 
 ---
 
@@ -310,10 +356,11 @@ smoothing. Joins (two different boundaries) are a clearance-weighted shortest pa
 
 | Function | Description |
 |---|---|
-| `synthesizeMove(...)` | Produce a stroke for a parsed move, trying candidates until one reproduces the target move |
-| `strokeReproduces(state, parsed, stroke, useLabels?)` | Check whether a given stroke, if committed, reproduces the parsed move |
+| `applyTrial(state, v1, v2, stroke)` | THE one "try a stroke" primitive: the position the stroke produces on a clone, or null if it crosses an edge (`strokeCrossesEdges`) or fails to apply. Used by `strokeReproduces` and main.ts's Position Browser canon checks |
+| `synthesizeMove(state, parsed, useLabels?)` | First candidate (`candidateStrokeStream`) that `strokeReproduces`, or null. (The old `checkCrossings` argument is gone — the crossing test is always on, inside `applyTrial`) |
+| `strokeReproduces(state, parsed, stroke, useLabels?)` | `applyTrial` + `appliedMoveMatches`: legal and records exactly as the target token |
+| `appliedMoveMatches(before, after, lo, hi, token, useLabels?)` | Does an already-applied move record as `token` (labelled codes re-derived from the post-move labels, like live play)? At a bare spot either self-loop face's bracket is accepted (the faces are interchangeable); at an appendage tip only the loop-alone face. Also verifies hand-drawn moves |
 | `computeRecreateHints(state, parsed)` | Build `RecreateHints` (highlight targets) shown while the user manually recreates a move |
-| `appliedMoveMatches(...)` | Check whether a just-applied move matches what Recreate expected |
 
 ---
 
@@ -405,7 +452,8 @@ every genome whose T-genes are all collection names; a genome still holding a ne
 | `expandGenomeShorthand(input)` / `nameForShorthand(input)` | Parse/resolve a typed shorthand (e.g. a family name or `⊕n` offset form) in the Collect search box |
 | `registryIndexReady` (promise) | Resolves once `buildRegistryIndex()` has finished folding the stored genomes into the in-memory `REGISTRY` |
 | `registryFoldName(g)` | Resolve a `{quickEnc, quickOffset}` pair to its registered family name, if any |
-| `KNOWN_COLLECTION_MEMBERS` / `KNOWN_COLLECTION_REP` / `KNOWN_COLLECTION_REP_RAW` | Per-family member lists / representative encodings, derived from `COLLECTION_ROSTERS` |
+| `COLLECTION_ROSTERS` | One `CollectionRosterEntry` per (collection, offset) group of `collectionElements.json` — the single in-memory read of that file; genomeCensus.ts and the lists below derive from it |
+| `KNOWN_COLLECTION_MEMBERS` / `KNOWN_COLLECTION_REP` | Per-family member lists / representative encodings, derived from `COLLECTION_ROSTERS` (`KNOWN_COLLECTION_REP_RAW` was removed 2026-10-12) |
 | `GENOME_NAMES` / `NAMED_FAMILY_GENOME_TEXT` / `NAMED_FAMILIES` / `COLLECTION_GENOME_TEXT` | The resolved family registry (name → genome text, full family records; `COLLECTION_GENOME_TEXT` covers every collection incl. display-only ones) |
 | `familyForCore(g)` | Look up a family by its `(R,D,{L},{T'})` core key alone (ignores `[T]`) — see `reference_family_core_collision_bug.md` for a 2026-09-03 bug in an earlier version of this lookup |
 | `bypassOnlyFoldName(g, resolveChild, depth)` / `resolvedFoldName(...)` | Resolve a genome's display name allowing one level of "bypass" (fold through an unnamed intermediate T-child to a named grandchild) |
@@ -732,7 +780,7 @@ Key types: `RegionSnapshot`, `GraphSnapshot`, `MoveLogEntry`.
 
 | Export | Description |
 |---|---|
-| `DEBUG` | Central debug-flag object (toggled via the debug-unlock sequence in `main.ts`) |
+| `DEBUG` | Central debug-flag object, live on `window.__sproutsDebug`: `recreate` (candidate diagnostics), `tracked` (tracked-check logging), `failNextCollapseGate` (test hook: the next surgery's encoding gate refuses, exercising main.ts's revert-and-disable path; clears itself) |
 
 ---
 
@@ -755,16 +803,23 @@ panel, debug-unlock sequence, toggle checkboxes. No exports — everything below
 Key internal functions (selected):
 - `frameBody(now)` — one `requestAnimationFrame` tick: smooth → dead-region step → collapse step → iso-vertex elim → render
 - `frame(now)` / `wake()` — animation-loop driver / reschedule (called after a move, resize, or undo)
-- `checkForCollapses()` — scan for the next applicable collapse and set `pendingCollapse`
-- `collapseVertices(c)` — run the step function for a detected `SpecialCollapse`
-- `afterMoveCommitted(v1, v2)` — post-move pipeline: encode, label, log, update Move Sequence bar, schedule tracked check
+- `checkForCollapses()` — scan for the next applicable collapse (`detectSpecialCollapse`) and set `pendingCollapse` (+ `collapseSnapshot`)
+- `revertIfCollapseRefused(finished?)` — after any surgery: on a real encoding-gate refusal, revert (to `collapseSnapshot` if it was the finishing special collapse), switch Collapsing off, show `#collapse-off-note`. Returns whether it handled one
+- `afterMoveCommitted(v1, v2, stroke)` — post-move pipeline: labels, `moveSeqEntryOf` → `moveSeqLog`, Move Sequence bar, instant surgeries + collapse check, schedule tracked check
+- `moveSeqEntryOf(before, after, v1, v2)` — a move's four recorded token forms (label / raw-id × plain / `{encoding}`-tagged); used at commit and by `loadGameState`, which replays each saved stroke on its saved pre-move board to rebuild all four (a step whose replay records a different label token keeps the saved token in all four slots, with a console warning)
+- `formatMoveSequence(tagged)` — the Move Sequence string: `n` + `L` (label tokens) + `C` (`{encoding}` tags) + `:` + tokens; Copy (`moveSeqCopyText`) always hands out the tagged form
+- `sameEncodedPosition(a, b)` — Move Check's comparison: two `encodePosition` texts by WASM canon (the TS text isn't canonical)
+- `wireOverlay(overlay, closeBtn, onClose?)` / `wirePanel(name, init)` — every modal overlay's close button, backdrop click and Escape (`overlayClosers`); `wirePanel` adds the top-bar button for Collect / T-Tree / Genomes
+- `wireCharHover(el, infoOf)` / `renderCharSpans(el, text)` — encoding-bar hover highlight: one indexed span per character, mousemove looks up that character's vertex provenance (bottom bar, Position Browser live row, tracked panel)
+- `computeLiveEncodingDisplay(state, enc)` — encoding-bar text + per-character provenance (compact canon when it lines up, else the decompressed `trackedLayout`)
+- `clearManualPause()` / `abortRecreate()` — leave a hand-drawn-move pause (hints, Voronoi overlay + path bar, banner) / stop a running Recreate entirely (a superset: also cancels the pending pause or candidate preview); called on New Game, Load, and opening Recreate
 - `scheduleTrackedCheck()` / `runPendingTrackedCheck()` — debounce and run the engine-vs-geometry check after a move
 - `resyncTrackedFromHistory()` — rebuild engine tracking state by replaying move history (after undo/load)
 - `precomputeChildrenMoves(targets)` / `synthesizeVerifiedMove(target)` — Position Browser move-preview stroke synthesis. The background pass only runs while the board is at rest (`layoutQuiet`: no Recreate, no collapse, no drag, last smoothStep under settleEpsilon); a new position's children wait in `pendingChildTargets` and `maybeStartPrecompute` (called every frame) starts/resumes it; it yields per candidate and parks itself if the board moves. A hover checks the cache first, else computes its own child on demand. (Running it during motion rebuilt router face meshes per child — ~4 fps and multi-second freezes during Recreate.)
 - `runRecreate(seq)` — replay a parsed Move Sequence into the current position
 - `promptManual(parsed, moveNum)` / `promptCandidates(parsed, moveNum)` / `verifyManualMove(v1, v2)` — manual (user-drawn) Recreate flow
 - `undoLast(recordRedo?)` / `redoLast()` / `pushHistorySnapshot()` — undo/redo stack
-- `updateMoveSeq()` / `moveSeqTokens()` / `moveSeqCopyText()` — Move Sequence bar (see memory `project_pb_panel_move_seq_bar.md`)
+- `updateMoveSeq()` / `moveSeqCopyText()` — Move Sequence bar (see memory `project_pb_panel_move_seq_bar.md`)
 - `loadGameState(save)` / `resetGame(spots)` — load a save / start a fresh game
 - `unlockDebugMode()` — debug-unlock keystroke sequence handler
 - `renderTuningPanel()` — build the live tunables UI from `TUNABLE_SPECS`
@@ -891,11 +946,11 @@ never hand-edit a `.generated.hpp` or JSON marked generated.
 
 | Script | Purpose |
 |---|---|
-| `routeHarness.ts` | Plays random games and measures, per engine child, whether `pipeline` (`candidateStrokes`), `new` (router alone) or `enum` (every router reading, independent of `resolveMoveVertices`) reaches it — exact decompressed-canon oracle. Dumps a failing child/position for `routeDebug.ts` |
+| `routeHarness.ts` | Plays random games and measures, per engine child, whether `pipeline` (`candidateStrokes`), `new` (router alone) or `enum` (every router reading, independent of `resolveMoveVertices`) reaches it — exact decompressed-canon oracle. Dumps a failing child/position for `routeDebug.ts`. Also exports `relax(state)` (the post-commit physics) and `edgeCrossings(state)` (edge pairs that properly cross — `arcsProperlyCross`; blind to a rotation flip at a shared vertex, which `recomputeRegions` on a clone catches) for the other scripts |
 | `routeDebug.ts` | Renders one dumped case to PNG per reading: walls, face mesh, IN/OUT labels, mixed boundary chords, routed stroke or failed trace, and what the stroke actually produces (`CLEAN=1` for walls + stroke only) |
 | `rasterPng.ts` | Dependency-free RGB raster + PNG encoder used by `routeDebug.ts` |
 | `recreateReplay.ts` | Headless Recreate (same candidateStrokes→strokeReproduces→applyMove→relax loop as `runRecreate`); on a step with no reproducing stroke prints the code every candidate produces. Env: `TRACE=<move>` (which smoothing phase first creates a crossing), `SAVE=<file>` (per-move canon vs the save's own history), `REGIONS=<move>`, `NORELAX=1` |
 | `failDiag.ts` | Dumps one `failureSaves/*.json` position, flags each undrawable child `TWIN`/`NON-TWIN` (DisaPoint twin = a drawable child shares its compact canon), and per-spec router failures. Env: `MESH=<region id>` (seed counts per corner), `ENDS=1`, `DECOMP=1` (analyze the decompressed text like the app) |
 | `saveMoveCodes.ts` | Re-derives each saved move's code (both self-loop faces) from a save's history — shows when a recorded token no longer matches its own move |
 | `failureSaves.ts` | Plays random games and writes a loadable save (with undo history) for every position where some engine child can't be drawn, tested exactly as Load rebuilds it, plus `REPORT.md` listing the failing children, the hover's endpoint translation, what strokes between those endpoints produce instead, and whether Recreate replays the game's own move sequence. Args `[games=25] [maxSpots=7] [seeds=4,5] [outDir=failureSaves]`; files are named `fail-s<seed>-g<game>-m<move>.json` |
-| `recreateSweep.ts` | Record/replay sweep: random router-played games, each move code recorded as live play does (`LABELS=1` for labelled codes), replayed through Recreate's `synthesizeMove`, comparing the CANON after every move (a token can match while the position diverges). Per-game faithful / DIVERGED / stuck + move kind; `SHOW=1` regions at the first divergence, `DUMP=g:m` move-region analysis. Args `<games> <maxSpots> <seed>` |
+| `recreateSweep.ts` | Record/replay sweep: random router-played games, each move code recorded as live play does (`LABELS=1` for labelled codes), replayed through Recreate's `synthesizeMove`, comparing the CANON after every move (a token can match while the position diverges). Per-game faithful / DIVERGED / stuck + move kind; `SHOW=1` regions at the first divergence, `DUMP=g:m` move-region analysis, `SAVE_DIR=<dir>` writes each unfaithful game as a loadable save (plus a `-before.json` of the position before the failing move). Args `<games> <maxSpots> <seed>`. Tallies from two code versions only compare like-for-like when the played games match — a change to the router-move crossing filter changes every later game; cross-replay the saved games through both versions instead |

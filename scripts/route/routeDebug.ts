@@ -100,7 +100,7 @@ for (const { region, specs } of routeSpecsFor(state, d.parsed)) {
     let result = '';
     if (stroke) {
       const v1 = d.parsed.lo, v2 = d.parsed.hi;
-      const crosses = strokeCrossesEdges(state, stroke, undefined, v1, v2);
+      const crosses = strokeCrossesEdges(state, stroke);
       const trial = cloneState(state);
       try {
         applyMove(trial, { v1, v2, stroke });

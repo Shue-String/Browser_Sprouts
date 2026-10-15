@@ -25,15 +25,14 @@
  */
 import type { GameState, Region, VertexId } from './types';
 import type { SpherePoint } from '../math/sphere';
-import { normalize, slerp, arcsCross } from '../math/sphere';
+import { normalize, slerp, arcsCross, dot, cross, sphereAngle as ang, fibonacciSphere, resamplePolyline } from '../math/sphere';
 import { sphericalDelaunay } from '../math/sphereDelaunay';
+import { UnionFind } from '../math/unionFind';
 import { edgePtsForEntry, bearingFrom, pointAtBearing, boundarySphereLoop, loopsNearestFeature } from './moves';
+import { distanceToArc } from './smoothGeometry';
 import type { ResolvedMove } from './moveCodeParse';
 
 type V3 = SpherePoint;
-const dot = (a: V3, b: V3): number => a.x * b.x + a.y * b.y + a.z * b.z;
-const cross = (a: V3, b: V3): V3 => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });
-const ang = (a: V3, b: V3): number => Math.acos(Math.max(-1, Math.min(1, dot(a, b))));
 const TAU = Math.PI * 2;
 const mod = (x: number, m: number): number => ((x % m) + m) % m;
 
@@ -93,18 +92,6 @@ class SphereGrid<T> {
 
 interface Wall { a: V3; b: V3; edgeId: number }
 
-/** Distance from p to the great-circle segment a-b (a === b allowed: a point). */
-function distToSeg(p: V3, a: V3, b: V3): number {
-  const n = cross(a, b);
-  const len = Math.hypot(n.x, n.y, n.z);
-  if (len > 1e-12) {
-    const nu = { x: n.x / len, y: n.y / len, z: n.z / len };
-    const s = dot(p, nu);
-    const f = { x: p.x - s * nu.x, y: p.y - s * nu.y, z: p.z - s * nu.z };
-    if (dot(cross(a, f), nu) >= 0 && dot(cross(f, b), nu) >= 0) return Math.asin(Math.min(1, Math.abs(s)));
-  }
-  return Math.min(ang(p, a), ang(p, b));
-}
 
 /** Every wall of a face: its boundary darts' polylines, split into short indexed segments. */
 class WallIndex {
@@ -140,7 +127,7 @@ class WallIndex {
     let best = Infinity;
     this.segGrid.query(p, r + SEG_MAX, w => {
       if (skip && skip(w)) return;
-      const d = distToSeg(p, w.a, w.b);
+      const d = distanceToArc(p, w.a, w.b);
       if (d < best) best = d;
     });
     return best;
@@ -419,10 +406,7 @@ export function buildFaceMesh(state: GameState, region: Region): FaceMesh {
   // Open space: a uniform lattice, admitted by the sphere-native face test.
   const loops = region.boundaries.map(bd => boundarySphereLoop(bd.entries, state));
   const onlySpots = loops.every(l => l.length < 2);
-  const nLat = Math.round((4 * Math.PI) / (LATTICE * LATTICE));
-  for (let i = 0; i < nLat; i++) {
-    const z = 1 - (2 * (i + 0.5)) / nLat, rr = Math.sqrt(1 - z * z), th = i * 2.399963229728653;
-    const p = { x: rr * Math.cos(th), y: rr * Math.sin(th), z };
+  for (const p of fibonacciSphere(Math.round((4 * Math.PI) / (LATTICE * LATTICE)))) {
     const clr = walls.clearance(p, LATTICE);
     if (clr < 0.5 * LATTICE) continue;
     if (!farFrom(p, 0.5 * LATTICE)) continue;
@@ -434,13 +418,12 @@ export function buildFaceMesh(state: GameState, region: Region): FaceMesh {
   // Pass 2: the final mesh, minus any piece not connected to a seed (stray in-face pockets).
   const kept = triangulate();
   const N = mesh.pts.length;
-  const par = Array.from({ length: N }, (_, i) => i);
-  const find = (x: number): number => { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
-  for (const { tri: [a, b, c] } of kept) { par[find(a)] = find(b); par[find(b)] = find(c); }
+  const uf = new UnionFind<number>();
+  for (const { tri: [a, b, c] } of kept) { uf.union(a, b); uf.union(b, c); }
   const seeded = new Set<number>();
-  for (let i = 0; i < N; i++) if (mesh.tags[i]) seeded.add(find(i));
+  for (let i = 0; i < N; i++) if (mesh.tags[i]) seeded.add(uf.find(i));
 
-  mesh.tris = kept.filter(k => seeded.has(find(k.tri[0]))).map(k => k.tri);
+  mesh.tris = kept.filter(k => seeded.has(uf.find(k.tri[0]))).map(k => k.tri);
   mesh.nbrs = mesh.pts.map(() => []);
   const seen = new Set<number>();
   mesh.tris.forEach((tri, t) => {
@@ -575,14 +558,13 @@ function routeSplit(mesh: FaceMesh, spec: Extract<RouteSpec, { kind: 'split' }>,
   }
   const seedLabelOf = (i: number): number => seedLabel(mesh.tags[i]!, spec, mesh.region);
   const len = (u: number, v: number): number => ang(mesh.pts[u], mesh.pts[v]);
-  const near = dijkstra(mesh, fixed, () => true, len);
+  const { near, clearance } = seedClearance(mesh, fixed);
   for (let i = 0; i < N; i++) {
     if (label[i] < 0 && near.from[i] >= 0) label[i] = label[near.from[i]]; // unreachable stays -1
   }
-  const clearance = (v: number): number => (mesh.tags[v] ? mesh.clr[v] : Math.max(mesh.clr[v], near.dist[v]));
 
   // Anchors: the departure corner's IN part and its OUT part always exist (6+ arc seeds).
-  const isA = (i: number): boolean => { const t = mesh.tags[i]; return !!t && t.kind === 'corner' && t.b === spec.a.b && t.k === spec.a.k; };
+  const isA = (i: number): boolean => isCornerSeed(mesh, i, spec.a);
   const anchor = [-1, -1];
   for (let i = 0; i < N; i++) if (isA(i) && label[i] >= 0 && anchor[label[i]] < 0) anchor[label[i]] = i;
   if (diag) diag.label = label;
@@ -646,8 +628,7 @@ function routeSplit(mesh: FaceMesh, spec: Extract<RouteSpec, { kind: 'split' }>,
     const u = Math.floor(key / N), v = key % N;
     if (label[u] !== label[v]) mixedBoundary.push([u, v, ts[0]]);
   }
-  const loPos = mesh.corners.find(c => c.b === spec.a.b && c.k === spec.a.k)?.pos;
-  const hiPos = mesh.corners.find(c => c.b === spec.c.b && c.k === spec.c.k)?.pos;
+  const loPos = cornerPos(mesh, spec.a), hiPos = cornerPos(mesh, spec.c);
   if (!loPos || !hiPos) return fail('endpoint corner missing');
   // Frontier points sit where the signed field dIN - dOUT (from the seeds' own labels, i.e.
   // before corridor repair) crosses zero along each mixed edge — a smooth bisector instead of
@@ -662,7 +643,7 @@ function routeSplit(mesh: FaceMesh, spec: Extract<RouteSpec, { kind: 'split' }>,
   };
   const startCands = mixedBoundary.filter(([u, v]) => isA(u) && isA(v));
   if (startCands.length === 0) return fail(`no mixed boundary chord at the departure corner (${mixedBoundary.length} mixed boundary edges)`);
-  const isC = (i: number): boolean => { const t = mesh.tags[i]; return !!t && t.kind === 'corner' && t.b === spec.c.b && t.k === spec.c.k; };
+  const isC = (i: number): boolean => isCornerSeed(mesh, i, spec.c);
 
   for (const [su, sv, st] of startCands) {
     const path: V3[] = [loPos, midOf(su, sv)];
@@ -695,25 +676,40 @@ function routeSplit(mesh: FaceMesh, spec: Extract<RouteSpec, { kind: 'split' }>,
   return fail(`frontier from the departure corner doesn't reach the arrival corner (${mixedBoundary.length} mixed boundary edges)`);
 }
 
+/** Is mesh point i one of corner c's arc seeds? */
+function isCornerSeed(mesh: FaceMesh, i: number, c: Corner): boolean {
+  const t = mesh.tags[i];
+  return !!t && t.kind === 'corner' && t.b === c.b && t.k === c.k;
+}
+
+/** The vertex position of corner c. */
+function cornerPos(mesh: FaceMesh, c: Corner): V3 | undefined {
+  return mesh.corners.find(k => k.b === c.b && k.k === c.k)?.pos;
+}
+
+/** Distance to the nearest seed through the mesh, and the clearance it implies at each point (a
+ * seed keeps its own offset; a free point at least its wall clearance). */
+function seedClearance(mesh: FaceMesh, seeds: number[]): { near: ReturnType<typeof dijkstra>; clearance: (v: number) => number } {
+  const near = dijkstra(mesh, seeds, () => true, (u, v) => ang(mesh.pts[u], mesh.pts[v]));
+  return { near, clearance: v => (mesh.tags[v] ? mesh.clr[v] : Math.max(mesh.clr[v], near.dist[v])) };
+}
+
 function routeJoin(mesh: FaceMesh, spec: Extract<RouteSpec, { kind: 'join' }>): V3[] | null {
   const N = mesh.pts.length;
-  const isCorner = (i: number, c: Corner): boolean => { const t = mesh.tags[i]; return !!t && t.kind === 'corner' && t.b === c.b && t.k === c.k; };
   const srcs: number[] = [];
-  for (let i = 0; i < N; i++) if (isCorner(i, spec.a)) srcs.push(i);
+  for (let i = 0; i < N; i++) if (isCornerSeed(mesh, i, spec.a)) srcs.push(i);
   if (srcs.length === 0) return null;
   const fixed: number[] = [];
   for (let i = 0; i < N; i++) if (mesh.tags[i]) fixed.push(i);
-  const near = dijkstra(mesh, fixed, () => true, (u, v) => ang(mesh.pts[u], mesh.pts[v]));
-  const clearance = (v: number): number => (mesh.tags[v] ? mesh.clr[v] : Math.max(mesh.clr[v], near.dist[v]));
+  const { clearance } = seedClearance(mesh, fixed);
   const res = dijkstra(mesh, srcs, () => true, (u, v) => ang(mesh.pts[u], mesh.pts[v]) / Math.max(clearance(v), DELTA_MIN));
   let best = -1;
-  for (let i = 0; i < N; i++) if (isCorner(i, spec.c) && res.dist[i] < Infinity && (best < 0 || res.dist[i] < res.dist[best])) best = i;
+  for (let i = 0; i < N; i++) if (isCornerSeed(mesh, i, spec.c) && res.dist[i] < Infinity && (best < 0 || res.dist[i] < res.dist[best])) best = i;
   if (best < 0) return null;
   const chain: V3[] = [];
   for (let v = best; v >= 0; v = res.prev[v]) chain.push(mesh.pts[v]);
   chain.reverse();
-  const loPos = mesh.corners.find(c => c.b === spec.a.b && c.k === spec.a.k)?.pos;
-  const hiPos = mesh.corners.find(c => c.b === spec.c.b && c.k === spec.c.k)?.pos;
+  const loPos = cornerPos(mesh, spec.a), hiPos = cornerPos(mesh, spec.c);
   if (!loPos || !hiPos) return null;
   return [loPos, ...chain, hiPos];
 }
@@ -729,22 +725,6 @@ function densify(path: V3[], maxStep = 0.02): V3[] {
   return out;
 }
 
-/** Arc-length resampling of a polyline to `count` points (endpoints kept exactly). */
-function resample(path: V3[], count: number): V3[] {
-  const cum = [0];
-  for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + ang(path[i - 1], path[i]));
-  const L = cum[cum.length - 1];
-  const out: V3[] = [path[0]];
-  let seg = 0;
-  for (let i = 1; i < count - 1; i++) {
-    const target = (i / (count - 1)) * L;
-    while (seg < path.length - 2 && cum[seg + 1] < target) seg++;
-    const sl = cum[seg + 1] - cum[seg];
-    out.push(sl < 1e-12 ? path[seg] : slerp(path[seg], path[seg + 1], (target - cum[seg]) / sl));
-  }
-  out.push(path[path.length - 1]);
-  return out;
-}
 
 /**
  * Smooth a routed polyline without changing its topology. The route's interior (everything but
@@ -764,7 +744,7 @@ function smoothPath(walls: WallIndex, raw: V3[]): V3[] {
   let L = 0;
   for (let i = 1; i < inner.length; i++) L += ang(inner[i - 1], inner[i]);
   const count = Math.max(3, Math.min(80, Math.ceil(L / 0.03) + 1));
-  const p = [raw[0], ...resample(inner, count), raw[raw.length - 1]];
+  const p = [raw[0], ...resamplePolyline(inner, count), raw[raw.length - 1]];
   // Taut-string relaxation hugs any obstacle it wraps (a lone spot ended up half a pixel off the
   // stroke), so each point keeps a share of the room the route had there: the old fixed few-pixel
   // floor let a route running 0.2 rad clear of a spot be pulled to 0.01.

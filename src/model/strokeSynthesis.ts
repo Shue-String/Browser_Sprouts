@@ -15,9 +15,11 @@
 
 import type { GameState, VertexId, EdgeId } from './types';
 import type { SpherePoint } from '../math/sphere';
-import { normalize, slerp, segCrossesPolylineSphere, sphereCentroid } from '../math/sphere';
+import { normalize, slerp, sphereCentroid, dot, cross, add, scale, tangentFrame, polylinesProperlyCross, sphereAngle, chord2 } from '../math/sphere';
+import { distanceToArc, nearestOnArc } from './smoothGeometry';
+import { strokeMidIndex } from './moves';
 import type { ResolvedMove } from './moveCodeParse';
-import { compWithBoth } from './moveCode';
+import { compWithBoth, inBrackets } from './moveCode';
 import { buildSubregionHighlight } from './subregionHighlight';
 import { buildVoronoiGraph } from './voronoiGraph';
 import { computeJunctionVoronoiPath } from './voronoiJunctionPath';
@@ -26,14 +28,6 @@ import { routedCandidates } from './moveRouter';
 const SAMPLES = 24; // points per synthesized stroke arc
 
 type V3 = SpherePoint;
-const dot = (a: V3, b: V3) => a.x * b.x + a.y * b.y + a.z * b.z;
-const cross = (a: V3, b: V3): V3 => ({
-  x: a.y * b.z - a.z * b.y,
-  y: a.z * b.x - a.x * b.z,
-  z: a.x * b.y - a.y * b.x,
-});
-const add = (a: V3, b: V3): V3 => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z });
-const scale = (a: V3, s: number): V3 => ({ x: a.x * s, y: a.y * s, z: a.z * s });
 
 /**
  * Every candidate stroke for `parsed` (see candidateStrokeStream), as an array — for callers
@@ -52,8 +46,15 @@ export function candidateStrokes(state: GameState, parsed: ResolvedMove): Sphere
  * the front — so the router's face meshes (40–125 ms each) and the legacy junction-graph Voronoi
  * fallback are only built when the cheap candidates have already failed. Yields nothing when no
  * candidate can be proposed (→ the controller falls back to manual draw).
+ *
+ * Each candidate whose new spot would land on top of existing geometry is preceded by nudged
+ * copies of itself (see withMidClearance).
  */
 export function* candidateStrokeStream(state: GameState, parsed: ResolvedMove): Generator<SpherePoint[]> {
+  for (const stroke of rawCandidateStream(state, parsed)) yield* withMidClearance(state, stroke);
+}
+
+function* rawCandidateStream(state: GameState, parsed: ResolvedMove): Generator<SpherePoint[]> {
   const a = state.vertices.get(parsed.lo)?.pos;
   const b = state.vertices.get(parsed.hi)?.pos;
   if (!a || !b) return;
@@ -62,17 +63,16 @@ export function* candidateStrokeStream(state: GameState, parsed: ResolvedMove): 
   // construction for its reading — so for anything that has to separate boundaries it goes
   // first. A move with nothing to enclose keeps its plain geodesic / round loop in front, which
   // looks nicer whenever it happens to be legal.
-  const trivial = !parsed.brackets || parsed.brackets.length === 0;
   const enclosing = !!parsed.brackets && parsed.brackets.length > 0;
 
   if (parsed.lo === parsed.hi) {
-    if (trivial) yield* selfLoopCandidates(a);
+    if (!enclosing) yield* loopCircles(a, [0.35, 0.6, 0.9], 4);
     yield* routedCandidates(state, parsed);
     if (enclosing) {
       yield* targetedSelfLoopCandidates(state, parsed);
       yield* voronoiSelfLoopArcs(state, parsed);
+      yield* loopCircles(a, [0.35, 0.6, 0.9], 4);
     }
-    if (!trivial) yield* selfLoopCandidates(a);
     // Last resort: when the vertex sits in a crowded tangent space, none of the
     // above (which sweep out to radius 0.9) may clear existing geometry. Tiny
     // loops squeezed right up against the vertex are far more likely to miss
@@ -80,57 +80,44 @@ export function* candidateStrokeStream(state: GameState, parsed: ResolvedMove): 
     // loop open into free space once the move commits (see smooth.ts's
     // repulsion zones) — so they're a reasonable-looking result even though
     // they start out nearly degenerate.
-    yield* tinySelfLoopCandidates(a);
-    // Deepest fallback: the same junction-graph Voronoi routing used for
-    // complicated enclosures (see main.ts's Recreate fallback), which the
-    // simpler curve attempts above can't reach when the region has no other
-    // boundary to bow around.
-    if (enclosing) {
-      const c = junctionVoronoiArc(state, parsed);
-      if (c) yield c;
-    }
-    return;
+    yield* loopCircles(a, [0.03, 0.06, 0.1, 0.15], 8);
+  } else {
+    if (!enclosing) yield geodesic(a, b);
+    yield* routedCandidates(state, parsed);
+    // For enclosure moves, Voronoi-boundary arcs trace the natural separation curve between the
+    // enclosed components and the rest of the region — a topologically-guided candidate before
+    // the generic bowed arcs.
+    if (enclosing) yield* voronoiBoundaryArcs(state, parsed);
+    yield* arcCandidates(a, b).slice(enclosing ? 0 : 1); // [0] is the geodesic
+    yield* enclosureCandidates(state, parsed);
   }
-
-  if (trivial) yield geodesic(a, b);
-  yield* routedCandidates(state, parsed);
-  // For enclosure moves, Voronoi-boundary arcs trace the natural separation curve between the
-  // enclosed components and the rest of the region — a topologically-guided candidate before
-  // the generic bowed arcs.
-  if (enclosing) yield* voronoiBoundaryArcs(state, parsed);
-  yield* arcCandidates(a, b).slice(trivial ? 1 : 0); // [0] is the geodesic
-  yield* enclosureCandidates(state, parsed);
-  // Deepest fallback: route through the junction-graph Voronoi system (the
-  // same one used for complicated enclosures) when nothing simpler verified —
-  // this is the only path that understands topology in regions with no other
-  // boundary to bow the basic curves around.
-  if (enclosing) {
-    const c = junctionVoronoiArc(state, parsed);
-    if (c) yield c;
-  }
+  // Deepest fallback: route through the junction-graph Voronoi system, the only path that
+  // understands topology in regions with no other boundary to bow the simpler curves around.
+  if (enclosing) yield* junctionVoronoiCandidates(state, parsed);
 }
 
 /**
- * Last-resort candidate for enclosure moves (including self-loops, where lo
- * === hi): builds the same subregion-highlight + Voronoi junction graph used
- * by the complicated-enclosure Recreate fallback (see main.ts) and asks
- * computeJunctionVoronoiPath for a route. Unlike voronoiBoundaryArcs/
- * voronoiSelfLoopArcs above (which need a distinguishable inner sub-boundary
- * to bow around), the junction graph's own fallbacks — including the
- * plain-shortest-path case for a region with no other boundaries at all —
- * mean this still has a shot when the simpler curve attempts come back empty.
+ * Last-resort candidates for enclosure moves (including self-loops, where lo === hi): the
+ * subregion-highlight + Voronoi junction graph's route (whose own fallbacks — including the
+ * plain-shortest-path case for a region with no other boundaries at all — mean this still has a
+ * shot when the simpler curve attempts come back empty), then, for a self-loop, the Voronoi loop
+ * arcs re-run with the junction graph's clustered extra seeds (hue -2 = bracket side = inside).
  */
-function junctionVoronoiArc(state: GameState, parsed: ResolvedMove): SpherePoint[] | null {
-  if (!parsed.brackets || parsed.brackets.length === 0) return null;
+function* junctionVoronoiCandidates(state: GameState, parsed: ResolvedMove): Generator<SpherePoint[]> {
+  if (!parsed.brackets || parsed.brackets.length === 0) return;
   const loV = state.vertices.get(parsed.lo);
   const hiV = state.vertices.get(parsed.hi);
-  if (!loV || !hiV) return null;
-
+  if (!loV || !hiV) return;
   const highlight = buildSubregionHighlight(state, parsed.lo, parsed.hi, parsed.brackets);
-  if (!highlight) return null;
+  if (!highlight) return;
   const vData = buildVoronoiGraph(state, highlight, parsed.lo, parsed.hi);
   const result = computeJunctionVoronoiPath(vData, loV.pos, hiV.pos);
-  return result ? result.pts : null;
+  if (result) yield result.pts;
+  if (parsed.lo === parsed.hi && vData.extraSeeds.length > 0) {
+    const extraIn = vData.extraSeeds.filter(s => s.hue === -2).map(s => s.pos);
+    const extraOut = vData.extraSeeds.filter(s => s.hue !== -2).map(s => s.pos);
+    yield* voronoiSelfLoopArcs(state, parsed, extraIn, extraOut);
+  }
 }
 
 /**
@@ -140,25 +127,24 @@ function junctionVoronoiArc(state: GameState, parsed: ResolvedMove): SpherePoint
  */
 function arcCandidates(a: V3, b: V3): SpherePoint[][] {
   const out: SpherePoint[][] = [geodesic(a, b)];
-
-  // Direction perpendicular to the great-circle plane, used to bow the arc.
-  let nrm = cross(a, b);
-  if (Math.hypot(nrm.x, nrm.y, nrm.z) < 1e-6) nrm = { x: 0, y: 0, z: 1 };
-  nrm = normalize(nrm);
-
+  const nrm = bowNormal(a, b);
   for (const mag of [0.25, 0.5, 0.8, 1.2]) {
     out.push(bowedArc(a, b, nrm, mag));
     out.push(bowedArc(a, b, nrm, -mag));
   }
-
   // Long geodesic (around the back) and bowed variants at the same magnitudes.
-  out.push(longGeodesic(a, b));
+  out.push(bowedLongArc(a, b, nrm, 0));
   for (const mag of [0.25, 0.5, 0.8, 1.2]) {
     out.push(bowedLongArc(a, b, nrm, mag));
     out.push(bowedLongArc(a, b, nrm, -mag));
   }
-
   return out;
+}
+
+/** Unit normal of the a-b great circle (an arbitrary one when a, b are (anti)podal). */
+function bowNormal(a: V3, b: V3): V3 {
+  const nrm = cross(a, b);
+  return normalize(Math.hypot(nrm.x, nrm.y, nrm.z) < 1e-6 ? { x: 0, y: 0, z: 1 } : nrm);
 }
 
 /** Evenly slerp-sampled great-circle arc from a to b (inclusive endpoints). */
@@ -168,14 +154,8 @@ function geodesic(a: V3, b: V3): SpherePoint[] {
   return pts;
 }
 
-/**
- * The long way around: the major arc from a to b on the same great circle.
- * Routes through the antipode of the short arc's midpoint, which lies on the
- * same great circle. Two slerp halves keep the path smooth.
- */
-function longGeodesic(a: V3, b: V3): SpherePoint[] {
-  const shortMid = slerp(a, b, 0.5);
-  const via = normalize({ x: -shortMid.x, y: -shortMid.y, z: -shortMid.z });
+/** Two slerp-sampled arcs a → via → b (SAMPLES points in all). */
+function throughPoint(a: V3, via: V3, b: V3): SpherePoint[] {
   const half = Math.ceil(SAMPLES / 2);
   const pts: SpherePoint[] = [];
   for (let i = 0; i < half; i++) pts.push(slerp(a, via, i / (half - 1)));
@@ -183,43 +163,17 @@ function longGeodesic(a: V3, b: V3): SpherePoint[] {
   return pts;
 }
 
-/**
- * Long arc from a to b (around the back), bowed toward `nrm` by `mag` (signed).
- * Same structure as longGeodesic but the via-midpoint is shifted sideways before
- * the two slerp halves are computed.
- */
-function bowedLongArc(a: V3, b: V3, nrm: V3, mag: number): SpherePoint[] {
-  const shortMid = slerp(a, b, 0.5);
-  const via = normalize(add(
-    { x: -shortMid.x, y: -shortMid.y, z: -shortMid.z },
-    scale(nrm, mag),
-  ));
-  const half = Math.ceil(SAMPLES / 2);
-  const pts: SpherePoint[] = [];
-  for (let i = 0; i < half; i++) pts.push(slerp(a, via, i / (half - 1)));
-  for (let i = 1; i <= SAMPLES - half; i++) pts.push(slerp(via, b, i / (SAMPLES - half)));
-  return pts;
-}
-
-/**
- * Arc from a to b bowed toward `nrm` by `mag` (signed). Built as two slerps
- * through a control point lifted off the great circle at the midpoint.
- */
+/** Arc from a to b bowed toward `nrm` by `mag` (signed): through a control point lifted off the
+ * great circle at the midpoint. */
 function bowedArc(a: V3, b: V3, nrm: V3, mag: number): SpherePoint[] {
-  const mid = slerp(a, b, 0.5);
-  const ctrl = normalize(add(mid, scale(nrm, mag)));
-  const pts: SpherePoint[] = [];
-  for (let i = 0; i < SAMPLES; i++) {
-    const t = i / (SAMPLES - 1);
-    pts.push(t < 0.5 ? slerp(a, ctrl, t * 2) : slerp(ctrl, b, (t - 0.5) * 2));
-  }
-  return pts;
+  return throughPoint(a, normalize(add(slerp(a, b, 0.5), scale(nrm, mag))), b);
 }
 
-/**
- * Self-loop candidates: small circles passing through the vertex, at a few radii
- * and orientations. Each starts and ends exactly at the vertex.
- */
+/** The long way around (the major arc, through the antipode of the short arc's midpoint), bowed
+ * toward `nrm` by `mag` (signed; 0 = the plain long geodesic). */
+function bowedLongArc(a: V3, b: V3, nrm: V3, mag: number): SpherePoint[] {
+  return throughPoint(a, normalize(add(scale(slerp(a, b, 0.5), -1), scale(nrm, mag))), b);
+}
 
 /**
  * Targeted self-loop candidates: circles at `v` whose center is aimed toward the
@@ -230,34 +184,26 @@ function targetedSelfLoopCandidates(state: GameState, parsed: ResolvedMove): Sph
   if (!parsed.brackets || parsed.brackets.length === 0) return [];
   const loV = state.vertices.get(parsed.lo);
   if (!loV) return [];
-  const v = loV.pos;
-  const bracketMins = new Set(parsed.brackets);
+  const bracketSet = new Set(parsed.brackets);
 
-  // Collect inside vertex positions (same classification as voronoiSelfLoopArcs).
+  // Inside vertex positions (same classification as voronoiSelfLoopArcs).
   const insideVids = new Set<VertexId>();
   for (const r of state.regions.values()) {
     if (r.isDead) continue;
     for (const bound of r.boundaries) {
-      const minId = Math.min(...bound.entries.map(e => e.vertexId));
-      if (bracketMins.has(minId)) {
-        for (const e of bound.entries) insideVids.add(e.vertexId);
-      }
+      if (inBrackets(bound, state, bracketSet)) for (const e of bound.entries) insideVids.add(e.vertexId);
     }
   }
   insideVids.delete(parsed.lo);
-  if (insideVids.size === 0) return [];
-
-  // Centroid of inside vertices.
-  const insidePts: SpherePoint[] = [];
-  for (const vid of insideVids) {
-    const p = state.vertices.get(vid)?.pos;
-    if (p) insidePts.push(p);
-  }
+  const insidePts = [...insideVids].flatMap(vid => {
+    const v = state.vertices.get(vid);
+    return v && !v.isPseudo ? [v.pos] : [];
+  });
   if (insidePts.length === 0) return [];
   const centroid = sphereCentroid(insidePts);
 
   // Direction from v toward centroid (tangent component).
-  const vN = normalize(v);
+  const vN = normalize(loV.pos);
   const raw = add(centroid, scale(vN, -dot(centroid, vN)));
   const rawLen = Math.hypot(raw.x, raw.y, raw.z);
   if (rawLen < 1e-9) return [];
@@ -266,52 +212,24 @@ function targetedSelfLoopCandidates(state: GameState, parsed: ResolvedMove): Sph
   // Sweep many radii: small (tight around nearby vertex) to large (encompass all).
   const out: SpherePoint[][] = [];
   for (const radius of [0.1, 0.18, 0.25, 0.35, 0.45, 0.55, 0.65, 0.8, 1.0, 1.2]) {
-    const centre = normalize(add(vN, scale(dir, radius)));
-    out.push(circleThrough(vN, centre));
+    out.push(circleThrough(vN, normalize(add(vN, scale(dir, radius)))));
     // Opposite side (encloses everything else — rarely needed but covers edge cases).
     out.push(circleThrough(vN, normalize(add(vN, scale(dir, -radius)))));
   }
   return out;
 }
 
-function selfLoopCandidates(v: V3): SpherePoint[][] {
+/** Small circles through vertex `v`, centred `radius` away in each of `dirs` evenly spaced
+ * tangent directions, for every radius. Each starts and ends exactly at the vertex. */
+function loopCircles(v: V3, radii: number[], dirs: number): SpherePoint[][] {
   const vN = normalize(v);
-  // Two tangent basis vectors at the vertex.
-  const ref: V3 = Math.abs(vN.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
-  const e1 = normalize(add(ref, scale(vN, -dot(ref, vN))));
-  const e2 = cross(vN, e1);
-
+  const { e1, e2 } = tangentFrame(vN);
   const out: SpherePoint[][] = [];
-  for (const radius of [0.35, 0.6, 0.9]) {
-    for (let dir = 0; dir < 4; dir++) {
-      const ang = (Math.PI / 2) * dir;
-      // Circle centre offset from the vertex along (cos,sin) in the tangent plane.
+  for (const radius of radii) {
+    for (let d = 0; d < dirs; d++) {
+      const ang = (2 * Math.PI * d) / dirs;
       const off = add(scale(e1, Math.cos(ang) * radius), scale(e2, Math.sin(ang) * radius));
-      const centre = normalize(add(vN, off));
-      out.push(circleThrough(vN, centre));
-    }
-  }
-  return out;
-}
-
-/**
- * Fallback self-loop candidates for a vertex with little free tangent space: much
- * tighter loops than selfLoopCandidates (down to radius 0.03), swept through 8
- * directions instead of 4 for a better chance of finding a sliver of clearance.
- */
-function tinySelfLoopCandidates(v: V3): SpherePoint[][] {
-  const vN = normalize(v);
-  const ref: V3 = Math.abs(vN.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
-  const e1 = normalize(add(ref, scale(vN, -dot(ref, vN))));
-  const e2 = cross(vN, e1);
-
-  const out: SpherePoint[][] = [];
-  for (const radius of [0.03, 0.06, 0.1, 0.15]) {
-    for (let dir = 0; dir < 8; dir++) {
-      const ang = (Math.PI / 4) * dir;
-      const off = add(scale(e1, Math.cos(ang) * radius), scale(e2, Math.sin(ang) * radius));
-      const centre = normalize(add(vN, off));
-      out.push(circleThrough(vN, centre));
+      out.push(circleThrough(vN, normalize(add(vN, off))));
     }
   }
   return out;
@@ -351,19 +269,10 @@ function circleThrough(v: V3, centre: V3, sampleCount = SAMPLES): SpherePoint[] 
  */
 export function smallCircleSelfLoop(v: SpherePoint, hint: SpherePoint, radius: number, sampleCount = 9): SpherePoint[] {
   const vN = normalize(v);
-  const d = hint.x * vN.x + hint.y * vN.y + hint.z * vN.z;
-  let tx = hint.x - d * vN.x, ty = hint.y - d * vN.y, tz = hint.z - d * vN.z;
-  let len = Math.hypot(tx, ty, tz);
-  if (len < 1e-9) {
-    // hint is ~coincident with v (or antipodal) — fall back to an arbitrary tangent direction.
-    const ref: V3 = Math.abs(vN.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
-    const dp = ref.x * vN.x + ref.y * vN.y + ref.z * vN.z;
-    tx = ref.x - dp * vN.x; ty = ref.y - dp * vN.y; tz = ref.z - dp * vN.z;
-    len = Math.hypot(tx, ty, tz);
-  }
-  const dir = { x: tx / len, y: ty / len, z: tz / len };
-  const cosR = Math.cos(radius), sinR = Math.sin(radius);
-  const centre = normalize(add(scale(vN, cosR), scale(dir, sinR)));
+  let t = add(hint, scale(vN, -dot(hint, vN)));
+  if (Math.hypot(t.x, t.y, t.z) < 1e-9) t = tangentFrame(vN).e1; // hint ~coincident (or antipodal) with v
+  const dir = normalize(t);
+  const centre = normalize(add(scale(vN, Math.cos(radius)), scale(dir, Math.sin(radius))));
   return circleThrough(vN, centre, sampleCount);
 }
 
@@ -378,12 +287,9 @@ export function smallCircleSelfLoop(v: SpherePoint, hint: SpherePoint, radius: n
  * at the bracket-set centroid, giving the verify loop a directed option when
  * the perpendicular arcs cross an existing edge or hit the wrong face.
  *
- * Strategy:
- *  1. Find region R (mirror compWithBoth from moveCode.ts).
- *  2. Collect positions of vertices in the bracket-set sub-boundaries.
- *  3. Compute their centroid.
- *  4. Bow from lo to hi toward that centroid (several magnitudes).
- *  5. Add a V-lasso: lo → waypoint near centroid → hi (deeper penetration).
+ * Strategy: in the region whose boundary holds both lo and hi (compWithBoth), centroid the
+ * vertices of the bracketed sub-boundaries; bow from lo to hi toward that centroid at several
+ * magnitudes, then V-lassos through a waypoint near it (deeper penetration).
  */
 export function enclosureCandidates(state: GameState, parsed: ResolvedMove): SpherePoint[][] {
   if (!parsed.brackets || parsed.brackets.length === 0) return [];
@@ -394,112 +300,202 @@ export function enclosureCandidates(state: GameState, parsed: ResolvedMove): Sph
 
   const a = loV.pos;
   const b = hiV.pos;
-  const bracketMins = new Set(parsed.brackets);
+  const bracketSet = new Set(parsed.brackets);
 
-  // Find region R: first living region whose boundary component contains both lo and hi.
-  let bracketVerts: SpherePoint[] = [];
-  outer:
+  // Region R: first living region whose boundary component contains both lo and hi.
+  const bracketVerts: SpherePoint[] = [];
   for (const r of state.regions.values()) {
     if (r.isDead) continue;
     const comp = compWithBoth(r, parsed.lo, parsed.hi);
     if (!comp) continue;
-    // Collect positions of vertices in bracket-set sub-boundaries.
     for (const sub of r.boundaries) {
-      if (sub === comp) continue;
-      const minId = Math.min(...sub.entries.map(e => e.vertexId));
-      if (!bracketMins.has(minId)) continue;
+      if (sub === comp || !inBrackets(sub, state, bracketSet)) continue;
       for (const e of sub.entries) {
         const v = state.vertices.get(e.vertexId);
-        if (v) bracketVerts.push(v.pos);
+        if (v && !v.isPseudo) bracketVerts.push(v.pos);
       }
     }
-    break outer;
+    break;
   }
-
   if (bracketVerts.length === 0) return [];
 
-  // Centroid of bracket-set vertex positions (normalised to sphere).
   const centroid = sphereCentroid(bracketVerts);
 
-  // Direction perpendicular to the lo-hi great circle, snapped to point toward
-  // the centroid (flip sign if centroid is on the wrong side).
-  let nrm = cross(a, b);
-  if (Math.hypot(nrm.x, nrm.y, nrm.z) < 1e-6) nrm = { x: 0, y: 0, z: 1 };
-  nrm = normalize(nrm);
+  // Direction perpendicular to the lo-hi great circle, snapped to point toward the centroid.
+  let nrm = bowNormal(a, b);
   if (dot(centroid, nrm) < 0) nrm = scale(nrm, -1);
 
   const results: SpherePoint[][] = [];
-
-  // Centroid-directed bowed arcs: larger magnitudes than arcCandidates to reach
-  // deeper into the face.
-  for (const mag of [0.4, 0.8, 1.3, 1.8]) {
-    results.push(bowedArc(a, b, nrm, mag));
-  }
-
-  // V-lasso: lo → waypoint offset from centroid (away from lo-hi midpoint) → hi.
-  // Useful when the bracket set is deep inside the face and a simple bow is too shallow.
+  // Centroid-directed bowed arcs: larger magnitudes than arcCandidates to reach deeper into the face.
+  for (const mag of [0.4, 0.8, 1.3, 1.8]) results.push(bowedArc(a, b, nrm, mag));
+  // V-lasso: lo → waypoint pushed from the lo-hi midpoint toward the centroid → hi.
   const mid = slerp(a, b, 0.5);
-  // Push the waypoint away from mid toward centroid.
-  for (const reach of [0.5, 1.0, 1.5]) {
-    const wp = normalize(add(mid, scale(nrm, reach)));
-    results.push(vLasso(a, b, wp));
-  }
-
+  for (const reach of [0.5, 1.0, 1.5]) results.push(throughPoint(a, normalize(add(mid, scale(nrm, reach))), b));
   return results;
 }
 
-/** Two-segment V path: a → mid → b, each segment slerp-sampled. */
-function vLasso(a: V3, mid: V3, b: V3): SpherePoint[] {
-  const half = Math.ceil(SAMPLES / 2);
-  const pts: SpherePoint[] = [];
-  for (let i = 0; i < half; i++) pts.push(slerp(a, mid, i / (half - 1)));
-  for (let i = 1; i < SAMPLES - half + 1; i++) pts.push(slerp(mid, b, i / (SAMPLES - half)));
-  return pts;
+// ---------------------------------------------------------------------------
+// New-spot clearance
+// ---------------------------------------------------------------------------
+
+/** A new spot closer than this (radians) to an existing edge or spot is drawn on top of it. */
+const MID_CROWDED = 0.04;
+/** Clearance a nudged stroke aims to give its new spot. */
+const MID_TARGET = 0.07;
+
+/** Nearest existing geometry to `p` — any edge, or any spot other than `ends` — as its distance
+ * and the nearest point. */
+function nearestObstacle(state: GameState, p: V3, ends: V3[]): { d: number; q: V3 } | null {
+  let best: { d: number; q: V3 } | null = null;
+  const reach2 = (2 * MID_TARGET) ** 2;
+  for (const edge of state.edges.values()) {
+    const pts = edge.points;
+    for (let k = 0; k + 1 < pts.length; k++) {
+      if (chord2(p, pts[k]) > reach2 + 4 * chord2(pts[k], pts[k + 1])) continue; // can't be near
+      const n = nearestOnArc(p, pts[k], pts[k + 1]);
+      if (!best || n.d < best.d) best = { d: n.d, q: n.q };
+    }
+  }
+  for (const v of state.vertices.values()) {
+    if (ends.some(e => chord2(e, v.pos) < 1e-12)) continue;
+    const d = sphereAngle(p, v.pos);
+    if (!best || d < best.d) best = { d, q: v.pos };
+  }
+  return best;
+}
+
+/** `stroke` with its interior pushed sideways by `off` radians at the middle, tapering to 0 at
+ * both ends (sin bump over arc length), along each point's left normal (cross(p, tangent)). */
+function bumpStroke(stroke: V3[], off: number): V3[] {
+  const cum = [0];
+  for (let i = 1; i < stroke.length; i++) cum.push(cum[i - 1] + sphereAngle(stroke[i - 1], stroke[i]));
+  const L = cum[cum.length - 1] || 1;
+  return stroke.map((p, i) => {
+    if (i === 0 || i === stroke.length - 1) return p;
+    const t = normalize(add(stroke[i + 1], scale(stroke[i - 1], -1)));
+    return normalize(add(p, scale(normalize(cross(p, t)), off * Math.sin(Math.PI * cum[i] / L))));
+  });
+}
+
+/**
+ * The stroke, preceded — when its new spot (strokeMidIndex) would sit within MID_CROWDED of an
+ * existing edge or spot, e.g. a geodesic between two spots already joined by a near-geodesic edge,
+ * or one passing over an intermediate spot — by copies nudged off that obstacle: first on the side
+ * the spot already lies (same topology as the original, so the move it makes is unchanged), then the
+ * other side (for a spot dead on the obstacle, where the side is a coin flip). A nudge is kept only
+ * if it actually improves the spot's clearance; the verifier's crossing check judges the rest, and
+ * the untouched stroke stays as the last resort.
+ */
+function* withMidClearance(state: GameState, stroke: V3[]): Generator<V3[]> {
+  if (stroke.length < 3) { yield stroke; return; }
+  const ends = [stroke[0], stroke[stroke.length - 1]];
+  const mi = strokeMidIndex(stroke);
+  if (mi === 0 || mi === stroke.length - 1) { yield stroke; return; }
+  const m = stroke[mi];
+  const near = nearestObstacle(state, m, ends);
+  if (!near || near.d >= MID_CROWDED) { yield stroke; return; }
+  // Signed offset of the spot from the obstacle along the stroke's left normal at the spot.
+  const nrm = normalize(cross(m, normalize(add(stroke[mi + 1], scale(stroke[mi - 1], -1)))));
+  const side = dot(add(m, scale(near.q, -1)), nrm) >= 0 ? 1 : -1;
+  for (const s of [side, -side]) {
+    const nudged = bumpStroke(stroke, s * (MID_TARGET - near.d * (s === side ? 1 : -1)));
+    const after = nearestObstacle(state, nudged[strokeMidIndex(nudged)], ends);
+    if (!after || after.d > near.d) yield nudged;
+  }
+  yield stroke;
 }
 
 // ---------------------------------------------------------------------------
 // Crossing check
 // ---------------------------------------------------------------------------
 
+/** A stroke this close (radians) to an existing edge, away from its own end vertices, touches it. */
+const STROKE_TOUCH = 1e-4;
+
 /**
- * Returns true if `stroke` (in sphere space) crosses any existing edge. The test
- * is spherical (great-circle arc vs great-circle arc via segCrossesPolylineSphere),
- * so it is camera-independent — a far-side edge that merely overlaps the stroke in
- * screen projection is not a false positive. Pass `skipEdgeId` to exclude one edge
- * (e.g. the edge just committed, to avoid self-comparison).
- *
- * `strokeV1` / `strokeV2` are the vertex IDs at the stroke's endpoints. For
- * any existing edge that shares one of those vertices, the edge segment
- * adjacent to the shared endpoint is skipped, along with the stroke's own first
- * and last segments — otherwise the tiny near-vertex samples cluster around the
- * shared point and produce false-positive crossings.
+ * True if `stroke` (in sphere space) crosses or touches any existing edge — tested spherically, so it
+ * is camera-independent. Segments that merely meet at a shared vertex don't count (see
+ * arcsProperlyCross); every segment of the stroke is tested, end segments included — skipping them
+ * hid real crossings near a vertex. A touch (the stroke running along an edge, e.g. a plain geodesic
+ * between two vertices already joined by a geodesic edge) is no legal drawing either: the face
+ * between them has no width, and which side anything is on is left to rounding (recreateSweep seed
+ * 11 game 23: the replay's move 3 lay on edge 1–(−4) and the next frames recomputed the spots into
+ * the wrong face). Pass `skipEdgeId` to exclude one edge (e.g. the edge just committed, to avoid
+ * self-comparison).
  */
-export function strokeCrossesEdges(
-  state: GameState,
-  stroke: SpherePoint[],
-  skipEdgeId?: EdgeId,
-  strokeV1?: VertexId,
-  strokeV2?: VertexId,
-): boolean {
+export function strokeCrossesEdges(state: GameState, stroke: SpherePoint[], skipEdgeId?: EdgeId): boolean {
   if (stroke.length < 2) return false;
   for (const edge of state.edges.values()) {
     if (edge.id === skipEdgeId) continue;
-    // Skip the first edge segment if edge.v1 shares a vertex with the stroke,
-    // and the last edge segment if edge.v2 does. Covers self-loops (v1===v2)
-    // by skipping both ends.
-    const skipFirst = (strokeV1 != null && edge.v1 === strokeV1) || (strokeV2 != null && edge.v1 === strokeV2) ? 1 : 0;
-    const skipLast  = (strokeV1 != null && edge.v2 === strokeV1) || (strokeV2 != null && edge.v2 === strokeV2) ? 1 : 0;
-    // Also skip the first and last stroke segments for the same reason.
-    for (let i = 1; i < stroke.length - 2; i++) {
-      if (segCrossesPolylineSphere(stroke[i], stroke[i + 1], edge.points, skipLast, skipFirst)) return true;
-    }
+    if (polylinesProperlyCross(stroke, edge.points) || polylinesTouch(stroke, edge.points)) return true;
   }
   return false;
+}
+
+/** Does a point of either polyline lie within STROKE_TOUCH of the other, away from the stroke's ends
+ * (where an edge sharing the end vertex legitimately meets it)? */
+function polylinesTouch(stroke: SpherePoint[], edge: SpherePoint[]): boolean {
+  const ends = [stroke[0], stroke[stroke.length - 1]];
+  const awayFromEnds = (p: SpherePoint) => ends.every(q => sphereAngle(p, q) > 10 * STROKE_TOUCH);
+  const near = (p: SpherePoint, line: SpherePoint[]) => {
+    for (let k = 0; k + 1 < line.length; k++) {
+      if (chord2(p, line[k]) > 4 * chord2(line[k], line[k + 1]) + 1e-6) continue; // too far to touch
+      if (distanceToArc(p, line[k], line[k + 1]) < STROKE_TOUCH) return true;
+    }
+    return false;
+  };
+  return stroke.some(p => awayFromEnds(p) && near(p, edge)) || edge.some(p => awayFromEnds(p) && near(p, stroke));
 }
 
 // ---------------------------------------------------------------------------
 // Voronoi-boundary arc synthesis
 // ---------------------------------------------------------------------------
+
+/** STEP-sized walking along the spherical Voronoi bisector between two seed sets. */
+function voronoiBisector(insideSeeds: V3[], outsideSeeds: V3[]) {
+  // Nearest-seed functions on the sphere (max dot product = min angle).
+  const nearIn  = (P: V3): V3 => insideSeeds.reduce((best, s) => dot(P, s) > dot(P, best) ? s : best);
+  const nearOut = (P: V3): V3 => outsideSeeds.reduce((best, s) => dot(P, s) > dot(P, best) ? s : best);
+  // Snap a point onto the bisector (equidistant from the nearest inside and outside seeds) by
+  // gradient descent on f(P) = P·ni − P·no.
+  const snap = (P: V3): V3 => {
+    for (let i = 0; i < 30; i++) {
+      const ni = nearIn(P), no = nearOut(P);
+      const diff = dot(P, ni) - dot(P, no);
+      if (Math.abs(diff) < 1e-8) break;
+      P = normalize({
+        x: P.x - 0.4 * diff * (ni.x - no.x),
+        y: P.y - 0.4 * diff * (ni.y - no.y),
+        z: P.z - 0.4 * diff * (ni.z - no.z),
+      });
+    }
+    return P;
+  };
+  /** One step of `stepLen` along the bisector at `cur`; sign=+1 keeps the inside seeds on the left.
+   *  Null where the bisector direction degenerates. */
+  const step = (cur: V3, sign: 1 | -1, stepLen: number): V3 | null => {
+    const ni = nearIn(cur), no = nearOut(cur);
+    const cd = normalize({ x: ni.x - no.x, y: ni.y - no.y, z: ni.z - no.z }); // outside → inside
+    const raw = scale(cross(cd, cur), sign); // tangent at cur, perpendicular to cd
+    const tl = Math.hypot(raw.x, raw.y, raw.z);
+    if (tl < 1e-9) return null;
+    return snap(normalize(add(cur, scale(raw, stepLen / tl))));
+  };
+  return { nearIn, snap, step };
+}
+
+/** Every vertex of the boundaries in `bounds`, split by whether it's in `insideVids`. */
+function splitSeeds(state: GameState, bounds: readonly { entries: { vertexId: VertexId }[] }[], insideVids: Set<VertexId>, outside: V3[]): { inside: V3[]; outside: V3[] } {
+  const inside: V3[] = [];
+  const seen = new Set<VertexId>();
+  for (const bd of bounds) for (const e of bd.entries) {
+    if (seen.has(e.vertexId)) continue;
+    seen.add(e.vertexId);
+    const v = state.vertices.get(e.vertexId);
+    if (v) (insideVids.has(e.vertexId) ? inside : outside).push(v.pos);
+  }
+  return { inside, outside };
+}
 
 /**
  * For an enclosure move, trace the Voronoi boundary between the bracket-set
@@ -521,15 +517,13 @@ function voronoiBoundaryArcs(state: GameState, parsed: ResolvedMove): SpherePoin
 
   const a = loV.pos;
   const b = hiV.pos;
-  const bracketMins = new Set(parsed.brackets);
+  const bracketSet = new Set(parsed.brackets);
 
-  // Find region R: the boundary that contains both lo and hi.
-  // Use the LONGEST such boundary to avoid being fooled by a joint vertex that
-  // also appears on an inner sub-component.
+  // Region R: the boundary that contains both lo and hi. Use the LONGEST such boundary to avoid
+  // being fooled by a joint vertex that also appears on an inner sub-component.
   let regionBounds: readonly { entries: { vertexId: VertexId }[] }[] = [];
   let outerComp: { entries: { vertexId: VertexId }[] } | null = null;
   let bestLen = -1;
-
   for (const r of state.regions.values()) {
     if (r.isDead) continue;
     for (const bound of r.boundaries) {
@@ -543,78 +537,31 @@ function voronoiBoundaryArcs(state: GameState, parsed: ResolvedMove): SpherePoin
   }
   if (!outerComp) return [];
 
-  // Classify region vertices as inside (bracket components) or outside.
+  // Inside = the bracket components; lo and hi are always outside.
   const insideVids = new Set<VertexId>();
   for (const sub of regionBounds) {
-    if (sub === outerComp) continue;
-    const minId = Math.min(...sub.entries.map(e => e.vertexId));
-    if (bracketMins.has(minId)) {
-      for (const e of sub.entries) insideVids.add(e.vertexId);
-    }
+    if (sub !== outerComp && inBrackets(sub, state, bracketSet)) for (const e of sub.entries) insideVids.add(e.vertexId);
   }
   if (insideVids.size === 0) return [];
-
-  const insideSeeds: V3[] = [];
-  const outsideSeeds: V3[] = [a, b]; // lo and hi are always outside
-  const seen = new Set<VertexId>();
-  for (const sub of regionBounds) {
-    for (const e of sub.entries) {
-      if (seen.has(e.vertexId)) continue;
-      seen.add(e.vertexId);
-      const v = state.vertices.get(e.vertexId);
-      if (!v) continue;
-      (insideVids.has(e.vertexId) ? insideSeeds : outsideSeeds).push(v.pos);
-    }
-  }
-
-  // Nearest-seed functions on the sphere (max dot product = min angle).
-  const nearIn  = (P: V3): V3 => insideSeeds.reduce((best, s) => dot(P, s) > dot(P, best) ? s : best);
-  const nearOut = (P: V3): V3 => outsideSeeds.reduce((best, s) => dot(P, s) > dot(P, best) ? s : best);
-
-  // Snap a point to the Voronoi boundary (equidistant from nearest inside and
-  // outside seeds) by gradient descent on f(P) = P·ni − P·no.
-  const snap = (P: V3): V3 => {
-    for (let i = 0; i < 30; i++) {
-      const ni = nearIn(P), no = nearOut(P);
-      const diff = dot(P, ni) - dot(P, no);
-      if (Math.abs(diff) < 1e-8) break;
-      // grad_f = ni - no; step against gradient to reduce |diff|.
-      P = normalize({
-        x: P.x - 0.4 * diff * (ni.x - no.x),
-        y: P.y - 0.4 * diff * (ni.y - no.y),
-        z: P.z - 0.4 * diff * (ni.z - no.z),
-      });
-    }
-    return P;
-  };
+  const seeds = splitSeeds(state, regionBounds, insideVids, [a, b]);
+  if (seeds.inside.length === 0) return [];
+  const { nearIn, snap, step } = voronoiBisector(seeds.inside, seeds.outside);
 
   // Entry and exit points on the boundary, approached from lo and hi respectively.
   const startB = snap(normalize(add(a, nearIn(a))));
   const endB   = snap(normalize(add(b, nearIn(b))));
 
   // Trace the boundary with a fixed angular step, keeping inside to one side.
-  // sign=+1: inside to left; sign=-1: inside to right.
   const STEP = 0.06; // ~3.4° per step
   const MAX_STEPS = 200;
   const STOP_COS = Math.cos(STEP * 2); // stop when close enough to endB
-
   const tracePath = (sign: 1 | -1): V3[] => {
     const path: V3[] = [startB];
     let cur = startB;
-    for (let step = 0; step < MAX_STEPS; step++) {
-      const ni = nearIn(cur), no = nearOut(cur);
-      // crossDir points from outside toward inside.
-      const cd = normalize({ x: ni.x - no.x, y: ni.y - no.y, z: ni.z - no.z });
-      // Tangent in the sphere's tangent plane at cur, perpendicular to crossDir.
-      const raw: V3 = {
-        x: sign * (cd.y * cur.z - cd.z * cur.y),
-        y: sign * (cd.z * cur.x - cd.x * cur.z),
-        z: sign * (cd.x * cur.y - cd.y * cur.x),
-      };
-      const tl = Math.hypot(raw.x, raw.y, raw.z);
-      if (tl < 1e-9) break;
-      const next = snap(normalize(add(cur, scale(raw, STEP / tl))));
-      if (step > 3 && dot(next, endB) > STOP_COS) break;
+    for (let k = 0; k < MAX_STEPS; k++) {
+      const next = step(cur, sign, STEP);
+      if (!next) break;
+      if (k > 3 && dot(next, endB) > STOP_COS) break;
       path.push(next);
       cur = next;
     }
@@ -622,7 +569,7 @@ function voronoiBoundaryArcs(state: GameState, parsed: ResolvedMove): SpherePoin
     return path;
   };
 
-  // Build a complete arc: lo → [approach slerp] → boundary → [departure slerp] → hi.
+  // A complete arc: lo → [approach slerp] → boundary → [departure slerp] → hi.
   const APPROACH = 6;
   const buildArc = (boundary: V3[]): SpherePoint[] => {
     const pts: SpherePoint[] = [];
@@ -638,45 +585,27 @@ function voronoiBoundaryArcs(state: GameState, parsed: ResolvedMove): SpherePoin
 /**
  * For a self-loop enclosure move (lo === hi, non-empty brackets), trace the
  * Voronoi boundary between inside (bracket) and outside vertices as a CLOSED
- * curve that starts and ends at lo.
- *
- * Vertex classification uses boundary-min: a boundary whose minimum vertex ID
- * is in bracketMins counts as "inside" — this correctly identifies both inner
- * sub-boundaries AND outer-boundary sections (whose min may be a bracket entry)
- * without over-expanding via the game graph.
+ * curve that starts and ends at lo. Each boundary of the region (the outer one included) counts
+ * as inside when the bracket list names it (inBrackets). `extraInsideSeeds`/`extraOutsideSeeds`
+ * come from the junction graph's clustering (see junctionVoronoiCandidates).
  *
  * Returns two candidates: one tracing CW around the inside blob, one CCW.
  * The verify loop in recreate.ts picks whichever encloses the right side.
  */
-/** Re-runs voronoi self-loop arc generation with classified extra seeds from Voronoi clustering.
- *  hue === -2 → red/bracket → inside; anything else → outside. */
-export function candidateSelfLoopArcsWithSeeds(
-  state: GameState,
-  parsed: ResolvedMove,
-  extraSeeds: { pos: SpherePoint; hue: number }[],
-): SpherePoint[][] {
-  const extraIn  = extraSeeds.filter(s => s.hue === -2).map(s => s.pos);
-  const extraOut = extraSeeds.filter(s => s.hue !== -2).map(s => s.pos);
-  return voronoiSelfLoopArcs(state, parsed, extraIn, extraOut);
-}
-
-function voronoiSelfLoopArcs(state: GameState, parsed: ResolvedMove, extraInsideSeeds?: V3[], extraOutsideSeeds?: V3[]): SpherePoint[][] {
+function voronoiSelfLoopArcs(state: GameState, parsed: ResolvedMove, extraInsideSeeds: V3[] = [], extraOutsideSeeds: V3[] = []): SpherePoint[][] {
   if (!parsed.brackets || parsed.brackets.length === 0) return [];
   const loV = state.vertices.get(parsed.lo);
   if (!loV) return [];
   const a = loV.pos;
-  const bracketMins = new Set(parsed.brackets);
+  const bracketSet = new Set(parsed.brackets);
 
-  // Find the region whose boundary contains lo and has sub-boundaries.
-  // Among candidates prefer the boundary containing lo that is longest.
+  // The region whose boundary contains lo and has sub-boundaries; prefer the longest such boundary.
   let regionBounds: readonly { entries: { vertexId: VertexId }[] }[] = [];
   let bestLen = -1;
   for (const r of state.regions.values()) {
-    if (r.isDead) continue;
-    if (r.boundaries.length < 2) continue;
+    if (r.isDead || r.boundaries.length < 2) continue;
     for (const bound of r.boundaries) {
-      const hasLo = bound.entries.some(e => e.vertexId === parsed.lo);
-      if (hasLo && bound.entries.length > bestLen) {
+      if (bound.entries.some(e => e.vertexId === parsed.lo) && bound.entries.length > bestLen) {
         bestLen = bound.entries.length;
         regionBounds = r.boundaries;
       }
@@ -684,49 +613,17 @@ function voronoiSelfLoopArcs(state: GameState, parsed: ResolvedMove, extraInside
   }
   if (regionBounds.length === 0) return [];
 
-  // Classify each boundary as inside or outside by its minimum vertex ID.
   const insideVids = new Set<VertexId>();
   for (const bound of regionBounds) {
-    const minId = Math.min(...bound.entries.map(e => e.vertexId));
-    if (bracketMins.has(minId)) {
-      for (const e of bound.entries) insideVids.add(e.vertexId);
-    }
+    if (inBrackets(bound, state, bracketSet)) for (const e of bound.entries) insideVids.add(e.vertexId);
   }
   insideVids.delete(parsed.lo); // lo is always outside (grey cell)
   if (insideVids.size === 0) return [];
-
-  const insideSeeds: V3[] = [];
-  const outsideSeeds: V3[] = [a];
-  const seen = new Set<VertexId>();
-  for (const bound of regionBounds) {
-    for (const e of bound.entries) {
-      if (seen.has(e.vertexId)) continue;
-      seen.add(e.vertexId);
-      const v = state.vertices.get(e.vertexId);
-      if (!v) continue;
-      (insideVids.has(e.vertexId) ? insideSeeds : outsideSeeds).push(v.pos);
-    }
-  }
-  if (extraInsideSeeds)  for (const s of extraInsideSeeds)  insideSeeds.push(s);
-  if (extraOutsideSeeds) for (const s of extraOutsideSeeds) outsideSeeds.push(s);
-  if (insideSeeds.length === 0) return [];
-
-  const nearIn  = (P: V3): V3 => insideSeeds.reduce((best, s) => dot(P, s) > dot(P, best) ? s : best);
-  const nearOut = (P: V3): V3 => outsideSeeds.reduce((best, s) => dot(P, s) > dot(P, best) ? s : best);
-
-  const snap = (P: V3): V3 => {
-    for (let i = 0; i < 30; i++) {
-      const ni = nearIn(P), no = nearOut(P);
-      const diff = dot(P, ni) - dot(P, no);
-      if (Math.abs(diff) < 1e-8) break;
-      P = normalize({
-        x: P.x - 0.4 * diff * (ni.x - no.x),
-        y: P.y - 0.4 * diff * (ni.y - no.y),
-        z: P.z - 0.4 * diff * (ni.z - no.z),
-      });
-    }
-    return P;
-  };
+  const seeds = splitSeeds(state, regionBounds, insideVids, [a]);
+  seeds.inside.push(...extraInsideSeeds);
+  seeds.outside.push(...extraOutsideSeeds);
+  if (seeds.inside.length === 0) return [];
+  const { nearIn, snap, step } = voronoiBisector(seeds.inside, seeds.outside);
 
   // Snap from lo toward the nearest inside seed to land on the Voronoi boundary.
   const startB = snap(normalize(add(a, nearIn(a))));
@@ -734,20 +631,7 @@ function voronoiSelfLoopArcs(state: GameState, parsed: ResolvedMove, extraInside
   const STEP = 0.06;
   const MAX_STEPS = 300;
   const CLOSE_COS = Math.cos(STEP * 2);
-
-  // One step along the Voronoi boundary at cur in the given sign direction.
-  const stepB = (cur: V3, sign: 1 | -1): V3 => {
-    const ni = nearIn(cur), no = nearOut(cur);
-    const cd = normalize({ x: ni.x - no.x, y: ni.y - no.y, z: ni.z - no.z });
-    const raw: V3 = {
-      x: sign * (cd.y * cur.z - cd.z * cur.y),
-      y: sign * (cd.z * cur.x - cd.x * cur.z),
-      z: sign * (cd.x * cur.y - cd.y * cur.x),
-    };
-    const tl = Math.hypot(raw.x, raw.y, raw.z);
-    if (tl < 1e-9) return cur;
-    return snap(normalize(add(cur, scale(raw, STEP / tl))));
-  };
+  const stepB = (cur: V3, sign: 1 | -1): V3 => step(cur, sign, STEP) ?? cur;
 
   // Walk a few steps in each direction from startB to get two distinct departure/
   // arrival points on the boundary. This ensures the two legs of the self-loop
@@ -762,16 +646,16 @@ function voronoiSelfLoopArcs(state: GameState, parsed: ResolvedMove, extraInside
   const traceLoop = (exitPt: V3, entryPt: V3, sign: 1 | -1): V3[] => {
     const path: V3[] = [exitPt];
     let cur = exitPt;
-    for (let step = 0; step < MAX_STEPS; step++) {
+    for (let k = 0; k < MAX_STEPS; k++) {
       const next = stepB(cur, sign);
       path.push(next);
       cur = next;
-      if (step > 15 && dot(next, entryPt) > CLOSE_COS) break;
+      if (k > 15 && dot(next, entryPt) > CLOSE_COS) break;
     }
     return path;
   };
 
-  // Build a full stroke: a → exitPt → [trace] → entryPt → a.
+  // A full stroke: a → exitPt → [trace] → entryPt → a.
   const APPROACH = 4;
   const buildLoopArc = (exitPt: V3, loopPts: V3[], entryPt: V3): SpherePoint[] => {
     const pts: SpherePoint[] = [];
@@ -787,4 +671,3 @@ function voronoiSelfLoopArcs(state: GameState, parsed: ResolvedMove, extraInside
     buildLoopArc(arrB, traceLoop(arrB, depB, -1), depB),
   ];
 }
-

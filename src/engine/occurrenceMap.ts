@@ -24,9 +24,9 @@
  * `tokenLocsForVertex` returns every token a vertex owns; a single-token vertex (spot/appendage/
  * scab) is unambiguous, which already covers every move whose endpoints are such vertices.
  */
-import { GEN_SRC, canonicalizeTrackedProvenanceSync, type PosSrc } from './stalks';
+import { GEN_SRC, type PosSrc } from './stalks';
 import type { TokenLoc } from './moveTranslation';
-import { encodePositionDecompressed } from '../model/encoding';
+import { trackedLayout } from '../model/encoding';
 import type { GameState, VertexId } from '../model/types';
 
 /** Opaque per-occurrence handle stamped into the engine `src` channel. Non-negative (GEN_SRC=-2,
@@ -123,37 +123,21 @@ export function seedFreshGame(spotVertexIds: VertexId[], alloc: OccIdAllocator):
  * should fall back to `markDesynced()` in that case (same fallback shape as `canonSync` elsewhere).
  */
 export function seedFromGeometry(state: GameState, alloc: OccIdAllocator): OccurrenceMap | null {
-  const decomposed = encodePositionDecompressed(state);
-  const tracked = canonicalizeTrackedProvenanceSync(decomposed.text);
-  if (!tracked) return null;
-
-  // `tracked.src` indexes are TOKEN-sequential over the C++ parse walk, which skips punctuation
-  // ('[',']','|',',',' ','⊕') — pre-filter decomposed's per-char bindings down to a punctuation-free,
-  // token-sequential view before indexing by src (the same two gotchas the hover-over fix hit: see
-  // project_encoding_canon_rework's M6 "CONTINUED (2026-07-16)" section).
-  const decomposedTokens = decomposed.text
-    .split('')
-    .map((ch, i) => ({ ch, info: decomposed.charInfo[i] }))
-    .filter(({ ch }) => !'[]|, ⊕'.includes(ch))
-    .map(({ info }) => info);
-
-  // Walk `tracked.enc` in the ENGINE's own separator convention (stalks::serialize: components
-  // joined by '+', regions by '|', boundaries by ',', no brackets/⊕ — those are a TS display-only
-  // convention parsePosition tolerates but never emits) to recover the nested
-  // [component][region][boundary][token] shape posSrc must mirror, minting a fresh OccId per token.
+  // The live position's canonical spelling with every token traced to its vertex (trackedLayout),
+  // mirrored into posSrc's nested [component][region][boundary][token] shape, minting a fresh OccId
+  // per token.
+  const layout = trackedLayout(state);
+  if (!layout) return null;
   const vertexOf = new Map<OccId, VertexId>();
   const parentOf = new Map<OccId, OccId>();
   const posSrc: PosSrc = [];
-  let srcIdx = 0;
-  for (const compText of tracked.enc.split('+')) {
-    if (compText === 'N') { posSrc.push([]); continue; } // fully-dead component: no tokens
+  for (const comp of layout.comps) {
     const regions: number[][][] = [];
-    for (const regionText of compText.split('|')) {
+    for (const region of comp.regions) {
       const boundaries: number[][] = [];
-      for (const boundaryText of regionText.split(',')) {
+      for (const boundary of region) {
         const tokens: number[] = [];
-        for (let k = 0; k < boundaryText.length; k++) {
-          const info = decomposedTokens[tracked.src[srcIdx++]];
+        for (const info of boundary) {
           const vid = info?.vertexIds[0];
           if (vid === undefined) return null; // shouldn't happen; caller falls back to markDesynced
           const occ = alloc.alloc();
@@ -167,7 +151,7 @@ export function seedFromGeometry(state: GameState, alloc: OccIdAllocator): Occur
     }
     posSrc.push(regions);
   }
-  return indexPosSrc(tracked.enc, posSrc, vertexOf, parentOf);
+  return indexPosSrc(layout.enc, posSrc, vertexOf, parentOf);
 }
 
 /**

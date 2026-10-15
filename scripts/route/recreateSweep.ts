@@ -25,8 +25,10 @@ import type { ResolvedMove } from '../../src/model/moveCodeParse';
 import { synthesizeMove } from '../../src/model/recreate';
 import { strokeCrossesEdges } from '../../src/model/strokeSynthesis';
 import { allRoutedMoves } from '../../src/model/moveRouter';
-import { recomputeSpotLabels, labelForFromMap, spotGroupForFromMap, resolveMoveEndpoints, resolveBracketEntry, resolveParensEntry } from '../../src/model/vertexLabels';
+import { recomputeSpotLabels, labelForFromMap, spotGroupForFromMap, resolveLabelledMove } from '../../src/model/vertexLabels';
 import { relax } from './routeHarness';
+import { smoothStep, resampleAllEdges, resetActivityTimer } from '../../src/model/smooth';
+import { tunables } from '../../src/model/tunables';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { serializeGameState } from '../../src/model/saveState';
 import type { HistoryStepInput } from '../../src/model/saveState';
@@ -46,7 +48,7 @@ for (let g = 0; g < games; g++) {
   const tokens: string[] = [], canons: string[] = [], kinds: string[] = [], states: GameState[] = [];
   const history: HistoryStepInput[] = [];
   for (let m = 0; m < 3 * spots; m++) {
-    const opts = [...allRoutedMoves(st, 4)].filter(mv => !strokeCrossesEdges(st, mv.stroke, undefined, mv.v1, mv.v2));
+    const opts = [...allRoutedMoves(st, 4)].filter(mv => !strokeCrossesEdges(st, mv.stroke));
     if (opts.length === 0) break;
     const pick = opts[Math.floor(rnd() * opts.length)];
     const before = cloneState(st);
@@ -75,11 +77,18 @@ for (let g = 0; g < games; g++) {
   for (let i = 0; i < seq.moves.length; i++) {
     const mv = seq.moves[i];
     let parsed: ResolvedMove;
-    if (LBL) {
-      const { lo, hi, contextLabels } = resolveMoveEndpoints(mv.lo, mv.hi, rp.spotLabels);
-      parsed = { ...mv, lo, hi, brackets: mv.brackets ? mv.brackets.flatMap(e => resolveBracketEntry(e, contextLabels)) : null, parens: resolveParensEntry(mv.parens, contextLabels) };
-    } else parsed = { ...mv, brackets: mv.brackets as number[] | null, parens: mv.parens as ResolvedMove['parens'] };
-    const stroke = synthesizeMove(rp, parsed, true, LBL);
+    if (LBL) parsed = resolveLabelledMove(mv, rp.spotLabels);
+    else parsed = { ...mv, brackets: mv.brackets as number[] | null, parens: mv.parens as ResolvedMove['parens'] };
+    let stroke = synthesizeMove(rp, parsed, LBL);
+    // Mirror runRecreate's no-candidate retry: re-arm the forces and relax ~recreateRetrySettleMs
+    // of 60 fps frames before giving up.
+    for (let retry = 0; !stroke && retry < tunables.recreateRetries; retry++) {
+      resetActivityTimer(tunables.recreateRetrySettleMs);
+      for (let k = 0; k < Math.round(tunables.recreateRetrySettleMs * 0.06); k++) if (!smoothStep(rp)) break;
+      resampleAllEdges(rp);
+      stroke = synthesizeMove(rp, parsed, LBL);
+      if (stroke) bump('rescued by retry');
+    }
     const rpBefore = LBL ? cloneState(rp) : null;
     if (!stroke) { result = `stuck at ${i + 1} (${kinds[i]}) ${tokens[i]}`; break; }
     applyMove(rp, { v1: parsed.lo, v2: parsed.hi, stroke });

@@ -14,31 +14,14 @@ import { strokeReproduces } from '../../src/model/recreate';
 import { computeMoveCode, computeEnclosureSideColoring } from '../../src/model/moveCode';
 import { routedCandidates, routeSpecsFor } from '../../src/model/moveRouter';
 import { encodePosition } from '../../src/model/encoding';
-import { arcsCross } from '../../src/math/sphere';
 import type { GameState } from '../../src/model/types';
 import { smoothStep, resampleAllEdges, resetActivityTimer } from '../../src/model/smooth';
 import { readFileSync } from 'node:fs';
 import { deserializeGameState } from '../../src/model/saveState';
 import { encodePositionDecompressed } from '../../src/model/encoding';
 import { canon } from '../../src/engine/stalks';
-import { relax } from './routeHarness';
+import { relax, edgeCrossings } from './routeHarness';
 
-/** Mid-edge crossings between existing edges (a broken drawing). */
-function edgeCrossings(s: GameState): string[] {
-  const E = [...s.edges.values()];
-  const out: string[] = [];
-  const same = (p: any, q: any) => (p.x - q.x) ** 2 + (p.y - q.y) ** 2 + (p.z - q.z) ** 2 < 1e-12;
-  for (let a = 0; a < E.length; a++) for (let b = a + 1; b < E.length; b++) {
-    let hit = '';
-    for (let i = 0; !hit && i + 1 < E[a].points.length; i++) for (let j = 0; !hit && j + 1 < E[b].points.length; j++) {
-      const [p0, p1, q0, q1] = [E[a].points[i], E[a].points[i + 1], E[b].points[j], E[b].points[j + 1]];
-      if (same(p0, q0) || same(p0, q1) || same(p1, q0) || same(p1, q1)) continue; // meet at a shared vertex
-      if (arcsCross(p0, p1, q0, q1) && (p0.x + p1.x) * (q0.x + q1.x) + (p0.y + p1.y) * (q0.y + q1.y) + (p0.z + p1.z) * (q0.z + q1.z) > 0) hit = `seg${i}/${E[a].points.length - 1} x seg${j}/${E[b].points.length - 1}`;
-    }
-    if (hit) out.push(`e${E[a].id}(${E[a].v1}-${E[a].v2}) x e${E[b].id}(${E[b].v1}-${E[b].v2}) [${hit}]`);
-  }
-  return out;
-}
 
 // SAVE=<file>: compare each replayed position's canon with the saved game's own (catches a replay
 // that matches every token yet diverges topologically).
@@ -53,7 +36,7 @@ for (let i = 0; i < seq.moves.length; i++) {
   const parsed = { ...m, brackets: m.brackets as number[] | null, parens: m.parens as any };
   const cands = candidateStrokes(state, parsed);
   const rows = cands.map(s => {
-    const crosses = strokeCrossesEdges(state, s, undefined, parsed.lo, parsed.hi);
+    const crosses = strokeCrossesEdges(state, s);
     const ok = strokeReproduces(state, parsed, s, false);
     let code = '(apply failed)';
     try {

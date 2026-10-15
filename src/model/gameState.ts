@@ -6,9 +6,10 @@
  * giving an evenly-spaced spread that avoids the projection poles.
  */
 
-import type { GameState, Vertex, Edge, Region } from './types';
+import type { GameState, Vertex, Edge, Region, VertexId, EdgeId } from './types';
 import { VertexType, VertexVisualState } from './types';
 import { normalize } from '../math/sphere';
+import type { SpherePoint } from '../math/sphere';
 import { initialSpotLabels } from './vertexLabels';
 
 /**
@@ -154,4 +155,43 @@ export function cloneState(s: GameState): GameState {
     // practice — but copy the range objects too, defensively.
     spotLabels:   new Map([...s.spotLabels].map(([k, v]) => [k, typeof v === 'number' ? v : { ...v }])),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Graph surgery helpers (shared by the smoothing physics and dead-region collapses)
+// ---------------------------------------------------------------------------
+
+/** Add a new edge (regions to be filled in by recomputeRegions); returns its id. */
+export function addEdge(state: GameState, v1: VertexId, v2: VertexId, points: SpherePoint[]): EdgeId {
+  const id = allocEdgeId(state);
+  state.edges.set(id, { id, v1, v2, points, leftRegion: -1, rightRegion: -1 });
+  return id;
+}
+
+/** Delete vertices and every edge touching any of them. */
+export function deleteVertices(state: GameState, ids: Iterable<VertexId>): void {
+  const gone = new Set(ids);
+  for (const [eid, e] of [...state.edges]) if (gone.has(e.v1) || gone.has(e.v2)) state.edges.delete(eid);
+  for (const vid of gone) state.vertices.delete(vid);
+}
+
+/** Snap an edge's end points onto its (possibly moved) vertices. */
+export function anchorEdge(state: GameState, e: Edge): void {
+  const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
+  const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
+}
+
+/** An edge's points oriented to start at `from` (one of its endpoints; not for a self-loop), copied. */
+export function pointsFrom(e: Edge, from: VertexId): SpherePoint[] {
+  return e.v1 === from ? [...e.points] : [...e.points].reverse();
+}
+
+/** Pseudo-vertices ride their edge's index-midpoint (recomputeRegions places them there). Limited
+ *  to `edgeIds` when given. */
+export function syncPseudoVertices(state: GameState, edgeIds?: ReadonlySet<EdgeId>): void {
+  for (const v of state.vertices.values()) {
+    if (!v.isPseudo || v.pseudoEdgeId === undefined || (edgeIds && !edgeIds.has(v.pseudoEdgeId))) continue;
+    const e = state.edges.get(v.pseudoEdgeId);
+    if (e) v.pos = { ...e.points[Math.floor(e.points.length / 2)] };
+  }
 }

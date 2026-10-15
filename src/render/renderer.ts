@@ -13,7 +13,8 @@ import type { RotationMatrix, CanvasPoint, SpherePoint } from '../math/sphere';
 import { rotateSpherePoint, unrotateSpherePoint, normalize, project, projectRect, slerp } from '../math/sphere';
 import { chaikin } from '../math/chaikin';
 import { edgeRepellers } from '../model/smooth';
-import { edgePtsForEntry, pointAtBearing, bearingFrom, regionNearestFeature, regionContainsPointNearest } from '../model/moves';
+import { livingVertexSet } from '../model/deadRegions';
+import { edgePtsForEntry, entryIsForward, pointAtBearing, bearingFrom, regionNearestFeature, regionContainsPointNearest } from '../model/moves';
 
 export type ProjectionType = 'lambert' | 'rect';
 
@@ -516,13 +517,7 @@ export class Renderer {
     // --- Vertices ---
     // Vertices that border no living region are trapped in dead space and rendered
     // like saturated vertices even if their degree is still < 3.
-    const inLivingRegion = new Set<number>();
-    for (const r of state.regions.values()) {
-      if (r.isDead) continue;
-      for (const b of r.boundaries)
-        for (const e of b.entries)
-          inLivingRegion.add(e.vertexId);
-    }
+    const inLivingRegion = livingVertexSet(state);
     const selfLoopVertexIds = new Set<number>();
     for (const e of state.edges.values()) {
       if (e.v1 === e.v2) selfLoopVertexIds.add(e.v1);
@@ -542,8 +537,7 @@ export class Renderer {
       // Self-loop scabs bypass isSat: the degenerate single-dart face polygons
       // produced by a self-loop confuse the outer/inner face classifier, which
       // can leave S absent from inLivingRegion even when the outer face is alive.
-      const hasSelfLoop = v.degree === 2 &&
-        [...state.edges.values()].some(e => e.v1 === v.id && e.v2 === v.id);
+      const hasSelfLoop = v.degree === 2 && selfLoopVertexIds.has(v.id);
       if (v.degree === 2 && (!isSat || hasSelfLoop) && !isGrayed) {
         const scab = this.computeScabArc(state, camera, v);
         if (scab) {
@@ -1274,9 +1268,9 @@ export class Renderer {
 
           // Same rule as renderEdgeSideHighlight: leftRegion is the face on the
           // left when traveling v1→v2. This entry travels from entry.vertexId,
-          // which is v1→v2 if entry.vertexId===edge.v1, else the reverse (v2→v1,
+          // which is v1→v2 if entryIsForward, else the reverse (v2→v1,
           // whose "left" is the edge's rightRegion).
-          const matchesLeft = edge.v1 === entry.vertexId
+          const matchesLeft = entryIsForward(entry, edge)
             ? edge.leftRegion === region.id
             : edge.rightRegion === region.id;
           const sx = matchesLeft ? nx : -nx, sy = matchesLeft ? ny : -ny;

@@ -111,6 +111,12 @@ export interface BoundaryEntry {
    * Absent for entries on non-parallel edges (full edge, direction from vertexId==e.v1).
    */
   pseudoHalf?: 'first-fwd' | 'first-rev' | 'second-fwd' | 'second-rev';
+  /**
+   * Set on a self-loop entry whose walk runs the edge v2→v1. A self-loop has
+   * vertexId === v1 === v2, so the direction can't be read off the endpoints,
+   * and its two faces would otherwise both get the forward walk.
+   */
+  selfLoopRev?: true;
 }
 
 export interface Boundary {

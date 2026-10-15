@@ -36,6 +36,8 @@ export interface Tunables {
   extraSettleStableFrames: number;
   extraSettleTimeoutMs: number;
   recreateSettleThreshold: number;
+  recreateRetries: number;
+  recreateRetrySettleMs: number;
 
   // --- src/model/deadRegions.ts: collapse animation speed, one per step function (1 = the
   // original hard-coded speed; the animation runs that many times as fast) ---
@@ -74,6 +76,11 @@ export const DEFAULT_TUNABLES: Tunables = {
   extraSettleStableFrames: 6,
   extraSettleTimeoutMs: 8000,
   recreateSettleThreshold: 0.004,
+  // No reproducing candidate → re-arm the physics and retry before manual drawing. Playback
+  // waits are wall-clock, so a slow frame rate can leave the board under-smoothed and the router
+  // unable to thread a narrow wedge (sweep s5 g5 m6: stuck after relax, routes after +50 steps).
+  recreateRetries: 2,
+  recreateRetrySettleMs: 1000,
 
   deadShrinkSpeed: 0.5,
   louseSpeed: 0.5,
@@ -123,6 +130,8 @@ export const TUNABLE_SPECS: TunableSpec[] = [
   { key: 'extraSettleStableFrames', label: 'Extra-settle stable frames',  group: 'Recreate', min: 1, max: 30,    step: 1 },
   { key: 'extraSettleTimeoutMs',    label: 'Extra-settle timeout (ms)',   group: 'Recreate', min: 0, max: 30000, step: 500 },
   { key: 'recreateSettleThreshold', label: 'Recreate settle threshold',   group: 'Recreate', min: 0, max: 0.05,  step: 0.0005 },
+  { key: 'recreateRetries',         label: 'No-candidate retries',        group: 'Recreate', min: 0, max: 10,    step: 1 },
+  { key: 'recreateRetrySettleMs',   label: 'Retry settle (ms)',           group: 'Recreate', min: 0, max: 10000, step: 250 },
 
   { key: 'deadShrinkSpeed',         label: 'General dead component',              group: 'Collapse speed (1 = original)', min: 0.05, max: 3, step: 0.05, column: 1 },
   { key: 'louseSpeed',              label: 'Louse',                               group: 'Collapse speed (1 = original)', min: 0.05, max: 3, step: 0.05, column: 1 },

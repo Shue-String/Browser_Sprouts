@@ -6,6 +6,7 @@
 
 import type { GameState, Region } from './types';
 import type { SubregionHighlight } from '../render/renderer';
+import { inBrackets } from './moveCode';
 
 // Special hue sentinels used by buildSubregionHighlight / renderSubregionHighlight.
 // -1 = grey (lo vertex or outer-boundary vertex)
@@ -47,23 +48,13 @@ export function buildSubregionHighlight(
     // Everything starts green.
     for (const b of r.boundaries) for (const e of b.entries) assigned.set(e.vertexId, -3);
 
-    // Any sub-boundary of r (other than the outer one) whose minimum entry id
-    // is in the bracket set is fully enclosed on the arc side → red, every
-    // entry of that sub-boundary. This mirrors the exact convention
-    // buildBrackets (moveCode.ts) used to generate the bracket list in the
-    // first place — Math.min over a sub-boundary's own entries — rather than
-    // an independent graph-edge BFS from the bracket id. That matters because
-    // a sub-boundary's min entry can be a pseudo-vertex (e.g. -9999, inserted
-    // by recomputeRegions to disambiguate parallel-edge rotation order): it
-    // exists in state.vertices but has no state.edges of its own, so a BFS
-    // starting there finds zero neighbors and never reaches the real vertices
-    // (like -18, 1, 3) sharing that same sub-boundary.
+    // Any sub-boundary of r (other than the outer one) the bracket list names (inBrackets — the
+    // same rule buildBrackets writes it with) is fully enclosed on the arc side → red, every entry.
     if (bracketSet.size > 0) {
       for (let bi = 0; bi < r.boundaries.length; bi++) {
         if (bi === outerIdx) continue;
         const b = r.boundaries[bi];
-        const minId = Math.min(...b.entries.map(e => e.vertexId));
-        if (!bracketSet.has(minId)) continue;
+        if (!inBrackets(b, preState, bracketSet)) continue;
         for (const e of b.entries) assigned.set(e.vertexId, -2);
       }
     }

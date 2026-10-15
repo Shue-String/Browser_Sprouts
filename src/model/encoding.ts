@@ -1061,20 +1061,10 @@ function resolveDecompressedRegion(
  * falls back) when that doesn't hold or the WASM engine isn't loaded; null for bad indices.
  */
 function resolveViaProvenance(state: GameState, move: MoveInfo): ResolvedMoveVertices | null | undefined {
-  const dec = encodePositionDecompressed(state);
-  const tracked = canonicalizeTrackedProvenanceSync(dec.text);
-  const whole = canonSync(dec.text);
-  if (!tracked || whole === null) return undefined;
-  // tracked.src indexes the input's tokens in parse order, which skips punctuation.
-  const tokens = dec.text.split('')
-    .map((ch, i) => ({ ch, info: dec.charInfo[i] }))
-    .filter(({ ch }) => !'[]|, ⊕'.includes(ch))
-    .map(({ info }) => info);
-  let si = 0;
-  const comps = tracked.enc.split('+').map(text => ({
-    text,
-    regions: text === 'N' ? [] : text.split('|').map(rt => rt.split(',').map(bt => [...bt].map(() => tokens[tracked.src[si++]]))),
-  }));
+  const layout = trackedLayout(state);
+  const whole = layout && canonSync(layout.input);
+  if (!layout || whole === null) return undefined;
+  const { comps } = layout;
   const target = whole.split('+')[move.component];
   if (target === undefined) return null;
   // Pair canon's component with the same-spelled decompressed one (the k-th of equal twins).
@@ -1090,19 +1080,7 @@ function resolveViaProvenance(state: GameState, move: MoveInfo): ResolvedMoveVer
     const t1 = boundary?.[move.i], t2 = boundary?.[move.j];
     const v1 = vid(t1), v2 = vid(t2);
     if (v1 === undefined || v2 === undefined) return null;
-    // Same mask convention as below: bit k (k-th other boundary, skipping move.boundary)
-    // clear = that boundary stays on the L (lo->hi arc) side.
-    const brackets: VertexId[] = [];
-    let bit = 0;
-    for (let bi = 0; bi < region.length; bi++) {
-      if (bi === move.boundary) continue;
-      if (!((move.mask >> bit) & 1)) {
-        const min = Math.min(...region[bi].flatMap(t => t.vertexIds));
-        if (Number.isFinite(min)) brackets.push(min);
-      }
-      bit++;
-    }
-    return { v1, v2, edgeId1: t1!.edgeId, edgeId2: t2!.edgeId, brackets };
+    return { v1, v2, edgeId1: t1!.edgeId, edgeId2: t2!.edgeId, brackets: bracketsOfMask(region, move) };
   }
   const t1 = region[move.b1]?.[move.i], t2 = region[move.b2]?.[move.j];
   const v1 = vid(t1), v2 = vid(t2);
@@ -1149,6 +1127,76 @@ function liveComponentIndex(
 }
 
 /**
+ * The live bracket list an Enclosure's `mask` describes, for a region given as its boundaries'
+ * tokens in the engine's order. Mask bits walk the region's OTHER boundaries (skipping
+ * move.boundary) in that order — see applyEnclosure's b2 loop in stalks/src/moves.cpp; a clear bit
+ * keeps the boundary on the L (lo->hi arc) side. Each is named by its lowest token vertex (tokens
+ * are only ever visible vertices — buildBrackets' convention).
+ */
+function bracketsOfMask(region: ({ vertexIds: VertexId[] } | undefined)[][], move: MoveInfo): VertexId[] {
+  const brackets: VertexId[] = [];
+  let bit = 0;
+  for (let bi = 0; bi < region.length; bi++) {
+    if (bi === move.boundary) continue;
+    if (!((move.mask >> bit) & 1)) {
+      const min = Math.min(...region[bi].flatMap(t => t?.vertexIds ?? []));
+      if (Number.isFinite(min)) brackets.push(min);
+    }
+    bit++;
+  }
+  return brackets;
+}
+
+/** One canonical token's live provenance: the vertex (or merged vertices) it stands for, and the
+ * edge its occurrence leaves along. */
+export type TokenInfo = EncodingResult['charInfo'][number];
+
+/**
+ * "Which board vertex is each canonical token": the WASM engine's canonical spelling of the live
+ * position (its DECOMPRESSED encoding — provenance is seeded per input token, which compression
+ * would merge), with every canonical token traced back to the live vertex/edge it came from. The
+ * one place that walks canonicalizeTrackedProvenanceSync's output; null until the engine loads.
+ *  - comps: per canonical component ('+'-separated), [region][boundary][token] → its TokenInfo
+ *    (a fully dead 'N' component has none);
+ *  - charInfo: one entry per character of `enc`, separators (and 'N') carrying no vertices.
+ */
+export function trackedLayout(state: GameState): {
+  input: string;
+  enc: string;
+  comps: { text: string; regions: (TokenInfo | undefined)[][][] }[];
+  charInfo: TokenInfo[];
+} | null {
+  const dec = encodePositionDecompressed(state);
+  const tracked = canonicalizeTrackedProvenanceSync(dec.text);
+  if (!tracked) return null;
+  // tracked.src indexes the input's tokens in parse order, which skips punctuation.
+  const tokens = dec.text.split('')
+    .map((ch, i) => ({ ch, info: dec.charInfo[i] }))
+    .filter(({ ch }) => !'[]|, ⊕'.includes(ch))
+    .map(({ info }) => info);
+  let si = 0;
+  const charInfo: TokenInfo[] = [];
+  const none = (): TokenInfo => ({ vertexIds: [] });
+  const comps = tracked.enc.split('+').map((text, ci) => {
+    if (ci > 0) charInfo.push(none()); // the '+'
+    if (text === 'N') { charInfo.push(none()); return { text, regions: [] }; }
+    const regions = text.split('|').map((rt, ri) => {
+      if (ri > 0) charInfo.push(none());
+      return rt.split(',').map((bt, bi) => {
+        if (bi > 0) charInfo.push(none());
+        return [...bt].map(() => {
+          const info = tokens[tracked.src[si++]];
+          charInfo.push(info ?? none());
+          return info;
+        });
+      });
+    });
+    return { text, regions };
+  });
+  return { input: dec.text, enc: tracked.enc, comps, charInfo };
+}
+
+/**
  * Translate an engine MoveInfo (component/region/boundary/i/j indices, on the
  * decompressed canonical position derived from `state`'s current encoding)
  * into the live VertexIds it refers to, so the caller can synthesize/play the
@@ -1173,24 +1221,7 @@ export function resolveMoveVertices(state: GameState, move: MoveInfo): ResolvedM
     const v2 = t2.vertexIds[0];
     if (v1 === undefined || v2 === undefined) return null;
 
-    // mask bit order walks the region's other boundaries (skipping
-    // move.boundary) in the same final-sorted order as `region` itself — see
-    // applyEnclosure's b2 loop in stalks/src/moves.cpp. Bit clear (0) means
-    // the boundary stays on the L (lo->hi arc) side, matching buildBrackets'
-    // "min vertex of each sub-boundary on the lo->hi side" convention.
-    const brackets: VertexId[] = [];
-    let bit = 0;
-    for (let bi = 0; bi < region.length; bi++) {
-      if (bi === move.boundary) continue;
-      const other = region[bi];
-      if (other && other.length > 0 && !((move.mask >> bit) & 1)) {
-        const min = Math.min(...other.flatMap(t => t.vertexIds));
-        if (Number.isFinite(min)) brackets.push(min);
-      }
-      bit++;
-    }
-
-    return { v1, v2, edgeId1: t1.edgeId, edgeId2: t2.edgeId, brackets };
+    return { v1, v2, edgeId1: t1.edgeId, edgeId2: t2.edgeId, brackets: bracketsOfMask(region, move) };
   }
 
   // Join: b1/b2 are boundary indices (same final-sorted numbering as `boundary`

@@ -1,6 +1,6 @@
 # Sprouts — Active Notes
 
-Last swept for staleness 2026-09-21 (previous sweep: 2026-07-23 — nearly two months of drift; see
+Last swept for staleness 2026-09-21; FUNCTIONS.md updated for the 2026-10-12 review batch (previous sweep: 2026-07-23 — nearly two months of drift; see
 `FUNCTIONS.md`'s new native-tools/build-scripts catalogs and the ALPHA-genome section rewrite for
 what had gone stale). **Keep this pair current**: when a feature lands, update the relevant
 `FUNCTIONS.md` section and this file's architecture/TODO bullets in the same session, not later —
@@ -13,7 +13,7 @@ instead of Claude re-deriving it from memory files or grep each time.
 - **Finding "which region/side is this" (containment queries)**: use `regionContainsPointNearest`/
   `regionNearestFeature` (`src/model/moves.ts`, 2026-10-01: side of the nearest boundary feature —
   no antipodal blind spot, no outer-region elimination). Used by `computeScabArc`,
-  `renderRegionDiagnostic`, `screenOuterRegion` (renderer.ts), `computeSpliceSlots` and `recomputeRegions`' component/spot nesting (`containingFace`/`outerCycleFace`, via `loopsNearestFeature`; moves.ts).
+  `renderRegionDiagnostic`, `screenOuterRegion` (renderer.ts), `computeSpliceSlots` and `recomputeRegions`' component/spot nesting (`containingFace`/`faceOfCycle`, via `loopsNearestFeature`; moves.ts).
   Replaced the old winding-number pattern, which read a false 0 for big regions. Full history:
   memory `feedback_sphere_native_containment.md`.
 - Dead-region elimination (shrink+pop) is in `src/model/deadRegions.ts`. Main containment fix
@@ -22,10 +22,20 @@ instead of Claude re-deriving it from memory files or grep each time.
 - Dead-face collapse ANIMATIONS for `triangleDeadStep`/`parallelDeadStep` use deflate-in-place
   (`src/model/faceDeflate.ts`, a Floater mean-value mesh embedding — injective, so no crossings for any
   face shape or size, including a dead face that covers most of the sphere). Other collapse animators
-  (louse, quad, enclosed-triangle, bigon-tip, self-connected, triple-parallel) are unaudited and could be
+  (louse, quad, enclosed-triangle, bigon-tip, triple-parallel) are unaudited and could be
   ported onto the same `startDeflate`/`deflateTo` helpers. See memory `project_collapse_animation_crossings.md`.
+  Self-connected-dead (2026-10-13) instead rides its frozen S–T edge, dragging the shrinking loop(s) — 0 crossing
+  frames over 38 sweep collapses, 2 seeds (old slerp, seed 7: 2 of 17 crossed, up to 34 frames).
 - Canonical position encoding: `src/model/encoding.ts`. All dead-region surgery is gated
-  by a before/after encoding check.
+  by a before/after encoding check; since 2026-10-12 a real refusal (`takeEncodingGateRefusal`) makes
+  main.ts revert the board, switch Collapsing off and show a note (`revertIfCollapseRefused`; test hook
+  `__sproutsDebug.failNextCollapseGate`). Special collapses go through one registry
+  (`detectSpecialCollapse`/`stepSpecialCollapse`/`specialCollapseVertices`).
+- Shared conventions (2026-10-12, see FUNCTIONS.md): `Dart.forward` / `entryIsForward` is THE edge-direction
+  rule (a self-loop's two darts can't be told apart by endpoints); `arcsProperlyCross` is THE crossing test
+  (`strokeCrossesEdges`, physics guards); `applyTrial` is the one "try a stroke" primitive; `bracketRepOf`/
+  `inBrackets` the one bracket rule; `trackedLayout` the one canonical-provenance walk. Sphere vector
+  helpers and `UnionFind` live in `src/math/`.
 - Advanced Collections / genome registry: hand-authored data lives in ONE file, `src/data/collectionElements.json` (one object per
   collection: name, rep, genome, and per-offset `single`/`double`/`multi` element lists; every genome is the engine's answer for the rep,
   refreshed via `scripts/refreshGenomes.cjs`, and those with all-named T-genes feed the fold/collision registry); everything else (`collection_elements.generated.hpp` — WASM only, native reads the JSON at runtime — `collectionGenomes.generated.json`,
@@ -50,6 +60,18 @@ instead of Claude re-deriving it from memory files or grep each time.
   dead-region elimination. Rendered specially; has 1/3 and 2/3 repellers to keep it open.
 
 ## Open TODOs
+- **Collapse refusals** (2026-10-12): the empty-face guards (FUNCTIONS.md, deadRegions) removed the scab and
+  enclosed-triangle refusals on `failureSaves/fail-s4-g11-m11.json`. Still refusing, same in the pre-batch code:
+  testSave-3/4 move 24 — `eliminateIsolatedVertex` splices a degree-2 vertex and the encoding changes
+  (`[0] ⊕ [12] ⊕ [2,5] ⊕ [223]` -> `[0,5] ⊕ [12] ⊕ [223]`); testSave-10 move 12 — parallel-dead's deflation pop, on a
+  board that already has 6 edge crossings. Each now switches Collapsing off in the app.
+- **Recreate move-code ambiguity**: sweep seed 11 game 23 move 3 (`-1X1(-4..-3)[]`) — a stroke recording the
+  same token reaches a different position (`0,0,24` vs `4A|0,0,A`); same in the pre-batch code. (The relax
+  "triangle flip" once blamed here was a degenerate stroke drawn ON an existing edge, fixed 2026-10-13 in
+  `strokeCrossesEdges`; with it, 0 face changes in 1,301 relaxes over the saves + random router games.)
+- **Stale label tokens in old saves**: `testSave-5/9/10/11` carry label tokens their own strokes no longer
+  record (e.g. `-8X-8[-6]` vs `-7X-7[-6]`, old and new code alike). Load keeps the saved token in all four
+  forms, so the raw-id view shows a label token there; using the rebuilt raw token in that case would fix it.
 - `eliminateIsolatedVertex` (`src/model/deadRegions.ts`) has a known self-crossing edge case still
   open. See `project_dead_region_elimination.md` for specifics.
 - 2D `pointInPolygon` containment call site not yet migrated to the sphere-native pattern:

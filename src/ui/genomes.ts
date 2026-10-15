@@ -30,7 +30,9 @@ function byName(a: GenomeCensusRow, b: GenomeCensusRow): number {
 }
 function cmp(a: GenomeCensusRow, b: GenomeCensusRow): number {
   if (sort.k === 'group') return byName(a, b) * sort.dir;
-  const x = a[sort.k] ?? -1, y = b[sort.k] ?? -1;
+  // A missing value sorts lowest within its own kind ('' for text columns), so the order stays total.
+  const missing = TEXT_KEYS.has(sort.k) ? '' : -1;
+  const x = a[sort.k] ?? missing, y = b[sort.k] ?? missing;
   return x === y ? byName(a, b) : (x < y ? -1 : 1) * sort.dir;
 }
 

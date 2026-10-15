@@ -22,18 +22,21 @@
  * a living component (they can only be shrunk, never popped — see project memory).
  */
 
-import type { GameState, VertexId, EdgeId, RegionId, Vertex } from './types';
+import type { GameState, VertexId, EdgeId, RegionId, Region, Vertex, Edge, BoundaryEntry } from './types';
 import { VertexType, VertexVisualState } from './types';
 import type { SpherePoint } from '../math/sphere';
-import { normalize, slerp, arcsCross, sphereAngle } from '../math/sphere';
-import { recomputeRegions, regionContainsPointNearest } from './moves';
-import { cloneState, allocEdgeId } from './gameState';
+import { normalize, slerp, arcsCross, sphereAngle, sphereCentroid, polylineLength, polylinesProperlyCross, cross } from '../math/sphere';
+import { UnionFind } from '../math/unionFind';
+import { recomputeRegions, regionContainsPointNearest, entryIsForward } from './moves';
+import { cloneState, addEdge, deleteVertices, anchorEdge, pointsFrom, syncPseudoVertices } from './gameState';
 import { canonicalEncoding } from './encoding';
+import { distanceToArc } from './smoothGeometry';
 import { canonSync, canonReady } from '../engine/stalks';
 import { smallCircleSelfLoop } from './strokeSynthesis';
-import { stereoChart, buildFaceDeflation, deflatePoint, deflateArc, deflateTrack, diskBoundaryPoint, diskPointOf, deflateInteriorPath } from './faceDeflate';
+import { stereoChart, buildFaceDeflation, deflatePoint, deflateArc, closeArc, deflateTrack, diskBoundaryPoint, diskPointOf, deflateInteriorPath } from './faceDeflate';
 import type { FaceDeflation } from './faceDeflate';
 import { tunables } from './tunables';
+import { DEBUG } from '../debug/flags';
 
 // Collapse-generated self-loops: when the concatenated/shrunk geometry feeding a new self-loop
 // is confined to a small neighbourhood, it's replaced with a genuine small circle (see
@@ -48,14 +51,100 @@ const SELF_LOOP_SYNTH_RADIUS = 0.12;
  * only meant for the small point sets a single collapse's self-loop geometry produces. */
 function maxPairwiseAngularDistance(pts: SpherePoint[]): number {
   let max = 0;
-  for (let i = 0; i < pts.length; i++) {
-    for (let j = i + 1; j < pts.length; j++) {
-      const dot = Math.max(-1, Math.min(1, pts[i].x*pts[j].x + pts[i].y*pts[j].y + pts[i].z*pts[j].z));
-      const d = Math.acos(dot);
-      if (d > max) max = d;
-    }
-  }
+  for (let i = 0; i < pts.length; i++)
+    for (let j = i + 1; j < pts.length; j++) max = Math.max(max, sphereAngle(pts[i], pts[j]));
   return max;
+}
+
+/** Geometry for a self-loop at `v` built from `pts` (a walked/concatenated boundary): kept as-is when
+ * it has real spread, replaced by a genuine small circle when it is confined to a small
+ * neighbourhood — a near-collinear "loop" has no lateral area for edgeRepellers() to bow open. */
+function selfLoopPoints(v: SpherePoint, pts: SpherePoint[]): SpherePoint[] {
+  if (maxPairwiseAngularDistance(pts) >= SELF_LOOP_DEGENERATE_THRESHOLD) return pts;
+  return smallCircleSelfLoop(v, pts[Math.min(1, pts.length - 1)], SELF_LOOP_SYNTH_RADIUS);
+}
+
+/** Pull an edge's interior points `step` of the way toward `target`, then re-anchor its ends. */
+function pullEdgeToward(state: GameState, e: Edge | undefined, target: SpherePoint, step: number): void {
+  if (!e) return;
+  for (let i = 1; i < e.points.length - 1; i++) e.points[i] = slerp(e.points[i], target, step);
+  anchorEdge(state, e);
+}
+
+/** A vertex's edges other than those in `exclude`, with the neighbour at the far end. */
+function externalEdges(state: GameState, vid: VertexId, exclude: ReadonlySet<EdgeId>): { eid: EdgeId; nbr: VertexId }[] {
+  const out: { eid: EdgeId; nbr: VertexId }[] = [];
+  for (const e of state.edges.values()) {
+    if (exclude.has(e.id)) continue;
+    if (e.v1 === vid) out.push({ eid: e.id, nbr: e.v2 });
+    else if (e.v2 === vid) out.push({ eid: e.id, nbr: e.v1 });
+  }
+  return out;
+}
+
+/**
+ * Does face `id` hold nothing but its own outer boundary — no nested component, spot or other
+ * structure? A collapse may only shrink a face away, or merge it into another face, when it is
+ * empty: anything nested in it would be swept over by the animation or end up in a different face,
+ * changing the position (and the encoding gate would refuse the pop).
+ */
+function faceIsEmpty(state: GameState, id: RegionId): boolean {
+  const r = state.regions.get(id);
+  return !!r && r.boundaries.length === 1;
+}
+
+/**
+ * Weaker than faceIsEmpty, for an INSTANT surgery (no animation sweeping the face): may face `id`
+ * merge into another? Only if everything nested in it — each boundary not touching `own`, the
+ * structure being removed — is dead (degree 3): dead content contributes nothing to the encoding,
+ * a spot or any vertex with a life left does. (Checked against the encoding gate over every scab in
+ * the test saves: this rule rejects exactly the scabs the gate refuses.)
+ */
+function holdsNothingAlive(state: GameState, id: RegionId, own: ReadonlySet<VertexId>): boolean {
+  const r = state.regions.get(id);
+  return !!r && r.boundaries.every(b =>
+    b.entries.some(en => own.has(en.vertexId))
+    || b.entries.every(en => { const v = state.vertices.get(en.vertexId); return !v || v.isPseudo || v.degree >= 3; }));
+}
+
+/** The faces on either side of these edges. */
+function facesOf(edges: Iterable<Edge>): Set<RegionId> {
+  const out = new Set<RegionId>();
+  for (const e of edges) { out.add(e.leftRegion); out.add(e.rightRegion); }
+  return out;
+}
+
+/** Can a whole component with these edges be deleted without moving anything between faces? Its
+ * faces all merge into one, so at most one of them may hold anything besides the component itself. */
+function deletableComponent(state: GameState, edges: Iterable<Edge>): boolean {
+  return [...facesOf(edges)].filter(f => !faceIsEmpty(state, f)).length <= 1;
+}
+
+/** The face inside a self-loop: the side whose boundary walk is the loop alone. */
+function selfLoopInsideFace(state: GameState, loop: Edge): RegionId | null {
+  for (const id of [loop.leftRegion, loop.rightRegion]) {
+    const r = state.regions.get(id);
+    if (r?.boundaries.some(b => {
+      const real = b.entries.filter(en => !state.vertices.get(en.vertexId)?.isPseudo);
+      return real.length === 1 && real[0].vertexId === loop.v1 && real[0].edgeId === loop.id;
+    })) return id;
+  }
+  return null;
+}
+
+/**
+ * The real (non-pseudo) boundary walk of `r` when it is a dead face bounded by a simple n-gon of
+ * dead vertices: one boundary, exactly n real entries on n distinct edges, n distinct vertices, all
+ * degree 3. Pseudo-vertices add entries without changing the shape, so they're filtered first. Null
+ * for anything else. Shared header of the fixed-shape detectors (parallel, triangle, quad, enclosed).
+ */
+function deadPolygon(state: GameState, r: Region, n: number): (BoundaryEntry & { edgeId: EdgeId })[] | null {
+  if (!r.isDead || r.boundaries.length !== 1) return null;
+  const real = r.boundaries[0].entries.filter(en => !state.vertices.get(en.vertexId)?.isPseudo);
+  if (real.length !== n || real.some(en => en.edgeId === undefined)) return null;
+  if (new Set(real.map(en => en.vertexId)).size !== n || new Set(real.map(en => en.edgeId)).size !== n) return null;
+  if (real.some(en => state.vertices.get(en.vertexId)?.degree !== 3)) return null;
+  return real as (BoundaryEntry & { edgeId: EdgeId })[];
 }
 
 /** Sweep orphaned edges (endpoint deleted) then recompute regions. Logs anything suspicious. */
@@ -98,11 +187,24 @@ function commitIfEncodingPreserved(state: GameState, surgery: () => void): boole
   surgery();
   const encAfter = canonicalEncoding(state);
   const after = canonSync(encAfter);
-  if (after === null || after !== before) {
+  const forced = DEBUG.failNextCollapseGate;
+  if (after === null || after !== before || forced) {
     Object.assign(state, snapshot); // rollback — surgery changed the encoding (shouldn't happen)
+    if (after !== null) gateRefused = true; // a real refusal, not an engine hiccup
+    DEBUG.failNextCollapseGate = false;
     return false;
   }
   return true;
+}
+
+/** Set when commitIfEncodingPreserved rolls back a surgery that changed the canonical encoding — a
+ * collapse bug. main.ts then reverts the board to before that collapse and turns collapsing off.
+ * Read-and-clear. */
+let gateRefused = false;
+export function takeEncodingGateRefusal(): boolean {
+  const r = gateRefused;
+  gateRefused = false;
+  return r;
 }
 
 /** Per-frame slerp fraction `step` (a geometric shrink: (1 - step)^k remains after k frames)
@@ -117,7 +219,7 @@ const DEAD_SHRINK_STEP = 0.06;
 const POP_RADIUS = 0.12;
 
 /** Vertex ids that lie on the boundary of at least one living region. */
-function livingVertexSet(state: GameState): Set<VertexId> {
+export function livingVertexSet(state: GameState): Set<VertexId> {
   const living = new Set<VertexId>();
   for (const r of state.regions.values()) {
     if (r.isDead) continue;
@@ -128,17 +230,10 @@ function livingVertexSet(state: GameState): Set<VertexId> {
 
 /** Map every vertex to its connected-component root (union-find over edges). */
 function componentRoots(state: GameState): Map<VertexId, VertexId> {
-  const parent = new Map<VertexId, VertexId>();
-  const find = (x: VertexId): VertexId => {
-    let r = x;
-    while (parent.get(r)! !== r) r = parent.get(r)!;
-    while (parent.get(x)! !== r) { const n = parent.get(x)!; parent.set(x, r); x = n; }
-    return r;
-  };
-  for (const v of state.vertices.keys()) parent.set(v, v);
-  for (const e of state.edges.values()) parent.set(find(e.v1), find(e.v2));
+  const uf = new UnionFind<VertexId>();
+  for (const e of state.edges.values()) uf.union(e.v1, e.v2);
   const map = new Map<VertexId, VertexId>();
-  for (const v of state.vertices.keys()) map.set(v, find(v));
+  for (const v of state.vertices.keys()) map.set(v, uf.find(v));
   return map;
 }
 
@@ -177,13 +272,6 @@ export function fullyDeadVertexIds(state: GameState): Set<VertexId> {
   return out;
 }
 
-/** Do two polylines (sphere-point arrays) cross anywhere? */
-function polylinesCross(a: SpherePoint[], b: SpherePoint[]): boolean {
-  for (let i = 0; i < a.length - 1; i++)
-    for (let j = 0; j < b.length - 1; j++)
-      if (arcsCross(a[i], a[i+1], b[j], b[j+1])) return true;
-  return false;
-}
 
 /**
  * A dead component (or dead bigon P/Q pair) sitting off-center inside its
@@ -308,31 +396,23 @@ export function deadRegionStep(
 
   for (const root of roots) {
     const verts = compVerts.get(root)!;
-    let cx = 0, cy = 0, cz = 0;
-    for (const v of verts) { cx += v.pos.x; cy += v.pos.y; cz += v.pos.z; }
-    const c = normalize({ x: cx, y: cy, z: cz });
-
+    const edges = compEdges.get(root) ?? [];
+    // Its pop would merge two faces that both hold something (e.g. it separates live content):
+    // never shrink it. (A dead component nested in one of its faces is not blocked by this — that
+    // one has only the face it sits in non-empty, so it pops first.)
+    if (!deletableComponent(state, edges)) continue;
+    const c = sphereCentroid(verts.map(v => v.pos));
     let radius = 0;
-    for (const v of verts) {
-      const dot = Math.max(-1, Math.min(1, v.pos.x * c.x + v.pos.y * c.y + v.pos.z * c.z));
-      radius = Math.max(radius, Math.acos(dot));
-    }
+    for (const v of verts) radius = Math.max(radius, sphereAngle(v.pos, c));
     if (radius < POP_RADIUS) {
       // Pop it (encoding-gated); a refused pop is passed over for the next component.
       const popped = commitIfEncodingPreserved(state, () => {
-        for (const id of [...state.vertices.keys()]) {
-          if (comp.get(id) === root) state.vertices.delete(id);
-        }
-        for (const [id, e] of [...state.edges]) {
-          if (comp.get(e.v1) === root) state.edges.delete(id);
-        }
+        deleteVertices(state, [...state.vertices.keys()].filter(id => comp.get(id) === root));
         safeRecompute(state, 'deadRegionStep');
       });
       if (popped) return { moving: true, popped: true, popCentroids: [c], focus: null };
       continue;
     }
-
-    const edges = compEdges.get(root) ?? [];
 
     // Would this shrink step drag a dead edge across a living edge? If so, jam.
     const step = scaledStep(DEAD_SHRINK_STEP, tunables.deadShrinkSpeed);
@@ -344,18 +424,13 @@ export function deadRegionStep(
         i === 0 ? tent.get(e.v1)!
         : i === e.points.length - 1 ? tent.get(e.v2)!
         : slerp(p, c, step));
-      if (livingEdges.some(le => polylinesCross(tpts, le.points))) { blocked = true; break; }
+      if (livingEdges.some(le => polylinesProperlyCross(tpts, le.points))) { blocked = true; break; }
     }
     if (blocked) continue;
 
     // Commit the shrink: vertices, then edge interior points, then re-anchor.
     for (const v of verts) v.pos = slerp(v.pos, c, step);
-    for (const e of edges) {
-      for (let i = 1; i < e.points.length - 1; i++) e.points[i] = slerp(e.points[i], c, step);
-      const v1 = state.vertices.get(e.v1), v2 = state.vertices.get(e.v2);
-      if (v1) e.points[0] = { ...v1.pos };
-      if (v2) e.points[e.points.length - 1] = { ...v2.pos };
-    }
+    for (const e of edges) pullEdgeToward(state, e, c, step);
     return { moving: true, popped: false, popCentroids: [], focus: new Set(verts.map(v => v.id)) };
   }
 
@@ -393,7 +468,7 @@ export function eliminateIsolatedVertex(
     if (skip?.has(v.id)) continue;
 
     // Collect the incident edges.
-    const incident: { id: EdgeId; v1: VertexId; v2: VertexId; points: SpherePoint[] }[] = [];
+    const incident: Edge[] = [];
     for (const e of state.edges.values()) {
       if (e.v1 === v.id || e.v2 === v.id) incident.push(e);
     }
@@ -412,21 +487,14 @@ export function eliminateIsolatedVertex(
     if (a === b) continue;
 
     const popAt = { ...v.pos };
-    const aToW = e1.v2 === v.id ? [...e1.points] : [...e1.points].reverse();
-    const wToB = e2.v1 === v.id ? [...e2.points] : [...e2.points].reverse();
+    const aToW = pointsFrom(e1, v.id).reverse();
+    const wToB = pointsFrom(e2, v.id);
 
     const ok = commitIfEncodingPreserved(state, () => {
       state.vertices.delete(v.id);
       state.edges.delete(e1.id);
       state.edges.delete(e2.id);
-
-      const newEid = allocEdgeId(state);
-      state.edges.set(newEid, {
-        id: newEid, v1: a, v2: b,
-        points: [...aToW, ...wToB.slice(1)],
-        leftRegion: -1, rightRegion: -1,
-      });
-
+      addEdge(state, a, b, [...aToW, ...wToB.slice(1)]);
       safeRecompute(state, 'eliminateIsolatedVertex');
     });
     return ok ? popAt : null;
@@ -517,6 +585,8 @@ export function detectLouse(state: GameState): LouseCollapse | null {
     // is alive and this "louse" must not be collapsed.
     const living = livingVertexSet(state);
     if (living.has(inner.id)) continue;
+    // The pop deletes the whole louse, merging its three faces: at most one may hold anything.
+    if (!deletableComponent(state, compEdges.map(id => state.edges.get(id)!))) continue;
 
     return { kind: 'louse', outer: [a.id, w.id], inner: inner.id, edges: compEdges };
   }
@@ -544,17 +614,12 @@ export function louseCollapseStep(
   const distW = sphereAngle(w.pos, target);
 
   if (distA < LOUSE_POP_RADIUS && distW < LOUSE_POP_RADIUS) {
+    if (!canonReady()) return { done: false, popAt: null }; // hold until the engine can vet the surgery
     const popAt = { ...target };
     const ok = commitIfEncodingPreserved(state, () => {
-      state.vertices.delete(collapse.inner);
-      state.vertices.delete(collapse.outer[0]);
-      state.vertices.delete(collapse.outer[1]);
-      // Sweep ALL edges incident to any louse vertex — covers the four detected
-      // edges plus any extras created by eliminateIsolatedVertex during animation.
-      const louseVerts = new Set([collapse.inner, collapse.outer[0], collapse.outer[1]]);
-      for (const [eid, e] of [...state.edges]) {
-        if (louseVerts.has(e.v1) || louseVerts.has(e.v2)) state.edges.delete(eid);
-      }
+      // Every edge incident to a louse vertex — the four detected ones plus any extras
+      // eliminateIsolatedVertex created during the animation.
+      deleteVertices(state, [collapse.inner, ...collapse.outer]);
       safeRecompute(state, 'louseCollapseStep');
     });
     return { done: true, popAt: ok ? popAt : null };
@@ -565,18 +630,7 @@ export function louseCollapseStep(
   a.pos = slerp(a.pos, target, step);
   w.pos = slerp(w.pos, target, step);
 
-  // Slerp edge interior points toward X, then re-anchor endpoints.
-  for (const eid of collapse.edges) {
-    const e = state.edges.get(eid);
-    if (!e) continue;
-    for (let i = 1; i < e.points.length - 1; i++) {
-      e.points[i] = slerp(e.points[i], target, step);
-    }
-    const v1 = state.vertices.get(e.v1);
-    const v2 = state.vertices.get(e.v2);
-    if (v1) e.points[0] = { ...v1.pos };
-    if (v2) e.points[e.points.length - 1] = { ...v2.pos };
-  }
+  for (const eid of collapse.edges) pullEdgeToward(state, state.edges.get(eid), target, step);
 
   return { done: false, popAt: null };
 }
@@ -680,6 +734,31 @@ function nextDeflateDepth(anim: DeflateAnim, speed: number): number {
 /** Lay out the face's boundary vertices, boundary edges and external edges at depth `r`. */
 function deflateTo(state: GameState, anim: DeflateAnim, r: number): void {
   const { def } = anim;
+  deflateVertsTo(state, anim, r);
+  const ids = new Set<EdgeId>();
+  for (const be of anim.edges) {
+    const e = state.edges.get(be.id);
+    if (!e) continue;
+    ids.add(be.id);
+    const arc = deflateArc(def, be.theta0, be.theta1, r);
+    e.points = be.forward ? arc : arc.reverse();
+    anchorEdge(state, e);
+  }
+  for (const ie of anim.inner) {
+    const e = state.edges.get(ie.id);
+    if (!e) continue;
+    ids.add(ie.id);
+    e.points = deflateInteriorPath(def, ie.disk, r);
+    anchorEdge(state, e);
+  }
+  syncPseudoVertices(state, ids);
+  anim.r = r;
+}
+
+/** Move the face's boundary vertices to depth `r` along their tracks, growing each external
+ * edge by the stretch its vertex just travelled. Leaves anim.r for the caller to advance. */
+function deflateVertsTo(state: GameState, anim: DeflateAnim, r: number): void {
+  const { def } = anim;
   for (const v of anim.verts) {
     const pos = deflatePoint(def, v.theta, r);
     const step = deflateTrack(def, v.theta, anim.r, r);
@@ -688,39 +767,28 @@ function deflateTo(state: GameState, anim: DeflateAnim, r: number): void {
     if (vx) vx.pos = { ...pos };
     // Grow the external edge by the stretch its vertex just travelled (its old end
     // point is the vertex's old position), keeping whatever shape smoothing gave the rest.
+    // Keep the edge's point count steady unless it actually got longer: extra points
+    // overcrowd it within a few frames, and the resample that follows (and the smoothing
+    // regime change around it) makes the edge jitter. The traced step has a point at every
+    // mesh crossing, so keep only track points at least the edge's own spacing apart, then
+    // drop any surplus right next to the vertex — points just laid on the track.
     const e = v.extId === undefined ? undefined : state.edges.get(v.extId);
     if (e) {
       const toV = e.v2 === v.id ? e.points : [...e.points].reverse();
-      const pts = [...toV.slice(0, -1), ...step];
+      const spacing = polylineLength(toV) / (toV.length - 1);
+      const pts = toV.slice(0, -1);
+      let lastKept = pts[pts.length - 1];
+      for (const p of step.slice(0, -1)) {
+        if (sphereAngle(lastKept, p) >= spacing) { pts.push(p); lastKept = p; }
+      }
+      pts.push(step[step.length - 1]);
+      const target = Math.max(toV.length, Math.round(polylineLength(pts) / spacing) + 1);
+      while (pts.length > target && pts.length > 2) pts.splice(pts.length - 2, 1);
       e.points = e.v2 === v.id ? pts : pts.reverse();
     }
   }
-  const ids = new Set<EdgeId>();
-  for (const be of anim.edges) {
-    const e = state.edges.get(be.id);
-    if (!e) continue;
-    ids.add(be.id);
-    const arc = deflateArc(def, be.theta0, be.theta1, r);
-    e.points = be.forward ? arc : arc.reverse();
-    const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
-    const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
-  }
-  for (const ie of anim.inner) {
-    const e = state.edges.get(ie.id);
-    if (!e) continue;
-    ids.add(ie.id);
-    e.points = deflateInteriorPath(def, ie.disk, r);
-    const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
-    const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
-  }
-  // Pseudo-vertices ride their edge's midpoint (as smoothStep keeps them).
-  for (const v of state.vertices.values()) {
-    if (!v.isPseudo || v.pseudoEdgeId === undefined || !ids.has(v.pseudoEdgeId)) continue;
-    const e = state.edges.get(v.pseudoEdgeId)!;
-    v.pos = { ...e.points[Math.floor(e.points.length / 2)] };
-  }
-  anim.r = r;
 }
+
 
 /** Largest distance (radians) from the deflation centre to the face's current boundary. */
 function deflateRadius(state: GameState, anim: DeflateAnim): number {
@@ -752,14 +820,14 @@ function finishDeflateAndCommit(state: GameState, anim: DeflateAnim, surgery: ()
 // between P and Q — where both P and Q are fully dead (degree 3). P has exactly
 // one other edge (to X) and Q has exactly one other edge (to Y).
 //
-// Animation: the dead bigon deflates in place (see "Deflate-in-place animation"
-// above): both parallel edges shrink through nested curves onto a point inside
-// the bigon, P and Q travelling along their own tracks with the external edges
-// growing behind them — the whole bigon folds in, whichever side of the sphere
-// it is on, with nothing crossing.
-// Surgery: once it is small, the bigon finishes deflating onto its centre; P,
-// Q, both parallel edges and both external edges are deleted and a new X-Y edge
-// is made from (X-P edge) + (Q-Y edge), which meet at the centre.
+// Animation: the bigon closes like an eye while P and Q draw together. The two
+// parallel edges close onto one curve between P and Q (the chord of the
+// bigon's deflation disk — see closeArc) as P and Q travel along their
+// deflation tracks to its centre, the external edges growing behind them, so
+// nothing crosses, whichever side of the sphere the bigon is on.
+// Surgery: once it is small, the bigon finishes onto its centre; P, Q, both
+// parallel edges and both external edges are deleted and a new X-Y edge is
+// made from (X-P edge) + (Q-Y edge), which meet at the centre.
 
 export interface ParallelDeadCollapse {
   kind: 'parallel-dead';
@@ -776,6 +844,9 @@ export interface ParallelDeadCollapse {
 }
 
 const PARALLEL_DEAD_POP_RADIUS = 0.05;
+/** P and Q travel to the centre at depth^PACE of the schedule while the edges close at
+ * 1 - depth: below 1, the merge lags the closing, so the bigon reads as shutting first. */
+const PARALLEL_DEAD_MERGE_PACE = 0.6;
 
 /**
  * Scan for a dead bigon whose two endpoints are both fully dead (degree 3) and
@@ -783,48 +854,19 @@ const PARALLEL_DEAD_POP_RADIUS = 0.05;
  */
 export function detectParallelDead(state: GameState): ParallelDeadCollapse | null {
   for (const r of state.regions.values()) {
-    if (!r.isDead) continue;
-    if (r.boundaries.length !== 1) continue;
-    const b = r.boundaries[0];
-    // Pseudo-vertices (inserted to disambiguate parallel-edge rotation order,
-    // see [[project_pseudo_vertices]]) add extra boundary entries for a plain
-    // 2-edge bigon without changing its topology — filter them out before
-    // counting real vertex entries.
-    const realEntries = b.entries.filter(en => !state.vertices.get(en.vertexId)?.isPseudo);
-    if (realEntries.length !== 2) continue;
-
-    const e0 = realEntries[0], e1 = realEntries[1];
-    if (e0.edgeId === undefined || e1.edgeId === undefined || e0.edgeId === e1.edgeId) continue;
-
+    const real = deadPolygon(state, r, 2);
+    if (!real) continue;
+    const [e0, e1] = real;
     const p = e0.vertexId, q = e1.vertexId;
-    if (p === q) continue;
 
-    const vp = state.vertices.get(p), vq = state.vertices.get(q);
-    if (!vp || !vq) continue;
-    if (vp.degree !== 3 || vq.degree !== 3) continue;
-
-    // Find the one external edge at P (not in the bigon, and not a FURTHER P↔Q
-    // parallel edge — e.g. a third P-Q edge from a triple bigon must never be
-    // mistaken for P's external connection, or the region-deadness checks below
-    // get silently bypassed).
-    let edgeP: EdgeId | null = null, x: VertexId | null = null;
-    for (const e of state.edges.values()) {
-      if (e.id === e0.edgeId || e.id === e1.edgeId) continue;
-      if ((e.v1 === p && e.v2 === q) || (e.v1 === q && e.v2 === p)) continue;
-      if (e.v1 === p) { edgeP = e.id; x = e.v2; break; }
-      if (e.v2 === p) { edgeP = e.id; x = e.v1; break; }
-    }
-    if (edgeP === null || x === null) continue;
-
-    // Find the one external edge at Q (same exclusion as above).
-    let edgeQ: EdgeId | null = null, y: VertexId | null = null;
-    for (const e of state.edges.values()) {
-      if (e.id === e0.edgeId || e.id === e1.edgeId) continue;
-      if ((e.v1 === p && e.v2 === q) || (e.v1 === q && e.v2 === p)) continue;
-      if (e.v1 === q) { edgeQ = e.id; y = e.v2; break; }
-      if (e.v2 === q) { edgeQ = e.id; y = e.v1; break; }
-    }
-    if (edgeQ === null || y === null) continue;
+    // The one external edge at P (resp. Q): not in the bigon, and not a FURTHER P↔Q parallel edge —
+    // a third P-Q edge from a triple bigon must never be mistaken for P's external connection, or the
+    // region-deadness checks below get silently bypassed.
+    const bigon = new Set([e0.edgeId, e1.edgeId]);
+    const extP = externalEdges(state, p, bigon).find(x => x.nbr !== q);
+    const extQ = externalEdges(state, q, bigon).find(x => x.nbr !== p);
+    if (!extP || !extQ) continue;
+    const edgeP = extP.eid, x = extP.nbr, edgeQ = extQ.eid, y = extQ.nbr;
     // x === y is fine here: the surgery below builds a self-loop on the shared neighbour —
     // but ONLY if the third face that shares that neighbour (bounded by edgeP, edgeQ, and
     // whichever parallel edge borders it) is ALSO dead. Two bigon-adjacent regions next to
@@ -832,22 +874,22 @@ export function detectParallelDead(state: GameState): ParallelDeadCollapse | nul
     // the pure bigon interior) and this second one. The far side beyond x (reached via x's
     // third edge) does NOT need to be dead — that's the living structure the collapse must
     // never encroach into.
+    // Both faces across the bigon touch x, so "touches x" can't tell the pocket apart: the
+    // pocket is the face with a boundary walk of exactly x, P, Q (pseudo-vertices aside). When
+    // x has no third edge (degree 2) BOTH faces are such triangles, and either one being dead
+    // is enough.
     if (x === y) {
-      const otherSideOf = (eid: EdgeId): RegionId | null => {
+      const pocketIds = new Set([p, q, x]);
+      const isDeadPocket = (eid: EdgeId): boolean => {
         const e = state.edges.get(eid);
-        if (!e) return null;
-        return e.leftRegion === r.id ? e.rightRegion : e.leftRegion;
+        if (!e) return false;
+        const reg = state.regions.get(e.leftRegion === r.id ? e.rightRegion : e.leftRegion);
+        return !!reg && reg.isDead && reg.boundaries.some(bd => {
+          const real = bd.entries.filter(en => !state.vertices.get(en.vertexId)?.isPseudo);
+          return real.length === 3 && real.every(en => pocketIds.has(en.vertexId));
+        });
       };
-      const touchesVertex = (rid: RegionId | null, vid: VertexId): boolean => {
-        if (rid === null) return false;
-        const reg = state.regions.get(rid);
-        return !!reg && reg.boundaries.some(bd => bd.entries.some(en => en.vertexId === vid));
-      };
-      const side0 = otherSideOf(e0.edgeId);
-      const side1 = otherSideOf(e1.edgeId);
-      const sharedFaceId = touchesVertex(side0, x) ? side0 : touchesVertex(side1, x) ? side1 : null;
-      const sharedFace = sharedFaceId !== null ? state.regions.get(sharedFaceId) : null;
-      if (!sharedFace || !sharedFace.isDead) continue;
+      if (!isDeadPocket(e0.edgeId) && !isDeadPocket(e1.edgeId)) continue;
     }
 
     return {
@@ -863,10 +905,10 @@ export function detectParallelDead(state: GameState): ParallelDeadCollapse | nul
 }
 
 /**
- * One frame of parallel-dead collapse: deflate the dead bigon one step; once it
- * is smaller than PARALLEL_DEAD_POP_RADIUS, finish onto its centre and do the
- * surgery (P and Q deleted, X-P and Q-Y joined into one X-Y edge). Returns the
- * new edge ID so the caller can resample it.
+ * One frame of parallel-dead collapse: close and shrink the dead bigon one step;
+ * once it is smaller than PARALLEL_DEAD_POP_RADIUS, finish onto its centre and do
+ * the surgery (P and Q deleted, X-P and Q-Y joined into one X-Y edge). Returns
+ * the new edge ID so the caller can resample it.
  */
 export function parallelDeadStep(
   state: GameState,
@@ -889,7 +931,8 @@ export function parallelDeadStep(
     }
   }
   const anim = collapse.deflate;
-  deflateTo(state, anim, nextDeflateDepth(anim, tunables.parallelDeadSpeed));
+  const depth = nextDeflateDepth(anim, tunables.parallelDeadSpeed);
+  closeBigonTo(state, anim, depth ** PARALLEL_DEAD_MERGE_PACE, 1 - depth);
   // Hold (still shrinking) until the canon engine can vet the surgery.
   if (deflateRadius(state, anim) >= PARALLEL_DEAD_POP_RADIUS || !canonReady()) return { done: false, popAt: null };
 
@@ -897,57 +940,46 @@ export function parallelDeadStep(
   let newEid = -1;
   // Finish onto the centre: P, Q and the ends of both external edges arrive there.
   const ok = finishDeflateAndCommit(state, anim, () => {
-    const ep = state.edges.get(collapse.edgeP)!;
-    const eq = state.edges.get(collapse.edgeQ)!;
     // X→P (ending at the centre) + Q→Y (starting there, first point dropped).
-    const xToPPts = ep.v1 === collapse.p ? [...ep.points].reverse() : [...ep.points];
-    const qToYPts = eq.v1 === collapse.q ? [...eq.points] : [...eq.points].reverse();
+    const xToPPts = pointsFrom(state.edges.get(collapse.edgeP)!, collapse.p).reverse();
+    const qToYPts = pointsFrom(state.edges.get(collapse.edgeQ)!, collapse.q);
     const newPoints: SpherePoint[] = [...xToPPts.slice(0, -1), { ...popAt }, ...qToYPts.slice(1)];
 
-    state.vertices.delete(collapse.p);
-    state.vertices.delete(collapse.q);
-    // Sweep for ALL edges incident to P or Q: covers the parallel edges, the
-    // external edges, and any further P↔Q edges that eliminateIsolatedVertex may
-    // have created during the animation.
-    for (const [eid, e] of [...state.edges]) {
-      if (e.v1 === collapse.p || e.v2 === collapse.p ||
-          e.v1 === collapse.q || e.v2 === collapse.q) {
-        state.edges.delete(eid);
-      }
-    }
+    // Every edge incident to P or Q: the parallel edges, the external edges, and any further P↔Q
+    // edges eliminateIsolatedVertex may have created during the animation.
+    deleteVertices(state, [collapse.p, collapse.q]);
 
-    newEid = allocEdgeId(state);
-    if (collapse.x === collapse.y) {
-      // X and Y are the same vertex — the concatenated path is a self-loop.
-      // Anchor both ends at X's position.
-      const vx = state.vertices.get(collapse.x);
-      if (vx) {
-        newPoints[0] = { ...vx.pos };
-        newPoints[newPoints.length - 1] = { ...vx.pos };
-      }
-      // A near-collinear concatenated path has no lateral area for edgeRepellers()
-      // to bow into a circle. Replace it with a genuine small circle when the whole
-      // path is confined to a small neighbourhood; a real spread-out loop is left
-      // untouched (same pattern as the other self-loop sites above).
-      let selfLoopPoints = newPoints;
-      if (vx && maxPairwiseAngularDistance(newPoints) < SELF_LOOP_DEGENERATE_THRESHOLD) {
-        selfLoopPoints = smallCircleSelfLoop(vx.pos, newPoints[Math.min(1, newPoints.length - 1)], SELF_LOOP_SYNTH_RADIUS);
-      }
-      state.edges.set(newEid, {
-        id: newEid, v1: collapse.x, v2: collapse.x,
-        points: selfLoopPoints, leftRegion: -1, rightRegion: -1,
-      });
+    const vx = state.vertices.get(collapse.x);
+    if (collapse.x === collapse.y && vx) {
+      // X and Y are the same vertex — the concatenated path is a self-loop anchored at X.
+      newPoints[0] = { ...vx.pos };
+      newPoints[newPoints.length - 1] = { ...vx.pos };
+      newEid = addEdge(state, collapse.x, collapse.x, selfLoopPoints(vx.pos, newPoints));
     } else {
-      state.edges.set(newEid, {
-        id: newEid, v1: collapse.x, v2: collapse.y,
-        points: newPoints, leftRegion: -1, rightRegion: -1,
-      });
+      newEid = addEdge(state, collapse.x, collapse.y, newPoints);
     }
 
     safeRecompute(state, 'parallelDeadStep');
   });
   if (ok) return { done: true, popAt, newEdgeId: newEid };
   return { done: true, popAt: null };
+}
+
+/** Lay out a bigon with P and Q at depth `r` and its two edges `s` of the way onto the chord
+ * between them. */
+function closeBigonTo(state: GameState, anim: DeflateAnim, r: number, s: number): void {
+  deflateVertsTo(state, anim, r);
+  const ids = new Set<EdgeId>();
+  for (const be of anim.edges) {
+    const e = state.edges.get(be.id);
+    if (!e) continue;
+    ids.add(be.id);
+    const arc = closeArc(anim.def, be.theta0, be.theta1, s, r);
+    e.points = be.forward ? arc : arc.reverse();
+    anchorEdge(state, e);
+  }
+  syncPseudoVertices(state, ids);
+  anim.r = r;
 }
 
 // ===========================================================================
@@ -1101,8 +1133,7 @@ function pointOutsideTripleDisc(state: GameState, cfg: TripleConfig, p: VertexId
   const k = Math.floor(e.points.length / 2);
   const a = e.points[k - 1], m = e.points[k], c = e.points[k + 1] ?? m;
   // Unit normal to the edge at its middle, tried on both sides.
-  const t = normalize({ x: c.x - a.x, y: c.y - a.y, z: c.z - a.z });
-  const nrm = normalize({ x: m.y * t.z - m.z * t.y, y: m.z * t.x - m.x * t.z, z: m.x * t.y - m.y * t.x });
+  const nrm = normalize(cross(m, normalize({ x: c.x - a.x, y: c.y - a.y, z: c.z - a.z })));
   for (const sgn of [1, -1]) for (const off of [0.02, 0.01, 0.005]) {
     const cand = normalize({ x: m.x + sgn * off * nrm.x, y: m.y + sgn * off * nrm.y, z: m.z + sgn * off * nrm.z });
     if (regionContainsPointNearest(state, kept, cand)) return cand;
@@ -1144,14 +1175,7 @@ export function tripleParallelDeadStep(
 
   const popAt = { ...anim.def.center };
   const ok = finishDeflateAndCommit(state, anim, () => {
-    state.vertices.delete(collapse.p);
-    state.vertices.delete(collapse.q);
-    for (const [eid, e] of [...state.edges]) {
-      if (e.v1 === collapse.p || e.v2 === collapse.p ||
-          e.v1 === collapse.q || e.v2 === collapse.q) {
-        state.edges.delete(eid);
-      }
-    }
+    deleteVertices(state, [collapse.p, collapse.q]);
     safeRecompute(state, 'tripleParallelDeadStep');
   });
   return { done: true, popAt: ok ? popAt : null };
@@ -1198,39 +1222,14 @@ const TRIANGLE_DEAD_POP_RADIUS = 0.05;
  */
 export function detectTriangleDead(state: GameState): TriangleDeadCollapse | null {
   for (const r of state.regions.values()) {
-    if (!r.isDead) continue;
-    if (r.boundaries.length !== 1) continue;
-    const b = r.boundaries[0];
-    // Pseudo-vertices (inserted to disambiguate parallel-edge rotation order,
-    // see [[project_pseudo_vertices]]) add extra boundary entries for a plain
-    // triangle without changing its topology — filter them out before counting.
-    const realEntries = b.entries.filter(en => !state.vertices.get(en.vertexId)?.isPseudo);
-    if (realEntries.length !== 3) continue;
-
-    const [e0, e1, e2] = realEntries;
-    if (e0.edgeId === undefined || e1.edgeId === undefined || e2.edgeId === undefined) continue;
-
-    const vids = [e0.vertexId, e1.vertexId, e2.vertexId] as [VertexId, VertexId, VertexId];
-    if (vids[0] === vids[1] || vids[1] === vids[2] || vids[0] === vids[2]) continue;
-
-    const vs = vids.map(id => state.vertices.get(id)!);
-    if (vs.some(v => !v || v.degree !== 3)) continue;
-
-    const triEdgeIds = [e0.edgeId, e1.edgeId, e2.edgeId] as [EdgeId, EdgeId, EdgeId];
-    if (new Set(triEdgeIds).size !== 3) continue;
+    const realEntries = deadPolygon(state, r, 3);
+    if (!realEntries) continue;
+    const vids = realEntries.map(en => en.vertexId) as [VertexId, VertexId, VertexId];
+    const triEdgeIds = realEntries.map(en => en.edgeId) as [EdgeId, EdgeId, EdgeId];
     const triEdgeSet = new Set<EdgeId>(triEdgeIds);
 
-    // Find each vertex's one external edge.
-    const findExternal = (vid: VertexId): { eid: EdgeId; nbr: VertexId } | null => {
-      for (const e of state.edges.values()) {
-        if (triEdgeSet.has(e.id)) continue;
-        if (e.v1 === vid) return { eid: e.id, nbr: e.v2 };
-        if (e.v2 === vid) return { eid: e.id, nbr: e.v1 };
-      }
-      return null;
-    };
-
-    const exts = vids.map(vid => findExternal(vid));
+    // Each vertex's one external edge (degree 3, two of them on the triangle).
+    const exts = vids.map(vid => externalEdges(state, vid, triEdgeSet)[0] ?? null);
     if (exts.some(ex => !ex)) continue;
 
     // Skip if any external neighbour is itself a triangle vertex (surgery would
@@ -1248,7 +1247,7 @@ export function detectTriangleDead(state: GameState): TriangleDeadCollapse | nul
       kind: 'triangle-dead',
       a: aId, b: bId, c: cId,
       triangleEdges: triEdgeIds,
-      loop: realEntries.map(en => ({ vid: en.vertexId, eid: en.edgeId! })),
+      loop: realEntries.map(en => ({ vid: en.vertexId, eid: en.edgeId })),
       edgeA: extMap.get(aId)!.eid,
       edgeB: extMap.get(bId)!.eid,
       edgeC: extMap.get(cId)!.eid,
@@ -1298,31 +1297,17 @@ export function triangleDeadStep(
   // Finish onto the centre: every vertex and the end of every external edge
   // arrive at it along their own tracks.
   const ok = finishDeflateAndCommit(state, anim, () => {
-    const eb = state.edges.get(collapse.edgeB)!;
-    const ec = state.edges.get(collapse.edgeC)!;
-    const aToY = eb.v1 === collapse.b ? [...eb.points] : [...eb.points].reverse();
+    const aToY = pointsFrom(state.edges.get(collapse.edgeB)!, collapse.b);
     aToY[0] = { ...center };
-    const aToZ = ec.v1 === collapse.c ? [...ec.points] : [...ec.points].reverse();
+    const aToZ = pointsFrom(state.edges.get(collapse.edgeC)!, collapse.c);
     aToZ[0] = { ...center };
 
     va.pos = { ...center };
-    // Delete B, C, and all edges incident to either — covers the three triangle
-    // edges, the external edges, and any extra edges that eliminateIsolatedVertex
-    // may have created adjacent to B or C during the animation.
-    state.vertices.delete(collapse.b);
-    state.vertices.delete(collapse.c);
-    for (const [eid, e] of [...state.edges]) {
-      if (e.v1 === collapse.b || e.v2 === collapse.b ||
-          e.v1 === collapse.c || e.v2 === collapse.c) {
-        state.edges.delete(eid);
-      }
-    }
-
-    // Create new A→Y and A→Z edges.
-    const newEidB = allocEdgeId(state);
-    state.edges.set(newEidB, { id: newEidB, v1: collapse.a, v2: collapse.y, points: aToY, leftRegion: -1, rightRegion: -1 });
-    const newEidC = allocEdgeId(state);
-    state.edges.set(newEidC, { id: newEidC, v1: collapse.a, v2: collapse.z, points: aToZ, leftRegion: -1, rightRegion: -1 });
+    // B, C and every edge incident to either — the triangle edges, the external edges, and any
+    // extra edges eliminateIsolatedVertex created next to B or C during the animation.
+    deleteVertices(state, [collapse.b, collapse.c]);
+    addEdge(state, collapse.a, collapse.y, aToY);
+    addEdge(state, collapse.a, collapse.z, aToZ);
 
     safeRecompute(state, 'triangleDeadStep');
   });
@@ -1383,6 +1368,8 @@ export function scabAloneCollapse(state: GameState, skipVertices?: Set<VertexId>
           if (entry.vertexId !== scabId && !state.vertices.get(entry.vertexId)?.isPseudo) vertsToDelete.add(entry.vertexId);
         }
         if (vertsToDelete.size === 0) continue; // already a clean self-loop
+        // Never delete a vertex an animated collapse owns — let that collapse play out.
+        if (skipVertices && [...vertsToDelete].some(v => skipVertices.has(v))) continue;
 
         // Guard: skip if any dead boundary vertex has an edge to a vertex outside
         // this boundary (vertsToDelete ∪ {scabId}).  Deleting such a vertex would
@@ -1393,6 +1380,14 @@ export function scabAloneCollapse(state: GameState, skipVertices?: Set<VertexId>
           (vertsToDelete.has(e.v2) && !safeSet.has(e.v1))
         );
         if (hasExternalEdge) continue;
+
+        // The new self-loop retraces b, so r keeps its side and the scab's own faces survive; every
+        // OTHER face of this structure (pockets between the dead vertices' edges) merges into the
+        // scab's face. Anything alive in such a pocket would change face (failureSaves/
+        // fail-s4-g11-m11.json move 5: a pocket holding another component with a life left).
+        const incident = [...state.edges.values()].filter(e => safeSet.has(e.v1) || safeSet.has(e.v2));
+        const scabFaces = facesOf(incident.filter(e => e.v1 === scabId || e.v2 === scabId));
+        if ([...facesOf(incident)].some(f => f !== r.id && !scabFaces.has(f) && !holdsNothingAlive(state, f, safeSet))) continue;
 
         const n = b.entries.length;
         const scabPos = b.entries.findIndex(e => e.vertexId === scabId);
@@ -1413,43 +1408,22 @@ export function scabAloneCollapse(state: GameState, skipVertices?: Set<VertexId>
           const edge = state.edges.get(eid);
           if (!edge) { loopPoints.length = 0; break; }
 
-          const fromVid = entry.vertexId;
-          const pts = edge.v1 === fromVid ? [...edge.points] : [...edge.points].reverse();
+          // entryIsForward, not "edge.v1 === vertexId": a self-loop's direction lives on the entry.
+          const pts = entryIsForward(entry, edge) ? [...edge.points] : [...edge.points].reverse();
           if (loopPoints.length === 0) loopPoints.push(...pts);
           else         loopPoints.push(...pts.slice(1));
         }
 
         if (loopPoints.length < 2) continue;
-        // The concatenated boundary walk can be a thin sliver (e.g. a bigon whose edges were
-        // already shrunk close together by an earlier collapse animation this frame) —
-        // near-collinear geometry that edgeRepellers() can never bow open into a circle (pushing
-        // points apart along an already-straight path just redistributes them, it doesn't add
-        // lateral area). When the whole walked loop is confined to a small neighbourhood, replace
-        // it with a genuine small circle instead of trusting its possibly-degenerate shape; a
-        // large real dead-region boundary (which legitimately has spread) is left untouched.
-        let finalLoopPoints = loopPoints;
+        // The walked loop can be a thin sliver (e.g. a bigon an earlier collapse already squeezed):
+        // selfLoopPoints replaces a degenerate one with a real circle.
         const scabVertex = state.vertices.get(scabId);
-        if (scabVertex && maxPairwiseAngularDistance(loopPoints) < SELF_LOOP_DEGENERATE_THRESHOLD) {
-          finalLoopPoints = smallCircleSelfLoop(scabVertex.pos, loopPoints[Math.min(1, loopPoints.length - 1)], SELF_LOOP_SYNTH_RADIUS);
-        }
+        const finalLoopPoints = scabVertex ? selfLoopPoints(scabVertex.pos, loopPoints) : loopPoints;
 
         const ok = commitIfEncodingPreserved(state, () => {
-          // Delete ALL edges incident to any dead vertex (covers boundary edges and
-          // any extra edges those vertices may have to other parts of the graph).
-          for (const [eid, e] of [...state.edges]) {
-            if (vertsToDelete.has(e.v1) || vertsToDelete.has(e.v2)) {
-              state.edges.delete(eid);
-            }
-          }
-          for (const vid of vertsToDelete) state.vertices.delete(vid);
-
-          // Create the real self-loop on the scab.
-          const newEid = allocEdgeId(state);
-          state.edges.set(newEid, {
-            id: newEid, v1: scabId, v2: scabId,
-            points: finalLoopPoints, leftRegion: -1, rightRegion: -1,
-          });
-
+          // Every edge incident to a dead vertex goes with it; then the real self-loop on the scab.
+          deleteVertices(state, vertsToDelete);
+          addEdge(state, scabId, scabId, finalLoopPoints);
           safeRecompute(state, 'scabAloneCollapse');
         });
         // On rollback, didCollapse stays false so the fixpoint while-loop exits
@@ -1645,41 +1619,15 @@ const QUAD_DEAD_POP_FRACTION = 0.06;  // pop once this much of the path remains
  */
 export function detectQuadDead(state: GameState): QuadDeadCollapse | null {
   for (const r of state.regions.values()) {
-    if (!r.isDead) continue;
-    if (r.boundaries.length !== 1) continue;
-    const b = r.boundaries[0];
-    // Pseudo-vertices (inserted to disambiguate parallel-edge rotation order,
-    // see [[project_pseudo_vertices]]) add extra boundary entries for a plain
-    // quadrilateral without changing its topology — filter them out before counting.
-    const realEntries = b.entries.filter(en => !state.vertices.get(en.vertexId)?.isPseudo);
-    if (realEntries.length !== 4) continue;
-
+    const realEntries = deadPolygon(state, r, 4);
+    if (!realEntries) continue;
     const [e0, e1, e2, e3] = realEntries;
-    if (e0.edgeId === undefined || e1.edgeId === undefined ||
-        e2.edgeId === undefined || e3.edgeId === undefined) continue;
-
-    // All 4 vertices must be distinct and degree 3.
-    const vids = [e0.vertexId, e1.vertexId, e2.vertexId, e3.vertexId] as [VertexId, VertexId, VertexId, VertexId];
-    if (new Set(vids).size !== 4) continue;
-    const vs = vids.map(id => state.vertices.get(id)!);
-    if (vs.some(v => !v || v.degree !== 3)) continue;
-
-    // All 4 boundary edges must be distinct.
-    const quadEdgeIds = [e0.edgeId, e1.edgeId, e2.edgeId, e3.edgeId] as [EdgeId, EdgeId, EdgeId, EdgeId];
-    if (new Set(quadEdgeIds).size !== 4) continue;
+    const vids = realEntries.map(en => en.vertexId) as [VertexId, VertexId, VertexId, VertexId];
+    const quadEdgeIds = realEntries.map(en => en.edgeId) as [EdgeId, EdgeId, EdgeId, EdgeId];
     const quadEdgeSet = new Set<EdgeId>(quadEdgeIds);
 
     // Each vertex must have exactly 1 external edge.
-    const findExt = (vid: VertexId): { eid: EdgeId; nbr: VertexId } | null => {
-      const results: { eid: EdgeId; nbr: VertexId }[] = [];
-      for (const e of state.edges.values()) {
-        if (quadEdgeSet.has(e.id)) continue;
-        if (e.v1 === vid) results.push({ eid: e.id, nbr: e.v2 });
-        else if (e.v2 === vid) results.push({ eid: e.id, nbr: e.v1 });
-      }
-      return results.length === 1 ? results[0] : null;
-    };
-    const exts = vids.map(vid => findExt(vid));
+    const exts = vids.map(vid => { const x = externalEdges(state, vid, quadEdgeSet); return x.length === 1 ? x[0] : null; });
     if (exts.some(x => !x)) continue;
     const [extA0, extB0, extC0, extD0] = exts as [{ eid: EdgeId; nbr: VertexId }, { eid: EdgeId; nbr: VertexId }, { eid: EdgeId; nbr: VertexId }, { eid: EdgeId; nbr: VertexId }];
 
@@ -1724,14 +1672,8 @@ export function detectQuadDead(state: GameState): QuadDeadCollapse | null {
 
     // Snapshot the 4 boundary edges now, oriented as documented on the
     // interface, for A/B/C/D to reel along during the animation.
-    const eAB = state.edges.get(edgeAB)!;
-    const abPath = (eAB.v1 === a ? eAB.points : [...eAB.points].reverse()).map(p => ({ ...p }));
-    const eCD = state.edges.get(edgeCD)!;
-    const cdPath = (eCD.v1 === c ? eCD.points : [...eCD.points].reverse()).map(p => ({ ...p }));
-    const eBC = state.edges.get(edgeBC)!;
-    const bcPath = (eBC.v1 === b_ ? eBC.points : [...eBC.points].reverse()).map(p => ({ ...p }));
-    const eDA = state.edges.get(edgeDA)!;
-    const daPath = (eDA.v1 === d ? eDA.points : [...eDA.points].reverse()).map(p => ({ ...p }));
+    const frozen = (eid: EdgeId, from: VertexId) => pointsFrom(state.edges.get(eid)!, from).map(p => ({ ...p }));
+    const abPath = frozen(edgeAB, a), cdPath = frozen(edgeCD, c), bcPath = frozen(edgeBC, b_), daPath = frozen(edgeDA, d);
 
     // BC and DA both eventually straighten into the same P–Q segment (P = AB's
     // merge point, Q = CD's merge point; DA just runs it in reverse) as B/C/D/A
@@ -1786,6 +1728,7 @@ export function quadDeadStep(
   const remaining = 1 - collapse.t;
 
   if (remaining < QUAD_DEAD_POP_FRACTION) {
+    if (!canonReady()) return { done: false, popAt: null }; // hold until the engine can vet the surgery
     const popAt = slerp(midAB, midCD, 0.5); // burst between the two merge points
 
     // Guard: required edges must still exist (eliminateIsolatedVertex may have
@@ -1799,13 +1742,10 @@ export function quadDeadStep(
       return { done: true, popAt: null };
     }
 
-    // Snap A, B → midAB and C, D → midCD before reading edge geometry.
-    va.pos = { ...midAB }; vb.pos = { ...midAB };
-    vc.pos = { ...midCD }; vd.pos = { ...midCD };
-
-    // Build external edge geometry oriented away from the old vertex (outward).
-    const buildExt = (e: typeof eExtA, fromVid: VertexId, newOrigin: SpherePoint): SpherePoint[] => {
-      const pts = e.v1 === fromVid ? [...e.points] : [...e.points].reverse();
+    // External edge geometry oriented away from the old vertex, starting at its merge point. (A-D
+    // themselves are deleted by the surgery, so nothing outside the encoding gate moves them.)
+    const buildExt = (e: Edge, fromVid: VertexId, newOrigin: SpherePoint): SpherePoint[] => {
+      const pts = pointsFrom(e, fromVid);
       pts[0] = { ...newOrigin };
       return pts;
     };
@@ -1815,7 +1755,7 @@ export function quadDeadStep(
     const qToNbrD = buildExt(eExtD, collapse.d, midCD);
 
     // P→Q from the (now nearly-collapsed) live BC edge, re-anchored at both ends.
-    const pToQ = eBC.v1 === collapse.b ? [...eBC.points] : [...eBC.points].reverse();
+    const pToQ = pointsFrom(eBC, collapse.b);
     pToQ[0] = { ...midAB };
     pToQ[pToQ.length - 1] = { ...midCD };
 
@@ -1823,12 +1763,7 @@ export function quadDeadStep(
     const q = Math.min(collapse.c, collapse.d);
 
     const ok = commitIfEncodingPreserved(state, () => {
-      // Delete A, B, C, D and every edge incident to any of them.
-      const quadVids = new Set([collapse.a, collapse.b, collapse.c, collapse.d]);
-      for (const [eid, e] of [...state.edges]) {
-        if (quadVids.has(e.v1) || quadVids.has(e.v2)) state.edges.delete(eid);
-      }
-      for (const vid of quadVids) state.vertices.delete(vid);
+      deleteVertices(state, [collapse.a, collapse.b, collapse.c, collapse.d]);
 
       // Create merged vertices P and Q.
       state.vertices.set(p, {
@@ -1842,16 +1777,11 @@ export function quadDeadStep(
         isMidpoint: true,
       });
 
-      // Create 5 new edges.
-      const addEdge = (v1: VertexId, v2: VertexId, pts: SpherePoint[]) => {
-        const eid = allocEdgeId(state);
-        state.edges.set(eid, { id: eid, v1, v2, points: pts, leftRegion: -1, rightRegion: -1 });
-      };
-      addEdge(p, collapse.nbrA, pToNbrA);
-      addEdge(p, collapse.nbrB, pToNbrB);
-      addEdge(q, collapse.nbrC, qToNbrC);
-      addEdge(q, collapse.nbrD, qToNbrD);
-      addEdge(p, q, pToQ);
+      addEdge(state, p, collapse.nbrA, pToNbrA);
+      addEdge(state, p, collapse.nbrB, pToNbrB);
+      addEdge(state, q, collapse.nbrC, qToNbrC);
+      addEdge(state, q, collapse.nbrD, qToNbrD);
+      addEdge(state, p, q, pToQ);
 
       safeRecompute(state, 'quadDeadStep');
     });
@@ -1895,16 +1825,10 @@ export function quadDeadStep(
   }
 
   // External edges: re-anchor the quad-vertex endpoint only.
-  const reanchorEdge = (eid: EdgeId) => {
+  for (const eid of [collapse.extA, collapse.extB, collapse.extC, collapse.extD]) {
     const e = state.edges.get(eid);
-    if (!e) return;
-    const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
-    const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
-  };
-  reanchorEdge(collapse.extA);
-  reanchorEdge(collapse.extB);
-  reanchorEdge(collapse.extC);
-  reanchorEdge(collapse.extD);
+    if (e) anchorEdge(state, e);
+  }
 
   return { done: false, popAt: null };
 }
@@ -1955,40 +1879,15 @@ const ENCLOSED_TRIANGLE_POP_FRACTION   = 0.06;  // pop once this much of the pat
 
 export function detectEnclosedTriangle(state: GameState): EnclosedTriangleCollapse | null {
   for (const r of state.regions.values()) {
-    if (!r.isDead) continue;
-    if (r.boundaries.length !== 1) continue;
-    const b = r.boundaries[0];
-    // Pseudo-vertices (inserted to disambiguate parallel-edge rotation order,
-    // see [[project_pseudo_vertices]]) add extra boundary entries for a plain
-    // triangle without changing its topology — filter them out before counting.
-    const realEntries = b.entries.filter(en => !state.vertices.get(en.vertexId)?.isPseudo);
-    if (realEntries.length !== 3) continue;
-
-    const [e0, e1, e2] = realEntries;
-    if (e0.edgeId === undefined || e1.edgeId === undefined || e2.edgeId === undefined) continue;
-
-    const vids = [e0.vertexId, e1.vertexId, e2.vertexId] as [VertexId, VertexId, VertexId];
-    if (vids[0] === vids[1] || vids[1] === vids[2] || vids[0] === vids[2]) continue;
-
-    const vs = vids.map(id => state.vertices.get(id)!);
-    if (vs.some(v => !v || v.degree !== 3)) continue;
-
-    const triEdgeIds = [e0.edgeId, e1.edgeId, e2.edgeId] as [EdgeId, EdgeId, EdgeId];
-    if (new Set(triEdgeIds).size !== 3) continue;
+    const realEntries = deadPolygon(state, r, 3);
+    if (!realEntries) continue;
+    const vids = realEntries.map(en => en.vertexId) as [VertexId, VertexId, VertexId];
+    const triEdgeIds = realEntries.map(en => en.edgeId) as [EdgeId, EdgeId, EdgeId];
     const triEdgeSet = new Set<EdgeId>(triEdgeIds);
     const triVidSet  = new Set<VertexId>(vids);
 
-    // For each triangle vertex, find its one non-triangle-edge neighbour.
-    const findExternal = (vid: VertexId): { eid: EdgeId; nbr: VertexId } | null => {
-      for (const e of state.edges.values()) {
-        if (triEdgeSet.has(e.id)) continue;
-        if (e.v1 === vid) return { eid: e.id, nbr: e.v2 };
-        if (e.v2 === vid) return { eid: e.id, nbr: e.v1 };
-      }
-      return null;
-    };
-
-    const exts = vids.map(vid => findExternal(vid));
+    // For each triangle vertex, its one non-triangle-edge neighbour.
+    const exts = vids.map(vid => externalEdges(state, vid, triEdgeSet)[0] ?? null);
     if (exts.some(ex => !ex)) continue; // every vertex must have exactly one non-tri edge
 
     // Need exactly 1 vertex with a true external neighbour (outside the triangle).
@@ -2021,28 +1920,23 @@ export function detectEnclosedTriangle(state: GameState): EnclosedTriangleCollap
 
     // The triangle (r) is only one of the two faces the BC bigon (BC1/BC2)
     // bounds — the other, F1, sits on BC1's far side from the triangle and
-    // never touches A. Nothing here has confirmed F1 is actually empty: a
-    // separate disconnected component (still alive) can be nested inside it
-    // (e.g. a spot enclosed by an earlier self-loop move), in which case
-    // collapsing B/C into A would drag that live content along with them.
-    // Require F1 dead too, mirroring the check already done on the triangle.
+    // never touches A. The shrink sweeps F1 away along with the triangle, so
+    // F1 must be dead AND empty, like the triangle: a separate component
+    // nested in it (e.g. a spot enclosed by an earlier self-loop move, or a
+    // whole dead pocket's contents) would be dragged over and land outside
+    // A's new self-loop (failureSaves/fail-s4-g11-m11.json move 11).
     const eBC1 = state.edges.get(edgeBC1)!;
     const f1Id = eBC1.leftRegion === r.id ? eBC1.rightRegion : eBC1.leftRegion;
     const f1 = state.regions.get(f1Id);
-    if (!f1 || !f1.isDead) continue;
+    if (!f1 || !f1.isDead || !faceIsEmpty(state, f1Id)) continue;
 
     // Snapshot A→B and A→C now, oriented A-first, for B/C to reel themselves
     // in along during the animation (see enclosedTriangleStep).
-    const eAB = state.edges.get(edgeAB)!;
-    const abPath = (eAB.v1 === aId ? eAB.points : [...eAB.points].reverse()).map(p => ({ ...p }));
-    const eAC = state.edges.get(edgeAC)!;
-    const acPath = (eAC.v1 === aId ? eAC.points : [...eAC.points].reverse()).map(p => ({ ...p }));
-
+    const frozen = (eid: EdgeId, from: VertexId) => pointsFrom(state.edges.get(eid)!, from).map(p => ({ ...p }));
+    const abPath = frozen(edgeAB, aId), acPath = frozen(edgeAC, aId);
     // Snapshot BC1/BC2 too, oriented B-first, so their shape can decay relative
     // to their OWN original chord rather than the live (already-mutated) edge.
-    const eBC2 = state.edges.get(triEdgeBC2)!;
-    const bc1Path = (eBC1.v1 === bId ? eBC1.points : [...eBC1.points].reverse()).map(p => ({ ...p }));
-    const bc2Path = (eBC2.v1 === bId ? eBC2.points : [...eBC2.points].reverse()).map(p => ({ ...p }));
+    const bc1Path = frozen(edgeBC1, bId), bc2Path = frozen(triEdgeBC2, bId);
 
     return {
       kind: 'enclosed-triangle',
@@ -2075,6 +1969,7 @@ export function enclosedTriangleStep(
   const remaining = 1 - collapse.t; // fraction of abPath/acPath still left to reel in
 
   if (remaining < ENCLOSED_TRIANGLE_POP_FRACTION) {
+    if (!canonReady()) return { done: false, popAt: null }; // hold until the engine can vet the surgery
     const popAt = { ...target };
 
     const eBC2 = state.edges.get(collapse.triEdgeBC2);
@@ -2089,23 +1984,8 @@ export function enclosedTriangleStep(
     const loopPts = smallCircleSelfLoop(target, vb.pos, SELF_LOOP_SYNTH_RADIUS);
 
     const ok = commitIfEncodingPreserved(state, () => {
-      // Delete B, C, and all edges incident to either.
-      state.vertices.delete(collapse.b);
-      state.vertices.delete(collapse.c);
-      for (const [eid, e] of [...state.edges]) {
-        if (e.v1 === collapse.b || e.v2 === collapse.b ||
-            e.v1 === collapse.c || e.v2 === collapse.c) {
-          state.edges.delete(eid);
-        }
-      }
-
-      // Create self-loop on A.
-      const loopEid = allocEdgeId(state);
-      state.edges.set(loopEid, {
-        id: loopEid, v1: collapse.a, v2: collapse.a,
-        points: loopPts, leftRegion: -1, rightRegion: -1,
-      });
-
+      deleteVertices(state, [collapse.b, collapse.c]);
+      addEdge(state, collapse.a, collapse.a, loopPts);
       safeRecompute(state, 'enclosedTriangleStep');
     });
     return { done: true, popAt: ok ? popAt : null };
@@ -2219,6 +2099,15 @@ export function detectBigonTip(state: GameState): BigonTipCollapse | null {
     // X live → leave the bigon alone (no collapse).
     if (vX.degree < 3) continue;
 
+    // W slerping onto A shrinks the bigon's own face (the one whose walk is just W, A) to nothing:
+    // it must be empty.
+    const e1Full = state.edges.get(e1.id)!;
+    const bigonFace = [e1Full.leftRegion, e1Full.rightRegion].find(id => state.regions.get(id)?.boundaries.some(bd => {
+      const real = bd.entries.filter(en => !state.vertices.get(en.vertexId)?.isPseudo);
+      return real.length === 2 && real.every(en => en.vertexId === v.id || en.vertexId === A);
+    }));
+    if (bigonFace === undefined || !faceIsEmpty(state, bigonFace)) continue;
+
     return { kind: 'bigon-tip', w: v.id, a: A, e1: e1.id, e2: e2.id, eExt: eExt.id, x };
   }
   return null;
@@ -2242,6 +2131,7 @@ export function bigonTipStep(
   const dist = sphereAngle(vw.pos, target);
 
   if (dist < BIGON_TIP_POP_RADIUS) {
+    if (!canonReady()) return { done: false, popAt: null }; // hold until the engine can vet the surgery
     const popAt = { ...target };
 
     const e1   = state.edges.get(collapse.e1);
@@ -2250,38 +2140,19 @@ export function bigonTipStep(
     if (!e1 || !e2 || !eExt) return { done: true, popAt: null };
 
     // Self-loop on W: w→(via e1)→A→(via e2 reversed)→w
-    const wToA = e1.v1 === collapse.w ? [...e1.points] : [...e1.points].reverse();
-    const aToW = e2.v1 === collapse.a ? [...e2.points] : [...e2.points].reverse();
+    const wToA = pointsFrom(e1, collapse.w);
+    const aToW = pointsFrom(e2, collapse.a);
     const loopPoints: SpherePoint[] = [...wToA, ...aToW.slice(1)];
 
     // Re-root A's external edge: replace A's endpoint with W's position.
-    const aToX = eExt.v1 === collapse.a ? [...eExt.points] : [...eExt.points].reverse();
+    const aToX = pointsFrom(eExt, collapse.a);
     aToX[0] = { ...target };
 
     const ok = commitIfEncodingPreserved(state, () => {
-      // Delete A and all edges incident to it.
-      state.vertices.delete(collapse.a);
-      for (const [eid, e] of [...state.edges]) {
-        if (e.v1 === collapse.a || e.v2 === collapse.a) state.edges.delete(eid);
-      }
-
-      // Move W to A's former position.
-      vw.pos = { ...target };
-
-      // Create self-loop on W.
-      const loopEid = allocEdgeId(state);
-      state.edges.set(loopEid, {
-        id: loopEid, v1: collapse.w, v2: collapse.w,
-        points: loopPoints, leftRegion: -1, rightRegion: -1,
-      });
-
-      // Create W→X edge.
-      const extEid = allocEdgeId(state);
-      state.edges.set(extEid, {
-        id: extEid, v1: collapse.w, v2: collapse.x,
-        points: aToX, leftRegion: -1, rightRegion: -1,
-      });
-
+      deleteVertices(state, [collapse.a]);
+      vw.pos = { ...target }; // W takes A's former position
+      addEdge(state, collapse.w, collapse.w, loopPoints);
+      addEdge(state, collapse.w, collapse.x, aToX);
       safeRecompute(state, 'bigonTipStep');
     });
     return { done: true, popAt: ok ? popAt : null };
@@ -2290,15 +2161,7 @@ export function bigonTipStep(
   // Slerp W toward A; re-anchor bigon edge endpoints.
   const step = scaledStep(BIGON_TIP_SHRINK_STEP, tunables.bigonTipSpeed);
   vw.pos = slerp(vw.pos, target, step);
-  for (const eid of [collapse.e1, collapse.e2]) {
-    const e = state.edges.get(eid);
-    if (!e) continue;
-    for (let i = 1; i < e.points.length - 1; i++) {
-      e.points[i] = slerp(e.points[i], target, step);
-    }
-    const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
-    const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
-  }
+  for (const eid of [collapse.e1, collapse.e2]) pullEdgeToward(state, state.edges.get(eid), target, step);
 
   return { done: false, popAt: null };
 }
@@ -2314,12 +2177,18 @@ export function bigonTipStep(
 // Two sub-cases:
 //
 //   Case A — T is NOT self-connected: T has edges to S, X, and Y.
-//     Animation: S slerps toward T (T stays fixed).
+//     Animation: S rides the S-T edge (frozen as a track) to T, which stays fixed, dragging its
+//       shrinking self-loop behind it; the edge is whatever of the track S hasn't covered yet.
 //     Surgery: delete S, its self-loop, and edge S-T; concatenate T's X and Y
 //       edges into a single X-Y edge (through T's position); delete T.
 //
 //   Case B — T IS also self-connected: T has its own self-loop + edge to S.
-//     Animation: S and T slerp toward their shared midpoint.
+//     Animation: S and T ride the track toward its midpoint, each dragging its own loop.
+//
+// Riding the frozen edge instead of slerping straight at the target keeps the collapse inside its
+// own face: the S-T edge is a bridge (the same face on both sides), so S, the shrinking edge and a
+// loop kept within S's clearance never sweep over anything, where a straight slerp pulls a curved
+// S-T edge across whatever it bends around.
 //     Surgery: delete S, T, both self-loops, and edge S-T. Nothing survives.
 
 export interface SelfConnectedDeadCollapse {
@@ -2334,6 +2203,22 @@ export interface SelfConnectedDeadCollapse {
   extT2?: EdgeId;     // second external edge of T (case A: goes to nbrT2)
   nbrT1?: VertexId;
   nbrT2?: VertexId;
+  /** Animation state, set up on the first frame (see scdAnimFor). */
+  anim?: ScdAnim;
+}
+
+/** A self-loop in polar coordinates about its vertex, relative to the vertex's heading along the
+ *  track: each point's distance and unit direction (along, left of) the heading. */
+interface LoopShape { loop: EdgeId; pts: { d: number; a: number; b: number }[]; radius: number; scale: number }
+
+interface ScdAnim {
+  /** The S-T edge as it was when the collapse started, S → T, with cumulative arc length. */
+  track: SpherePoint[];
+  cum: number[];
+  /** Track length still between S and T. */
+  gap: number;
+  loopS: LoopShape;
+  loopT?: LoopShape;
 }
 
 const SCD_SHRINK_STEP = 0.09;
@@ -2368,6 +2253,13 @@ export function detectSelfConnectedDead(state: GameState): SelfConnectedDeadColl
     const vt = state.vertices.get(t);
     if (!vt || vt.degree !== 3) continue;
 
+    // The pop deletes S's self-loop, merging the face inside it into the one outside: it must be empty.
+    const loopEmpty = (eid: EdgeId): boolean => {
+      const inside = selfLoopInsideFace(state, state.edges.get(eid)!);
+      return inside !== null && faceIsEmpty(state, inside);
+    };
+    if (!loopEmpty(selfLoopS)) continue;
+
     // Check T's structure: self-loop and/or external edges (excluding the S-T edge).
     let selfLoopT: EdgeId | null = null;
     const tExternals: { eid: EdgeId; nbr: VertexId }[] = [];
@@ -2384,7 +2276,9 @@ export function detectSelfConnectedDead(state: GameState): SelfConnectedDeadColl
     }
 
     if (selfLoopT !== null) {
-      // Case B: T also has a self-loop — symmetric collapse.
+      // Case B: T also has a self-loop — symmetric collapse. The whole component goes, so T's loop
+      // must be empty inside too.
+      if (!loopEmpty(selfLoopT)) continue;
       return {
         kind: 'self-connected-dead',
         s: s.id, t,
@@ -2426,25 +2320,18 @@ export function selfConnectedDeadStep(
   const vt = state.vertices.get(collapse.t);
   if (!vs || !vt) return { done: true, popAt: null };
 
-  const target = collapse.symmetric ? slerp(vs.pos, vt.pos, 0.5) : vt.pos;
+  const anim = collapse.anim ??= scdAnimFor(state, collapse);
+  if (!anim) return { done: true, popAt: null };
 
-  const distS = sphereAngle(vs.pos, target);
-  const distT = collapse.symmetric ? sphereAngle(vt.pos, target) : 0;
-
-  if (distS < SCD_POP_RADIUS && distT < SCD_POP_RADIUS) {
-    const popAt = { ...target };
+  // S (and T, case B) sit on the track; the pop is where they meet.
+  if (anim.gap < (collapse.symmetric ? 2 : 1) * SCD_POP_RADIUS) {
+    if (!canonReady()) return { done: false, popAt: null }; // hold until the engine can vet the surgery
+    const popAt = collapse.symmetric ? slerp(vs.pos, vt.pos, 0.5) : { ...vt.pos };
 
     if (collapse.symmetric) {
       // Case B: delete everything — S, T, both self-loops, and edge S-T.
       const ok = commitIfEncodingPreserved(state, () => {
-        state.vertices.delete(collapse.s);
-        state.vertices.delete(collapse.t);
-        for (const [eid, e] of [...state.edges]) {
-          if (e.v1 === collapse.s || e.v2 === collapse.s ||
-              e.v1 === collapse.t || e.v2 === collapse.t) {
-            state.edges.delete(eid);
-          }
-        }
+        deleteVertices(state, [collapse.s, collapse.t]);
         safeRecompute(state, 'selfConnectedDeadStep(B)');
       });
       return { done: true, popAt: ok ? popAt : null };
@@ -2461,63 +2348,226 @@ export function selfConnectedDeadStep(
     const nbrT1 = collapse.nbrT1, nbrT2 = collapse.nbrT2;
 
     // Orient: X→T (reverse ext1 if it runs T→X) then T→Y (forward ext2 if it runs T→Y).
-    const xToT = eExt1.v1 === collapse.t ? [...eExt1.points].reverse() : [...eExt1.points];
-    const tToY = eExt2.v1 === collapse.t ? [...eExt2.points] : [...eExt2.points].reverse();
+    const xToT = pointsFrom(eExt1, collapse.t).reverse();
+    const tToY = pointsFrom(eExt2, collapse.t);
     const newPoints: SpherePoint[] = [...xToT, ...tToY.slice(1)];
 
     const ok = commitIfEncodingPreserved(state, () => {
-      state.vertices.delete(collapse.s);
-      state.vertices.delete(collapse.t);
-      for (const [eid, e] of [...state.edges]) {
-        if (e.v1 === collapse.s || e.v2 === collapse.s ||
-            e.v1 === collapse.t || e.v2 === collapse.t) {
-          state.edges.delete(eid);
-        }
-      }
-
-      const newEid = allocEdgeId(state);
-      state.edges.set(newEid, {
-        id: newEid, v1: nbrT1, v2: nbrT2,
-        points: newPoints, leftRegion: -1, rightRegion: -1,
-      });
-
+      deleteVertices(state, [collapse.s, collapse.t]);
+      addEdge(state, nbrT1, nbrT2, newPoints);
       safeRecompute(state, 'selfConnectedDeadStep(A)');
     });
     return { done: true, popAt: ok ? popAt : null };
   }
 
   // --- Animation frame ---
+  anim.gap *= 1 - scaledStep(SCD_SHRINK_STEP, tunables.selfConnectedDeadSpeed);
+  const len = anim.cum[anim.cum.length - 1];
+  const sAt = collapse.symmetric ? (len - anim.gap) / 2 : len - anim.gap;
+  const tAt = sAt + anim.gap;
+  vs.pos = trackPointAt(anim, sAt);
+  vt.pos = trackPointAt(anim, tAt);
 
-  // S always slerps toward the target.
-  const step = scaledStep(SCD_SHRINK_STEP, tunables.selfConnectedDeadSpeed);
-  vs.pos = slerp(vs.pos, target, step);
-  // In case B, T slerps toward the midpoint too.
-  if (collapse.symmetric) vt.pos = slerp(vt.pos, target, step);
-
-  // Pull S's self-loop and edge S-T toward target; re-anchor endpoints.
-  const edgesToPull = [collapse.selfLoopS, collapse.edgeST];
-  if (collapse.symmetric && collapse.selfLoopT !== undefined) edgesToPull.push(collapse.selfLoopT);
-
-  for (const eid of edgesToPull) {
-    const e = state.edges.get(eid);
-    if (!e) continue;
-    for (let i = 1; i < e.points.length - 1; i++) {
-      e.points[i] = slerp(e.points[i], target, step);
-    }
-    const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
-    const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
+  // The S-T edge is the stretch of track still between them.
+  const eST = state.edges.get(collapse.edgeST);
+  if (eST) {
+    const pts = [vs.pos, ...anim.track.filter((_, i) => anim.cum[i] > sAt && anim.cum[i] < tAt), vt.pos].map(p => ({ ...p }));
+    eST.points = eST.v1 === collapse.s ? pts : pts.reverse();
   }
+
+  // Each loop rides along with its vertex, heading-relative, shrinking.
+  carryLoop(state, anim.loopS, vs.pos, trackPointAt(anim, sAt + SCD_HEADING_LOOKAHEAD), anim.gap / len, collapse.edgeST);
+  if (anim.loopT) carryLoop(state, anim.loopT, vt.pos, trackPointAt(anim, tAt - SCD_HEADING_LOOKAHEAD), anim.gap / len, collapse.edgeST);
 
   // In case A, T's external edges only need their T-end re-anchored (T doesn't move).
   if (!collapse.symmetric) {
     for (const eid of [collapse.extT1, collapse.extT2]) {
-      if (eid === undefined) continue;
-      const e = state.edges.get(eid);
-      if (!e) continue;
-      const v1 = state.vertices.get(e.v1); if (v1) e.points[0] = { ...v1.pos };
-      const v2 = state.vertices.get(e.v2); if (v2) e.points[e.points.length - 1] = { ...v2.pos };
+      const e = eid === undefined ? undefined : state.edges.get(eid);
+      if (e) anchorEdge(state, e);
     }
   }
 
   return { done: false, popAt: null };
+}
+
+/** How far ahead along the track (radians) a riding vertex looks for its heading. */
+const SCD_HEADING_LOOKAHEAD = 0.01;
+/** A carried loop's radius stays within this fraction of its vertex's clearance from other edges. */
+const SCD_LOOP_CLEARANCE = 0.7;
+/** Most a carried loop may shrink in one frame to meet that clearance (so it never jumps). */
+const SCD_LOOP_MAX_SHRINK = 0.25;
+/** Halvings a carried loop gets to clear a crossing before it's left as is. */
+const SCD_LOOP_MAX_HALVINGS = 12;
+
+/** Freeze the S-T edge as the track, and each loop's shape relative to its vertex's heading. */
+function scdAnimFor(state: GameState, c: SelfConnectedDeadCollapse): ScdAnim | undefined {
+  const eST = state.edges.get(c.edgeST);
+  if (!eST || eST.points.length < 2) return undefined;
+  const track = pointsFrom(eST, c.s).map(p => ({ ...p }));
+  const cum = [0];
+  for (let i = 1; i < track.length; i++) cum.push(cum[i - 1] + sphereAngle(track[i - 1], track[i]));
+  const len = cum[cum.length - 1];
+  if (len <= 0) return undefined;
+  const loopS = loopShape(state, c.selfLoopS, track[0], track[1]);
+  const loopT = c.symmetric && c.selfLoopT !== undefined
+    ? loopShape(state, c.selfLoopT, track[track.length - 1], track[track.length - 2]) : undefined;
+  if (!loopS || (c.symmetric && !loopT)) return undefined;
+  return { track, cum, gap: len, loopS, loopT };
+}
+
+/** The track point `at` radians from S (clamped to the track). */
+function trackPointAt(anim: ScdAnim, at: number): SpherePoint {
+  const { track, cum } = anim;
+  const s = Math.max(0, Math.min(cum[cum.length - 1], at));
+  let i = 1;
+  while (i < cum.length - 1 && cum[i] < s) i++;
+  const seg = cum[i] - cum[i - 1];
+  return slerp(track[i - 1], track[i], seg > 0 ? (s - cum[i - 1]) / seg : 0);
+}
+
+/** Unit tangent at `p` heading toward `q`, and its left normal p × t. */
+function headingFrame(p: SpherePoint, q: SpherePoint): { t: SpherePoint; n: SpherePoint } {
+  const k = p.x * q.x + p.y * q.y + p.z * q.z;
+  const t = normalize({ x: q.x - k * p.x, y: q.y - k * p.y, z: q.z - k * p.z });
+  return { t, n: cross(p, t) };
+}
+
+function loopShape(state: GameState, loopId: EdgeId, at: SpherePoint, toward: SpherePoint): LoopShape | undefined {
+  const loop = state.edges.get(loopId);
+  if (!loop) return undefined;
+  const { t, n } = headingFrame(at, toward);
+  const pts = loop.points.map(p => {
+    const d = sphereAngle(at, p);
+    const k = Math.cos(d);
+    const v = { x: p.x - k * at.x, y: p.y - k * at.y, z: p.z - k * at.z };
+    const a = v.x * t.x + v.y * t.y + v.z * t.z, b = v.x * n.x + v.y * n.y + v.z * n.z;
+    const m = Math.hypot(a, b);
+    return m > 1e-12 ? { d, a: a / m, b: b / m } : { d: 0, a: 1, b: 0 };
+  });
+  return { loop: loopId, pts, radius: Math.max(...pts.map(q => q.d)), scale: 1 };
+}
+
+/**
+ * Redraw a loop at its vertex's new position `at` (heading toward `toward`), scaled to `frac` of
+ * its original size, and further as needed to stay within SCD_LOOP_CLEARANCE of the vertex's
+ * distance to every other edge but the S-T edge it hangs off: never shrinking more than
+ * SCD_LOOP_MAX_SHRINK per frame, never growing back. A scaled loop can still cross something the
+ * clearance ball doesn't see (the S-T edge bending back, or a loop so big it wraps the sphere and
+ * scales unevenly), so it is then halved until it crosses nothing. Halving can't clear a loop that
+ * wraps around past T, since scaling pulls its far side in along S's heading, onto the S-T edge, so
+ * a loop still crossing after that is replaced by a teardrop inside its own wedge at the vertex
+ * (wedgeTeardrop), then halved again.
+ */
+function carryLoop(state: GameState, shape: LoopShape, at: SpherePoint, toward: SpherePoint, frac: number, edgeST: EdgeId): void {
+  const loop = state.edges.get(shape.loop);
+  if (!loop) return;
+  let clear = Infinity;
+  for (const e of state.edges.values()) {
+    if (e.id === loop.id || e.id === edgeST) continue;
+    for (let i = 0; i + 1 < e.points.length; i++) clear = Math.min(clear, distanceToArc(at, e.points[i], e.points[i + 1]));
+  }
+  const fit = Math.min(frac, SCD_LOOP_CLEARANCE * clear / shape.radius);
+  shape.scale = Math.min(shape.scale, Math.max(fit, shape.scale * (1 - SCD_LOOP_MAX_SHRINK)));
+  const { t, n } = headingFrame(at, toward);
+  const draw = (): SpherePoint[] => shape.pts.map(({ d, a, b }) => {
+    const rr = d * shape.scale, c = Math.cos(rr), sn = Math.sin(rr);
+    return normalize({
+      x: at.x * c + (a * t.x + b * n.x) * sn,
+      y: at.y * c + (a * t.y + b * n.y) * sn,
+      z: at.z * c + (a * t.z + b * n.z) * sn,
+    });
+  });
+  const others = [...state.edges.values()].filter(e => e.id !== loop.id);
+  const crosses = () => others.some(e => polylinesProperlyCross(loop.points, e.points));
+  const halveClear = () => {
+    for (let i = 0; i < SCD_LOOP_MAX_HALVINGS && crosses(); i++) { shape.scale /= 2; loop.points = draw(); }
+  };
+  loop.points = draw();
+  halveClear();
+  if (crosses()) {
+    wedgeTeardrop(shape, Math.min(SCD_LOOP_CLEARANCE * clear, SCD_TEARDROP_RADIUS));
+    loop.points = draw();
+    halveClear();
+  }
+  anchorEdge(state, loop);
+}
+
+/** Largest angular radius of a wedgeTeardrop replacement loop. */
+const SCD_TEARDROP_RADIUS = 0.1;
+
+/**
+ * Replace `shape` with a teardrop of angular radius `radius` that leaves and returns along the
+ * loop's own exit directions and sweeps only the wedge between them that doesn't hold the heading
+ * (the S-T edge): the corner of the loop's empty inside face, so it bounds an empty face too.
+ */
+function wedgeTeardrop(shape: LoopShape, radius: number): void {
+  const { pts } = shape;
+  if (pts.length < 3) return;
+  const a1 = Math.atan2(pts[1].b, pts[1].a), a2 = Math.atan2(pts[pts.length - 2].b, pts[pts.length - 2].a);
+  const TAU = 2 * Math.PI;
+  const ccw = (((a2 - a1) % TAU) + TAU) % TAU;
+  const toHeading = (((-a1) % TAU) + TAU) % TAU;
+  const sweep = toHeading < ccw ? ccw - TAU : ccw; // the way round that misses the heading (angle 0)
+  const N = 13;
+  shape.pts = Array.from({ length: N }, (_, k) => {
+    const th = a1 + sweep * k / (N - 1);
+    return { d: radius * Math.sin(Math.PI * k / (N - 1)), a: Math.cos(th), b: Math.sin(th) };
+  });
+  shape.radius = radius;
+  shape.scale = 1;
+}
+
+// ===========================================================================
+// Special-collapse registry — the ONE list of collapse kinds (main.ts drives it)
+// ===========================================================================
+
+export type SpecialCollapse = LouseCollapse | ParallelDeadCollapse | TripleParallelDeadCollapse | TriangleDeadCollapse
+  | EnclosedTriangleCollapse | QuadDeadCollapse | BigonTipCollapse | SelfConnectedDeadCollapse;
+
+interface CollapseKind<C extends SpecialCollapse> {
+  detect: (state: GameState) => C | null;
+  step: (state: GameState, c: C) => { done: boolean; popAt: SpherePoint | null };
+  /** Vertices the animation owns: smoothing and the other surgeries leave them alone. */
+  vertices: (c: C) => VertexId[];
+  /** Name shown in the Collapse List debug trace. */
+  label: (c: C) => string;
+}
+
+const COLLAPSE_KINDS: { [K in SpecialCollapse['kind']]: CollapseKind<Extract<SpecialCollapse, { kind: K }>> } = {
+  'louse':                { detect: detectLouse,              step: louseCollapseStep,     vertices: c => [...c.outer, c.inner],  label: () => 'louseCollapseStep' },
+  'parallel-dead':        { detect: detectParallelDead,       step: parallelDeadStep,      vertices: c => [c.p, c.q],             label: () => 'parallelDeadStep' },
+  'triple-parallel-dead': { detect: detectTripleParallelDead, step: tripleParallelDeadStep, vertices: c => [c.p, c.q],            label: () => 'tripleParallelDeadStep' },
+  'triangle-dead':        { detect: detectTriangleDead,       step: triangleDeadStep,      vertices: c => [c.a, c.b, c.c],        label: () => 'triangleDeadStep' },
+  'enclosed-triangle':    { detect: detectEnclosedTriangle,   step: enclosedTriangleStep,  vertices: c => [c.a, c.b, c.c],        label: () => 'enclosedTriangleStep' },
+  'quad-dead':            { detect: detectQuadDead,           step: quadDeadStep,          vertices: c => [c.a, c.b, c.c, c.d],   label: () => 'quadDeadStep' },
+  'bigon-tip':            { detect: detectBigonTip,           step: bigonTipStep,          vertices: c => [c.w, c.a],             label: () => 'bigonTipStep' },
+  'self-connected-dead':  { detect: detectSelfConnectedDead,  step: selfConnectedDeadStep, vertices: c => [c.s, c.t],
+                            label: c => `selfConnectedDeadStep (${c.symmetric ? 'case B symmetric' : 'case A'})` },
+};
+
+/** Detection priority: the first kind that matches is the one that animates next. */
+const DETECT_ORDER: SpecialCollapse['kind'][] = [
+  'louse', 'parallel-dead', 'triple-parallel-dead', 'triangle-dead', 'enclosed-triangle', 'quad-dead', 'bigon-tip', 'self-connected-dead',
+];
+
+const kindOf = (c: SpecialCollapse) => COLLAPSE_KINDS[c.kind] as unknown as CollapseKind<SpecialCollapse>;
+
+/** The next special collapse to animate, or null. */
+export function detectSpecialCollapse(state: GameState): SpecialCollapse | null {
+  for (const k of DETECT_ORDER) {
+    const c = (COLLAPSE_KINDS[k] as unknown as CollapseKind<SpecialCollapse>).detect(state);
+    if (c) return c;
+  }
+  return null;
+}
+
+/** The vertices a pending special collapse owns. */
+export function specialCollapseVertices(c: SpecialCollapse): Set<VertexId> {
+  return new Set(kindOf(c).vertices(c));
+}
+
+/** One animation frame of a pending special collapse; `label` names it for the debug trace. */
+export function stepSpecialCollapse(state: GameState, c: SpecialCollapse): { done: boolean; popAt: SpherePoint | null; label: string } {
+  const k = kindOf(c);
+  return { ...k.step(state, c), label: k.label(c) };
 }

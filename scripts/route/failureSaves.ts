@@ -15,7 +15,6 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import type { GameState } from '../../src/model/types';
 import type { SpherePoint, RotationMatrix } from '../../src/math/sphere';
-import { arcsCross } from '../../src/math/sphere';
 import { createInitialState, cloneState } from '../../src/model/gameState';
 import { applyMove, recomputeRegions } from '../../src/model/moves';
 import { encodePosition, encodePositionDecompressed } from '../../src/model/encoding';
@@ -30,7 +29,7 @@ import type { HistoryStepInput } from '../../src/model/saveState';
 import { strokeCrossesEdges } from '../../src/model/strokeSynthesis';
 import { routeSpecsFor, faceMeshFor, routeOnMesh } from '../../src/model/moveRouter';
 import type { RouteSpec } from '../../src/model/moveRouter';
-import { enumerateAll, relax, parsedFor } from './routeHarness';
+import { enumerateAll, relax, parsedFor, edgeCrossings } from './routeHarness';
 
 function mulberry32(a: number): () => number {
   return () => {
@@ -56,23 +55,6 @@ async function pretty(enc: string): Promise<string> {
   return compact && compact !== exact ? `${exact} (compact ${compact})` : exact;
 }
 
-/** Mid-edge crossings between existing edges (a broken drawing — the layout-physics bug). */
-function edgeCrossings(s: GameState): string[] {
-  const E = [...s.edges.values()];
-  const out: string[] = [];
-  for (let a = 0; a < E.length; a++) {
-    for (let b = a + 1; b < E.length; b++) {
-      let hit = false;
-      for (let i = 1; !hit && i + 2 < E[a].points.length; i++) {
-        for (let j = 1; !hit && j + 2 < E[b].points.length; j++) {
-          if (arcsCross(E[a].points[i], E[a].points[i + 1], E[b].points[j], E[b].points[j + 1])) hit = true;
-        }
-      }
-      if (hit) out.push(`edge ${E[a].v1}–${E[a].v2} × edge ${E[b].v1}–${E[b].v2}`);
-    }
-  }
-  return out;
-}
 
 function describeMove(c: ChildInfo): string {
   const mv = c.move!;
@@ -89,7 +71,7 @@ function recreateStopsAt(seqText: string): number {
   for (let i = 0; i < seq.moves.length; i++) {
     const m = seq.moves[i];
     const parsed: ResolvedMove = { ...m, brackets: m.brackets as number[] | null, parens: m.parens as ResolvedMove['parens'] };
-    const stroke = synthesizeMove(st, parsed, true);
+    const stroke = synthesizeMove(st, parsed);
     if (!stroke) return i;
     applyMove(st, { v1: parsed.lo, v2: parsed.hi, stroke });
     relax(st);
@@ -187,7 +169,7 @@ async function main(): Promise<void> {
               for (const s of expandSpecs(specs, region.boundaries.length)) {
                 const stroke = routeOnMesh(mesh, s);
                 if (!stroke) { routeFails++; continue; }
-                if (strokeCrossesEdges(loaded, stroke, undefined, p.lo, p.hi)) { crossing++; continue; }
+                if (strokeCrossesEdges(loaded, stroke)) { crossing++; continue; }
                 const t = cloneState(loaded);
                 try { applyMove(t, { v1: p.lo, v2: p.hi, stroke }); } catch { continue; }
                 const got = await pretty(await trialCanon(t));

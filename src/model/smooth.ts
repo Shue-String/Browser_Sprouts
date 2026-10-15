@@ -1,7 +1,8 @@
 ﻿import type { GameState, Edge, VertexId } from './types';
 import type { SpherePoint } from '../math/sphere';
-import { slerp, arcsCross } from '../math/sphere';
+import { slerp, arcsCross, arcsProperlyCross, sphereAngle, dot, cross, chord2, polylineLength, resamplePolyline } from '../math/sphere';
 import { fullyDeadVertexIds } from './deadRegions';
+import { anchorEdge, syncPseudoVertices } from './gameState';
 import { tunables } from './tunables';
 import { nearestOnArc, refinementSpacing } from './smoothGeometry';
 
@@ -159,9 +160,7 @@ function maxNetMovement(state: GameState, before: Map<string, SpherePoint>): num
   const consider = (key: string, p: SpherePoint) => {
     const b = before.get(key);
     if (!b) return;
-    const dot = Math.max(-1, Math.min(1, b.x * p.x + b.y * p.y + b.z * p.z));
-    const d = Math.acos(dot);
-    if (d > max) max = d;
+    max = Math.max(max, sphereAngle(b, p));
   };
   for (const v of state.vertices.values()) consider(`v${v.id}`, v.pos);
   for (const e of state.edges.values()) {
@@ -179,8 +178,7 @@ function arcLengthPoint(pts: SpherePoint[], frac: number): SpherePoint {
   let total = 0;
   const cumLen = [0];
   for (let i = 1; i < pts.length; i++) {
-    const dot = Math.max(-1, Math.min(1, pts[i-1].x*pts[i].x + pts[i-1].y*pts[i].y + pts[i-1].z*pts[i].z));
-    total += Math.acos(dot);
+    total += sphereAngle(pts[i - 1], pts[i]);
     cumLen.push(total);
   }
   const target = total * frac;
@@ -189,16 +187,6 @@ function arcLengthPoint(pts: SpherePoint[], frac: number): SpherePoint {
   const segLen = cumLen[seg + 1] - cumLen[seg];
   const t = segLen < 1e-12 ? 0 : (target - cumLen[seg]) / segLen;
   return slerp(pts[seg], pts[seg + 1], t);
-}
-
-/** Total geodesic arc length (radians) of a polyline. */
-function polylineLength(pts: SpherePoint[]): number {
-  let total = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const dot = Math.max(-1, Math.min(1, pts[i-1].x*pts[i].x + pts[i-1].y*pts[i].y + pts[i-1].z*pts[i].z));
-    total += Math.acos(dot);
-  }
-  return total;
 }
 
 /**
@@ -211,8 +199,7 @@ function pointAtDistFromEnd(pts: SpherePoint[], dist: number, fromEnd: boolean):
   const seq = fromEnd ? [...pts].reverse() : pts;
   let acc = 0;
   for (let i = 1; i < seq.length; i++) {
-    const dot = Math.max(-1, Math.min(1, seq[i-1].x*seq[i].x + seq[i-1].y*seq[i].y + seq[i-1].z*seq[i].z));
-    const segLen = Math.acos(dot);
+    const segLen = sphereAngle(seq[i - 1], seq[i]);
     if (acc + segLen >= dist) {
       const t = segLen < 1e-12 ? 0 : (dist - acc) / segLen;
       return slerp(seq[i-1], seq[i], t);
@@ -229,8 +216,10 @@ function pointAtDistFromEnd(pts: SpherePoint[], dist: number, fromEnd: boolean):
  * - Self-loop edges (v1===v2): 1/3 and 2/3 arc-length points, keeping the two arms open.
  *   These use negative sentinel edgeIds so they repel the loop's own interior.
  *   `skipVertexIds` prevents them from pushing the self-loop vertex away from itself.
+ * A parallel pair whose endpoints are both in `skip` is collapsing: its edges are drawing
+ * together, so it gets no repellers.
  */
-export function edgeRepellers(state: GameState): Array<{ edgeId: number; point: SpherePoint; skipVertexIds?: Set<number> }> {
+export function edgeRepellers(state: GameState, skip?: Set<VertexId>): Array<{ edgeId: number; point: SpherePoint; skipVertexIds?: Set<number> }> {
   const edges = [...state.edges.values()];
   const result: Array<{ edgeId: number; point: SpherePoint; skipVertexIds?: Set<number> }> = [];
   const seen = new Set<number>();
@@ -244,6 +233,7 @@ export function edgeRepellers(state: GameState): Array<{ edgeId: number; point: 
       if (!parallel || seen.has(ea.id)) continue;
       seen.add(ea.id);
       seen.add(eb.id);
+      if (skip?.has(ea.v1) && skip.has(ea.v2)) continue;
       const sharedEndpoints = new Set([ea.v1, ea.v2]);
       for (const e of [ea, eb]) {
         if (e.points.length < 3) continue;
@@ -297,15 +287,15 @@ export function edgeRepellers(state: GameState): Array<{ edgeId: number; point: 
  * made to feel a vertex that its adjacent chord passes close to.
  */
 function repulsePoint(p: SpherePoint, repeller: SpherePoint, step: number, radius: number, dist?: number): SpherePoint {
-  const dot = Math.max(-1, Math.min(1, p.x*repeller.x + p.y*repeller.y + p.z*repeller.z));
-  const d = dist ?? Math.acos(dot);
+  const c = Math.max(-1, Math.min(1, dot(p, repeller)));
+  const d = dist ?? Math.acos(c);
   if (d < 1e-6 || d >= radius) return p;
   const t = 1 - d / radius;
   const force = step * t * t;
   // tangent at p pointing away from repeller
-  const tx = p.x - dot*repeller.x;
-  const ty = p.y - dot*repeller.y;
-  const tz = p.z - dot*repeller.z;
+  const tx = p.x - c*repeller.x;
+  const ty = p.y - c*repeller.y;
+  const tz = p.z - c*repeller.z;
   const tlen = Math.sqrt(tx*tx + ty*ty + tz*tz);
   if (tlen < 1e-9) return p;
   const nx = p.x + force * tx/tlen;
@@ -317,12 +307,12 @@ function repulsePoint(p: SpherePoint, repeller: SpherePoint, step: number, radiu
 
 /** Move a point on the unit sphere toward a target by at most `step` radians. */
 function attractPoint(p: SpherePoint, target: SpherePoint, step: number): SpherePoint {
-  const dot = Math.max(-1, Math.min(1, p.x*target.x + p.y*target.y + p.z*target.z));
-  const d = Math.acos(dot);
+  const c = Math.max(-1, Math.min(1, dot(p, target)));
+  const d = Math.acos(c);
   if (d < 1e-6) return p;
-  const tx = target.x - dot*p.x;
-  const ty = target.y - dot*p.y;
-  const tz = target.z - dot*p.z;
+  const tx = target.x - c*p.x;
+  const ty = target.y - c*p.y;
+  const tz = target.z - c*p.z;
   const tlen = Math.sqrt(tx*tx + ty*ty + tz*tz);
   if (tlen < 1e-9) return p;
   const force = Math.min(step, d);
@@ -343,25 +333,14 @@ function wouldCrossAnyEdge(
   vid: number,
   edges: Edge[],
 ): boolean {
-  // Midpoint direction of the vertex movement arc (unnormalized, sufficient for sign checks).
-  const vmx = before.x + after.x, vmy = before.y + after.y, vmz = before.z + after.z;
   for (const e of edges) {
     if (e.v1 === vid || e.v2 === vid) continue;
     for (let i = 0; i < e.points.length - 1; i++) {
-      if (!arcsCross(before, after, e.points[i], e.points[i + 1])) continue;
-      // arcsCross fires for both the real crossing and its antipodal ghost.
-      // Confirm the intersection is on the same hemisphere as both arcs by checking
-      // that their midpoint directions agree in sign.
-      const p0 = e.points[i], p1 = e.points[i + 1];
-      const emx = p0.x + p1.x, emy = p0.y + p1.y, emz = p0.z + p1.z;
-      if (vmx*emx + vmy*emy + vmz*emz > 0) return true;
+      if (arcsCross(before, after, e.points[i], e.points[i + 1])) return true;
     }
   }
   return false;
 }
-
-const cross3 = (a: SpherePoint, b: SpherePoint): SpherePoint => ({ x: a.y*b.z - a.z*b.y, y: a.z*b.x - a.x*b.z, z: a.x*b.y - a.y*b.x });
-const dot3 = (a: SpherePoint, b: SpherePoint): number => a.x*b.x + a.y*b.y + a.z*b.z;
 
 /** Positions of the vertices no edge touches. */
 function isolatedSpots(state: GameState): SpherePoint[] {
@@ -370,20 +349,6 @@ function isolatedSpots(state: GameState): SpherePoint[] {
   return [...state.vertices.values()].filter(v => !v.isPseudo && !used.has(v.id)).map(v => v.pos);
 }
 
-/** Chord distance (squared) between two points — cheap broad-phase for arc-vs-arc tests. */
-const chord2 = (a: SpherePoint, b: SpherePoint): number => (a.x-b.x)**2 + (a.y-b.y)**2 + (a.z-b.z)**2;
-const SAME_POINT2 = 1e-12; // two end points this close are the same shared vertex
-
-/** True if arc a0->a1 properly crosses arc b0->b1 (touching at a shared end point doesn't count). */
-function arcsProperlyCross(a0: SpherePoint, a1: SpherePoint, b0: SpherePoint, b1: SpherePoint): boolean {
-  // Cheap exact reject: a crossing point X has |a0-X| + |X-b0| <= arc(A) + arc(B) <= (π/2)(|A| + |B|)
-  // in chord length, and (|A| + |B|)² <= 2(|A|² + |B|²) — so beyond 2·(π/2)²·(|A|² + |B|²) they can't meet.
-  if (chord2(a0, b0) > 4.94 * (chord2(a0, a1) + chord2(b0, b1))) return false;
-  if (chord2(a0, b0) < SAME_POINT2 || chord2(a0, b1) < SAME_POINT2 || chord2(a1, b0) < SAME_POINT2 || chord2(a1, b1) < SAME_POINT2) return false;
-  if (!arcsCross(a0, a1, b0, b1)) return false;
-  // arcsCross also fires for the antipodal ghost; the real crossing has both midpoints on its side.
-  return (a0.x + a1.x)*(b0.x + b1.x) + (a0.y + a1.y)*(b0.y + b1.y) + (a0.z + a1.z)*(b0.z + b1.z) > 0;
-}
 
 /**
  * Uniform 3D grid over edge segments, so a crossing query tests only the segments near it rather
@@ -410,11 +375,13 @@ class SegmentIndex {
 
   /** True if some isolated spot lies strictly inside the spherical triangle a,b,c (either winding). */
   sweepsSpot(a: SpherePoint, b: SpherePoint, c: SpherePoint): boolean {
-    const nab = cross3(a, b), nbc = cross3(b, c), nca = cross3(c, a);
+    const nab = cross(a, b), nbc = cross(b, c), nca = cross(c, a);
     const hx = a.x + b.x + c.x, hy = a.y + b.y + c.y, hz = a.z + b.z + c.z;
     for (const p of this.spots) {
-      if (p.x*hx + p.y*hy + p.z*hz <= 0) continue; // antipodal ghost
-      const s1 = dot3(nab, p), s2 = dot3(nbc, p), s3 = dot3(nca, p);
+      // Accepting either winding below would also accept a spot ANTIPODAL to the triangle (all three
+      // signs flip), so require it on the triangle's own hemisphere first.
+      if (p.x*hx + p.y*hy + p.z*hz <= 0) continue;
+      const s1 = dot(nab, p), s2 = dot(nbc, p), s3 = dot(nca, p);
       if ((s1 > 1e-12 && s2 > 1e-12 && s3 > 1e-12) || (s1 < -1e-12 && s2 < -1e-12 && s3 < -1e-12)) return true;
     }
     return false;
@@ -520,11 +487,9 @@ function polylineCrossesOthers(index: SegmentIndex, e: Edge, pts: SpherePoint[])
   return false;
 }
 
-const angBetween = (a: SpherePoint, b: SpherePoint): number => Math.acos(Math.max(-1, Math.min(1, dot3(a, b))));
-
 /** Move p directly away from `from` along the sphere by `amount` radians. */
 function stepAway(p: SpherePoint, from: SpherePoint, amount: number): SpherePoint {
-  const d = Math.max(-1, Math.min(1, dot3(p, from)));
+  const d = Math.max(-1, Math.min(1, dot(p, from)));
   const tx = p.x - d * from.x, ty = p.y - d * from.y, tz = p.z - d * from.z;
   const tl = Math.hypot(tx, ty, tz);
   if (tl < 1e-9) return p;
@@ -563,7 +528,7 @@ function enforceClearance(state: GameState, skip: Set<VertexId> | undefined, dra
     for (let a = 0; a < verts.length; a++) {
       for (let b = a + 1; b < verts.length; b++) {
         const va = verts[a], vb = verts[b];
-        const d = angBetween(va.pos, vb.pos);
+        const d = sphereAngle(va.pos, vb.pos);
         if (d >= 2 * c || d < 1e-9) continue;
         const aDrag = va.id === dragId, bDrag = vb.id === dragId;
         if (aDrag && bDrag) continue;
@@ -614,12 +579,7 @@ function enforceClearance(state: GameState, skip: Set<VertexId> | undefined, dra
 
 /** Re-anchor every edge's end points to its (possibly moved) vertices. */
 function anchorEdgeEnds(state: GameState): void {
-  for (const e of state.edges.values()) {
-    const v1 = state.vertices.get(e.v1);
-    const v2 = state.vertices.get(e.v2);
-    if (v1) e.points[0] = { ...v1.pos };
-    if (v2) e.points[e.points.length - 1] = { ...v2.pos };
-  }
+  for (const e of state.edges.values()) anchorEdge(state, e);
 }
 
 /**
@@ -632,7 +592,7 @@ function anchorEdgeEnds(state: GameState): void {
 function repulsionStep(state: GameState, drag?: DragTarget, skip?: Set<VertexId>, suppressCoRegionBoost = false, forceScale = 1): void {
   const vertexEntries = [...state.vertices.values()].filter(v => !v.isPseudo).map(v => ({ id: v.id, pos: v.pos }));
   const vertexPositions = vertexEntries.map(e => e.pos); // positions-only view for edge-sample repulsion
-  const midpoints = edgeRepellers(state);
+  const midpoints = edgeRepellers(state, skip);
   const allEdges = [...state.edges.values()];
 
   // Build co-region lookup: which regions contain each vertex?
@@ -757,9 +717,9 @@ function repulsionStep(state: GameState, drag?: DragTarget, skip?: Set<VertexId>
       let p = orig;
       // A vertex the edge isn't attached to is felt through the sample's two chords, so a long
       // chord passing close to it pushes both its end points even when they're far away.
-      const chordA = angBetween(e.points[i - 1], p), chordB = angBetween(p, e.points[i + 1]);
+      const chordA = sphereAngle(e.points[i - 1], p), chordB = sphereAngle(p, e.points[i + 1]);
       for (const r of vertexEntries) {
-        const pointDist = angBetween(p, r.pos);
+        const pointDist = sphereAngle(p, r.pos);
         if (pointDist >= tunables.repulsionRadius + Math.max(chordA, chordB)) continue;
         const attached = r.id === e.v1 || r.id === e.v2;
         const d = attached ? pointDist
@@ -770,10 +730,7 @@ function repulsionStep(state: GameState, drag?: DragTarget, skip?: Set<VertexId>
         p = repulsePoint(p, r, tunables.sampleRepulsionStep * forceScale, tunables.repulsionRadius);
       }
       // --- FREE-SPACE TIGHTENING ---
-      const inRepulsionZone = vertexPositions.some(r => {
-        const d = Math.max(-1, Math.min(1, p.x*r.x + p.y*r.y + p.z*r.z));
-        return Math.acos(d) < tunables.repulsionRadius;
-      });
+      const inRepulsionZone = vertexPositions.some(r => sphereAngle(p, r) < tunables.repulsionRadius);
       if (!inRepulsionZone) {
         const neighborMid = slerp(e.points[i - 1], e.points[i + 1], 0.5);
         p = slerp(p, neighborMid, tunables.tighteningStep * forceScale);
@@ -789,14 +746,8 @@ function repulsionStep(state: GameState, drag?: DragTarget, skip?: Set<VertexId>
 
   enforceClearance(state, skip, drag?.vertexId);
 
-  // Sync pseudo-vertex positions to their edge's current arc midpoint so they
-  // move with the edge during smoothing rather than floating free.
-  for (const v of state.vertices.values()) {
-    if (!v.isPseudo || v.pseudoEdgeId === undefined) continue;
-    const e = state.edges.get(v.pseudoEdgeId);
-    if (!e || e.points.length < 3) continue;
-    v.pos = e.points[Math.floor(e.points.length / 2)];
-  }
+  // Pseudo-vertices move with their edge's midpoint rather than floating free.
+  syncPseudoVertices(state);
 }
 
 // ---------------------------------------------------------------------------
@@ -813,15 +764,8 @@ function detectCrossings(state: GameState): boolean {
       // Adjacent edges share a vertex — skip (their shared endpoint segments touch but don't cross)
       if (ea.v1 === eb.v1 || ea.v1 === eb.v2 || ea.v2 === eb.v1 || ea.v2 === eb.v2) continue;
       for (let a = 0; a < ea.points.length - 1; a++) {
-        const pa0 = ea.points[a], pa1 = ea.points[a+1];
-        const amx = pa0.x+pa1.x, amy = pa0.y+pa1.y, amz = pa0.z+pa1.z;
         for (let b = 0; b < eb.points.length - 1; b++) {
-          if (!arcsCross(pa0, pa1, eb.points[b], eb.points[b+1])) continue;
-          // Hemisphere guard: arcsCross fires for the real crossing AND its antipodal ghost.
-          // The real crossing is on the same hemisphere as both arc midpoints.
-          const pb0 = eb.points[b], pb1 = eb.points[b+1];
-          const bmx = pb0.x+pb1.x, bmy = pb0.y+pb1.y, bmz = pb0.z+pb1.z;
-          if (amx*bmx + amy*bmy + amz*bmz > 0) return true;
+          if (arcsCross(ea.points[a], ea.points[a + 1], eb.points[b], eb.points[b + 1])) return true;
         }
       }
     }
@@ -855,14 +799,9 @@ export function smoothStepDrag(state: GameState, drag: DragTarget): boolean /* r
 
   // Check whether the dragged vertex itself crossed a non-incident edge this frame.
   // Use pre-step edge positions (from snapshot) to avoid false positives from edge drift.
-  // Guard with the hemisphere check: arcsCross fires for both a crossing and its antipodal
-  // ghost, so confirm the vertex arc and edge segment are in the same hemisphere.
   if (dragVertBefore) {
     const dragVertAfter = state.vertices.get(drag.vertexId)?.pos;
     if (dragVertAfter) {
-      const vmx = dragVertBefore.x + dragVertAfter.x;
-      const vmy = dragVertBefore.y + dragVertAfter.y;
-      const vmz = dragVertBefore.z + dragVertAfter.z;
       for (const e of state.edges.values()) {
         if (e.v1 === drag.vertexId || e.v2 === drag.vertexId) continue;
         const pts: SpherePoint[] = [];
@@ -871,11 +810,7 @@ export function smoothStepDrag(state: GameState, drag: DragTarget): boolean /* r
           if (p) pts.push(p);
         }
         for (let i = 0; i < pts.length - 1; i++) {
-          if (!arcsCross(dragVertBefore, dragVertAfter, pts[i], pts[i + 1])) continue;
-          const emx = pts[i].x + pts[i+1].x;
-          const emy = pts[i].y + pts[i+1].y;
-          const emz = pts[i].z + pts[i+1].z;
-          if (vmx*emx + vmy*emy + vmz*emz > 0) {
+          if (arcsCross(dragVertBefore, dragVertAfter, pts[i], pts[i + 1])) {
             restorePositions(state, before);
             return true;
           }
@@ -955,7 +890,7 @@ function resampleEdge(e: Edge, index: SegmentIndex, interior: number): void {
   const ideal = interior;
   const crossedBefore = polylineCrossesOthers(index, e, old);
   for (const factor of [1, 2, 4]) {
-    const next = resampledPoints(old, ideal * factor);
+    const next = resamplePolyline(old, ideal * factor + 2);
     if (crossedBefore || !polylineCrossesOthers(index, e, next)) {
       e.points = next;
       index.refresh(e);
@@ -964,30 +899,6 @@ function resampleEdge(e: Edge, index: SegmentIndex, interior: number): void {
   }
 }
 
-function resampledPoints(pts: SpherePoint[], interiorCount: number): SpherePoint[] {
-  const arcLen = polylineLength(pts);
-  const totalCount = interiorCount + 2; // + 2 endpoints
-
-  // Build cumulative arc lengths for interpolation
-  const cumLen = [0];
-  for (let i = 1; i < pts.length; i++) {
-    const dot = Math.max(-1, Math.min(1, pts[i-1].x*pts[i].x + pts[i-1].y*pts[i].y + pts[i-1].z*pts[i].z));
-    cumLen.push(cumLen[i-1] + Math.acos(dot));
-  }
-
-  const newPts: SpherePoint[] = [{ ...pts[0] }];
-  let seg = 0;
-  for (let i = 1; i < totalCount - 1; i++) {
-    const target = (i / (totalCount - 1)) * arcLen;
-    while (seg < pts.length - 2 && cumLen[seg + 1] < target) seg++;
-    const segLen = cumLen[seg + 1] - cumLen[seg];
-    const t = segLen < 1e-12 ? 0 : (target - cumLen[seg]) / segLen;
-    newPts.push(slerp(pts[seg], pts[seg + 1], t));
-  }
-  newPts.push({ ...pts[pts.length - 1] });
-
-  return newPts;
-}
 
 // ---------------------------------------------------------------------------
 // Arc-length redistribution
@@ -997,24 +908,8 @@ function resampledPoints(pts: SpherePoint[], interiorCount: number): SpherePoint
  * respaced polyline, which is applied only if it passes. */
 function redistributePoints(pts: SpherePoint[], accept?: (next: SpherePoint[]) => boolean): boolean {
   const n = pts.length;
-  const arcLen = [0];
-  for (let i = 1; i < n; i++) {
-    const d0 = Math.min(1, Math.max(-1, pts[i-1].x*pts[i].x + pts[i-1].y*pts[i].y + pts[i-1].z*pts[i].z));
-    arcLen.push(arcLen[i-1] + Math.acos(d0));
-  }
-  const total = arcLen[n-1];
-  if (total < 1e-12) return false;
-
-  const result: SpherePoint[] = [{ ...pts[0] }];
-  let seg = 0;
-  for (let i = 1; i < n - 1; i++) {
-    const target = (i / (n - 1)) * total;
-    while (seg < n - 2 && arcLen[seg + 1] < target) seg++;
-    const segLen = arcLen[seg + 1] - arcLen[seg];
-    const t = segLen < 1e-12 ? 0 : (target - arcLen[seg]) / segLen;
-    result.push(slerp(pts[seg], pts[seg + 1], t));
-  }
-  result.push({ ...pts[n-1] });
+  if (polylineLength(pts) < 1e-12) return false;
+  const result = resamplePolyline(pts, n);
 
   // Endpoints are untouched; pass them through as the same objects so `accept` can tell them apart.
   result[0] = pts[0];
@@ -1022,8 +917,7 @@ function redistributePoints(pts: SpherePoint[], accept?: (next: SpherePoint[]) =
   if (accept && !accept(result)) return false;
   let moved = false;
   for (let i = 1; i < n - 1; i++) {
-    const dot = Math.max(-1, Math.min(1, pts[i].x*result[i].x + pts[i].y*result[i].y + pts[i].z*result[i].z));
-    if (Math.acos(dot) > tunables.settleEpsilon) moved = true;
+    if (sphereAngle(pts[i], result[i]) > tunables.settleEpsilon) moved = true;
     pts[i] = result[i];
   }
   return moved;
@@ -1041,8 +935,7 @@ function laplacianSmooth(pts: SpherePoint[], iterations: number, strength: numbe
       const mid = slerp(pts[i-1], pts[i+1], 0.5);
       const next = slerp(pts[i], mid, strength);
       if (mayMove && !mayMove(i, next)) continue;
-      const dot = Math.max(-1, Math.min(1, pts[i].x*next.x + pts[i].y*next.y + pts[i].z*next.z));
-      if (Math.acos(dot) > tunables.settleEpsilon) moved = true;
+      if (sphereAngle(pts[i], next) > tunables.settleEpsilon) moved = true;
       pts[i] = next;
     }
   }

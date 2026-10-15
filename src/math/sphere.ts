@@ -287,8 +287,66 @@ export function sphereCentroid(points: SpherePoint[]): SpherePoint {
 
 /** Great-circle angular distance between two sphere points, in radians ([0, π]). */
 export function sphereAngle(a: SpherePoint, b: SpherePoint): number {
-  const dot = Math.max(-1, Math.min(1, a.x*b.x + a.y*b.y + a.z*b.z));
-  return Math.acos(dot);
+  return Math.acos(Math.max(-1, Math.min(1, dot(a, b))));
+}
+
+// ---------------------------------------------------------------------------
+// Vector primitives — the single copy; don't redefine these locally.
+// ---------------------------------------------------------------------------
+
+export const dot = (a: SpherePoint, b: SpherePoint): number => a.x * b.x + a.y * b.y + a.z * b.z;
+export const cross = (a: SpherePoint, b: SpherePoint): SpherePoint =>
+  ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });
+export const add = (a: SpherePoint, b: SpherePoint): SpherePoint => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z });
+export const scale = (a: SpherePoint, s: number): SpherePoint => ({ x: a.x * s, y: a.y * s, z: a.z * s });
+/** Squared chord distance — a cheap "same point?" / broad-phase test. */
+export const chord2 = (a: SpherePoint, b: SpherePoint): number => (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2;
+
+/**
+ * Orthonormal tangent basis (e1, e2) at unit point `n`, with e2 = n × e1 (so bearings measured from
+ * e1 toward e2 are CCW seen from outside the sphere). e1 is the projection of +z, or of +x near the
+ * poles. Every tangent-plane construction (bearings, small circles, stereographic charts) uses this.
+ */
+export function tangentFrame(n: SpherePoint): { e1: SpherePoint; e2: SpherePoint } {
+  const up: SpherePoint = Math.abs(n.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+  const e1 = normalize(add(up, scale(n, -dot(up, n))));
+  return { e1, e2: cross(n, e1) };
+}
+
+/** `count` near-uniform points on the unit sphere (Fibonacci / golden-angle lattice). */
+export function fibonacciSphere(count: number): SpherePoint[] {
+  const ga = Math.PI * (3 - Math.sqrt(5));
+  const pts: SpherePoint[] = [];
+  for (let i = 0; i < count; i++) {
+    const y = 1 - (2 * i + 1) / count;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    pts.push({ x: Math.cos(ga * i) * r, y, z: Math.sin(ga * i) * r });
+  }
+  return pts;
+}
+
+/** Total geodesic arc length (radians) of a polyline. */
+export function polylineLength(pts: SpherePoint[]): number {
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) total += sphereAngle(pts[i - 1], pts[i]);
+  return total;
+}
+
+/** A polyline resampled to `count` points evenly spaced by arc length (endpoints copied exactly). */
+export function resamplePolyline(pts: SpherePoint[], count: number): SpherePoint[] {
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + sphereAngle(pts[i - 1], pts[i]));
+  const total = cum[cum.length - 1];
+  const out: SpherePoint[] = [{ ...pts[0] }];
+  let seg = 0;
+  for (let i = 1; i < count - 1; i++) {
+    const target = (i / (count - 1)) * total;
+    while (seg < pts.length - 2 && cum[seg + 1] < target) seg++;
+    const segLen = cum[seg + 1] - cum[seg];
+    out.push(slerp(pts[seg], pts[seg + 1], segLen < 1e-12 ? 0 : (target - cum[seg]) / segLen));
+  }
+  out.push({ ...pts[pts.length - 1] });
+  return out;
 }
 
 /** Spherical linear interpolation between two sphere points. */
@@ -344,6 +402,32 @@ export function arcsCross(a0: SpherePoint, a1: SpherePoint, b0: SpherePoint, b1:
     isBetween(a0, a1, nax, nay, naz, qx, qy, qz) && isBetween(b0, b1, nbx, nby, nbz, qx, qy, qz);
 
   return matchesCandidate(px, py, pz) || matchesCandidate(-px, -py, -pz);
+}
+// arcsCross never reports the antipodal "ghost" intersection (the isBetween test above rules it out;
+// checked on 2M random arc pairs, 2026-10-12) — callers need no extra hemisphere/midpoint guard.
+
+/** Two end points closer than this (squared chord) are the same shared vertex. */
+export const SAME_POINT2 = 1e-12;
+
+/**
+ * True if arc a0->a1 crosses arc b0->b1 anywhere other than at a shared end point — the crossing test
+ * for "does this polyline cross that one": segments meeting at a common vertex are skipped as a PAIR,
+ * never by skipping whole end segments (which hides real crossings near a vertex).
+ */
+export function arcsProperlyCross(a0: SpherePoint, a1: SpherePoint, b0: SpherePoint, b1: SpherePoint): boolean {
+  // Cheap exact reject: a crossing point X has |a0-X| + |X-b0| <= arc(A) + arc(B) <= (π/2)(|A| + |B|)
+  // in chord length, and (|A| + |B|)² <= 2(|A|² + |B|²) — so beyond 2·(π/2)²·(|A|² + |B|²) they can't meet.
+  if (chord2(a0, b0) > 4.94 * (chord2(a0, a1) + chord2(b0, b1))) return false;
+  if (chord2(a0, b0) < SAME_POINT2 || chord2(a0, b1) < SAME_POINT2 || chord2(a1, b0) < SAME_POINT2 || chord2(a1, b1) < SAME_POINT2) return false;
+  return arcsCross(a0, a1, b0, b1);
+}
+
+/** True if any segment of polyline `a` properly crosses any segment of polyline `b` (see arcsProperlyCross). */
+export function polylinesProperlyCross(a: SpherePoint[], b: SpherePoint[]): boolean {
+  for (let i = 0; i + 1 < a.length; i++)
+    for (let j = 0; j + 1 < b.length; j++)
+      if (arcsProperlyCross(a[i], a[i + 1], b[j], b[j + 1])) return true;
+  return false;
 }
 
 /**

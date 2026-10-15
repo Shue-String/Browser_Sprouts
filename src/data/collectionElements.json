@@ -7169,7 +7169,7 @@
     },
     {
       "name": "S_54",
-      "rep": "2C|222Ca",
+      "rep": "2223a",
       "genome": {"R":3,"D":1,"L":[0,2,3],"Z":[],"T":[{"name":"S_19"},{"name":"S_1","shift":1},{"name":"S_2","shift":1},{"name":"S_11"},{"name":"S_9"}]},
       "offsets": [
         {

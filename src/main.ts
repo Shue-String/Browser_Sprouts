@@ -1,30 +1,29 @@
 import { createInitialState, cloneState } from './model/gameState';
 import { applyMove, recomputeRegions } from './model/moves';
-import { encodePosition, encodePositionDecompressed, canonicalEncoding, resolveMoveVertices, classifyVertexFull } from './model/encoding';
+import { encodePosition, encodePositionDecompressed, canonicalEncoding, resolveMoveVertices, classifyVertexFull, trackedLayout } from './model/encoding';
+import type { ResolvedMoveVertices } from './model/encoding';
 import { VertexType } from './model/types';
 import type { EncodingResult } from './model/encoding';
 import { computeMoveCode, computeEnclosureSideColoring, computeEnclosureCoverage } from './model/moveCode';
 import { recomputeSpotLabels, initialSpotLabels, labelForFromMap, spotGroupForFromMap, formatSpotLabel } from './model/vertexLabels';
 import { parseMoveSequence } from './model/moveCodeParse';
 import type { ResolvedMove } from './model/moveCodeParse';
-import { synthesizeMove, appliedMoveMatches, computeRecreateHints, strokeReproduces } from './model/recreate';
+import { synthesizeMove, appliedMoveMatches, computeRecreateHints, strokeReproduces, applyTrial } from './model/recreate';
 import type { RecreateHints } from './model/recreate';
-import { resolveBracketEntry, resolveMoveEndpoints, resolveParensEntry } from './model/vertexLabels';
+import { resolveLabelledMove } from './model/vertexLabels';
 import { rawRouteOf } from './model/moveRouter';
-import { strokeCrossesEdges, candidateStrokes, candidateStrokeStream, candidateSelfLoopArcsWithSeeds } from './model/strokeSynthesis';
+import { strokeCrossesEdges, candidateStrokes, candidateStrokeStream } from './model/strokeSynthesis';
 import { allRoutedMoves } from './model/moveRouter';
 import { moveLog } from './debug/moveLog';
 import { DEBUG } from './debug/flags';
 import { smoothStep, smoothStepDrag, resampleAllEdges, lastMaxMovement, resetActivityTimer } from './model/smooth';
 import { tunables, TUNABLE_SPECS, loadTunables, saveTunables, resetTunables } from './model/tunables';
-import { deadRegionStep, eliminateIsolatedVertex, detectLouse, louseCollapseStep, detectParallelDead, parallelDeadStep, detectTripleParallelDead, tripleParallelDeadStep, detectTriangleDead, triangleDeadStep, detectQuadDead, quadDeadStep, scabAloneCollapse, detectBigonTip, bigonTipStep, detectEnclosedTriangle, enclosedTriangleStep, detectSelfConnectedDead, selfConnectedDeadStep } from './model/deadRegions';
-import type { LouseCollapse, ParallelDeadCollapse, TripleParallelDeadCollapse, TriangleDeadCollapse, QuadDeadCollapse, BigonTipCollapse, EnclosedTriangleCollapse, SelfConnectedDeadCollapse } from './model/deadRegions';
-
-type SpecialCollapse = LouseCollapse | ParallelDeadCollapse | TripleParallelDeadCollapse | TriangleDeadCollapse | QuadDeadCollapse | BigonTipCollapse | EnclosedTriangleCollapse | SelfConnectedDeadCollapse;
+import { deadRegionStep, eliminateIsolatedVertex, detectLouse, scabAloneCollapse, detectSpecialCollapse, specialCollapseVertices, stepSpecialCollapse, takeEncodingGateRefusal } from './model/deadRegions';
+import type { SpecialCollapse } from './model/deadRegions';
 import { Renderer } from './render/renderer';
 import type { SubregionHighlight } from './render/renderer';
 import { InputHandler } from './input/inputHandler';
-import { identityRotation, rotationX, rotationY, composeRotations, rotateSpherePoint, axisAngleRotation } from './math/sphere';
+import { identityRotation, rotationX, rotationY, composeRotations, rotateSpherePoint, axisAngleRotation, fibonacciSphere } from './math/sphere';
 import type { RotationMatrix, SpherePoint } from './math/sphere';
 import type { GameState, VertexId } from './model/types';
 import { buildVoronoiGraph } from './model/voronoiGraph';
@@ -39,7 +38,7 @@ import { openGuide, closeGuide, isGuideOpen } from './ui/guide';
 import { initCollect } from './ui/collect';
 import { initTTree } from './ui/ttree';
 import { initGenomes } from './ui/genomes';
-import { canon as canonEncoding, preloadModule, canonicalizeTrackedProvenanceSync, canonSync } from './engine/stalks';
+import { canon as canonEncoding, preloadModule, canonSync } from './engine/stalks';
 import { recordEdge, loadMasterSeed, loadQuickMasterSeed } from './model/positionCache';
 
 // Kick off the WASM module load immediately (independent of the Tracked Encoding toggle) so
@@ -135,20 +134,33 @@ let hoverCharInfo: { vertexIds: number[]; edgeId?: number } | null = null;
 // Same idea, for the wide Position Browser's live-encoding row (see render loop below).
 let lastLiveCharInfo: EncodingResult['charInfo'] = [];
 
-bottomBarText.addEventListener('mousemove', e => {
-  const target = e.target as HTMLElement;
-  const idxAttr = target?.dataset?.idx;
-  const idx = idxAttr !== undefined ? Number(idxAttr) : NaN;
-  const info = !Number.isNaN(idx) ? lastCharInfo[idx] : undefined;
-  const next = info && info.vertexIds.length > 0 ? info : null;
-  if (next !== hoverCharInfo) {
-    hoverCharInfo = next;
-    wake();
-  }
-});
-bottomBarText.addEventListener('mouseleave', () => {
-  if (hoverCharInfo !== null) { hoverCharInfo = null; wake(); }
-});
+/** Hovering a character of `el` (filled by renderCharSpans) highlights the board vertex/edge that
+ * character came from, per `infoOf()`'s current per-character provenance. */
+function wireCharHover(el: HTMLElement, infoOf: () => { vertexIds: number[]; edgeId?: number }[]): void {
+  el.addEventListener('mousemove', e => {
+    const idxAttr = (e.target as HTMLElement)?.dataset?.idx;
+    const idx = idxAttr !== undefined ? Number(idxAttr) : NaN;
+    const info = !Number.isNaN(idx) ? infoOf()[idx] : undefined;
+    const next = info && info.vertexIds.length > 0 ? info : null;
+    if (next !== hoverCharInfo) { hoverCharInfo = next; wake(); }
+  });
+  el.addEventListener('mouseleave', () => {
+    if (hoverCharInfo !== null) { hoverCharInfo = null; wake(); }
+  });
+}
+
+/** Replace `el`'s content with one span per character of `text`, indexed for wireCharHover. */
+function renderCharSpans(el: HTMLElement, text: string): void {
+  el.innerHTML = '';
+  text.split('').forEach((ch, idx) => {
+    const span = document.createElement('span');
+    span.textContent = ch;
+    span.dataset.idx = String(idx);
+    el.appendChild(span);
+  });
+}
+
+wireCharHover(bottomBarText, () => lastCharInfo);
 
 // Position Browser move hover/lock preview: a dashed arc on the playfield for whatever child
 // move the browser is currently hovering/locking, resolved from the engine's abstract MoveInfo
@@ -215,19 +227,6 @@ async function precomputeChildrenMoves(targets: MovePreviewTarget[]): Promise<vo
     if (!layoutQuiet()) { pendingChildTargets = targets; return false; }
     return true;
   };
-  const tryStroke = async (v1: number, v2: number, stroke: SpherePoint[]): Promise<string | null> => {
-    if (strokeCrossesEdges(state, stroke, undefined, v1, v2)) return null;
-    const trial = cloneState(state);
-    try {
-      applyMove(trial, { v1, v2, stroke });
-    } catch {
-      return null;
-    }
-    const reached = await trialCanonOf(trial);
-    if (!results.has(reached)) results.set(reached, { v1, v2, stroke });
-    return reached;
-  };
-
   const wanted = new Set<string>();
   for (const t of targets) wanted.add(await canonEncoding(t.targetEnc));
   for (const t of targets) {
@@ -236,20 +235,37 @@ async function precomputeChildrenMoves(targets: MovePreviewTarget[]): Promise<vo
     if (!resolved) continue;
     const target = await canonEncoding(t.targetEnc);
     if (results.has(target)) continue;
-    const parsed: ResolvedMove = {
-      token: '', checkEncoding: null, lo: resolved.v1, hi: resolved.v2, loSub: null, hiSub: null,
-      parallel: false, parens: null, brackets: resolved.brackets ?? null,
-    };
-    for (const stroke of candidateStrokeStream(state, parsed)) {
+    for (const stroke of candidateStrokeStream(state, parsedFromResolved(resolved))) {
       if (!(await yieldOk())) return;
-      if ((await tryStroke(resolved.v1, resolved.v2, stroke)) === target) break;
+      if ((await tryStroke(resolved.v1, resolved.v2, stroke, results)) === target) break;
     }
   }
   const covered = (): boolean => [...wanted].every(c => results.has(c));
   for (const mv of allRoutedMoves(state)) {
     if (covered() || !(await yieldOk())) return;
-    await tryStroke(mv.v1, mv.v2, mv.stroke);
+    await tryStroke(mv.v1, mv.v2, mv.stroke, results);
   }
+}
+
+/**
+ * Try one stroke on the live board (applyTrial: legal and applied on a clone) and return the canon
+ * it reaches — recorded in `cache` as a stroke for that child, first stroke wins — or null when the
+ * stroke is illegal. Shared by the background children pass and hover verification.
+ */
+async function tryStroke(v1: number, v2: number, stroke: SpherePoint[], cache: Map<string, { v1: number; v2: number; stroke: SpherePoint[] }>): Promise<string | null> {
+  const trial = applyTrial(state, v1, v2, stroke);
+  if (!trial) return null;
+  const reached = await trialCanonOf(trial);
+  if (!cache.has(reached)) cache.set(reached, { v1, v2, stroke });
+  return reached;
+}
+
+/** A ResolvedMove for candidate synthesis from an engine move translated to live vertices. */
+function parsedFromResolved(resolved: ResolvedMoveVertices): ResolvedMove {
+  return {
+    token: '', checkEncoding: null, lo: resolved.v1, hi: resolved.v2, loSub: null, hiSub: null,
+    parallel: false, parens: null, brackets: resolved.brackets ?? null,
+  };
 }
 
 setMoveCallbacks({
@@ -330,16 +346,13 @@ async function synthesizeVerifiedMove(target: MovePreviewTarget): Promise<Synthe
   // first: when the pass has covered this child, the hover is instant.
   const cached = async (): Promise<SynthesizeResult | null> => {
     const hit = attemptedResultCanons.get(await canonEncoding(target.targetEnc));
-    return hit && !strokeCrossesEdges(state, hit.stroke, undefined, hit.v1, hit.v2) ? { kind: 'found', ...hit } : null;
+    return hit && !strokeCrossesEdges(state, hit.stroke) ? { kind: 'found', ...hit } : null;
   };
   const early = await cached();
   if (early) return early;
   const resolved = resolveMoveVertices(state, target.move);
   if (!resolved) return (await cached()) ?? { kind: 'unresolved' };
-  const parsed: ResolvedMove = {
-    token: '', checkEncoding: null, lo: resolved.v1, hi: resolved.v2, loSub: null, hiSub: null,
-    parallel: false, parens: null, brackets: resolved.brackets ?? null,
-  };
+  const parsed = parsedFromResolved(resolved);
   // target.targetEnc comes straight from the WASM engine's analyze() child
   // list, which is not guaranteed to already be in the same bracketless/
   // DisaPoint-compressed form that canonEncoding() below produces for the
@@ -350,19 +363,9 @@ async function synthesizeVerifiedMove(target: MovePreviewTarget): Promise<Synthe
   const targetCanon = await canonEncoding(target.targetEnc);
   const candidates: { stroke: SpherePoint[]; legal: boolean }[] = [];
   for (const stroke of candidateStrokeStream(state, parsed)) {
-    const legal = !strokeCrossesEdges(state, stroke, undefined, resolved.v1, resolved.v2);
-    candidates.push({ stroke, legal });
-    if (!legal) continue;
-    const trial = cloneState(state);
-    try {
-      applyMove(trial, { v1: resolved.v1, v2: resolved.v2, stroke });
-    } catch {
-      continue;
-    }
-    const trialCanon = await trialCanonOf(trial);
-    if (trialCanon === targetCanon) {
-      return { kind: 'found', v1: resolved.v1, v2: resolved.v2, stroke };
-    }
+    const reached = await tryStroke(resolved.v1, resolved.v2, stroke, attemptedResultCanons);
+    candidates.push({ stroke, legal: reached !== null });
+    if (reached === targetCanon) return { kind: 'found', v1: resolved.v1, v2: resolved.v2, stroke };
   }
   // None of this move's own candidates reach it directly — the background pass may have found a
   // stroke for it anyway (see precomputeChildrenMoves above).
@@ -629,20 +632,26 @@ function updateSaveButton(): void {
 // recorded unconditionally for Save/Recreate regardless of whether Debug mode is unlocked yet.
 // All four vertex-ID x sequence-verifier variants live on every entry (see moveSeqLog's own doc
 // comment); this just picks which one to show based on the current toggles.
-function moveSeqTokens(): string[] {
-  if (moveCheckMode) return moveSeqLog.map(m => useRawVertexIds ? m.moveSeqRawTagged : m.moveSeqTagged);
-  return moveSeqLog.map(m => useRawVertexIds ? m.moveSeqRaw : m.moveSeq);
+/**
+ * The full Move Sequence string: `n` + markers + ':' + tokens. The markers tell Recreate how to read
+ * the tokens — `L` when they're spot labels (parseMoveSequence otherwise reads every number as a raw
+ * vertex id, and label ranges like "[-3..-2]" can't replay), `C` when they carry {encoding} tags to
+ * verify. `tagged` picks the Move Check variant of each token.
+ */
+function formatMoveSequence(tagged: boolean): string {
+  const tokens = moveSeqLog.map(m => useRawVertexIds
+    ? (tagged ? m.moveSeqRawTagged : m.moveSeqRaw)
+    : (tagged ? m.moveSeqTagged : m.moveSeq));
+  return `${currentSpotCount}${useRawVertexIds ? '' : 'L'}${tagged ? 'C' : ''}:${tokens.join('/')}`;
 }
 /** Copy always hands out the sequence-verifier-on ({encoding}-tagged) variant, matching the
  * current vertex-ID/label toggle, regardless of whether Move Check is currently switched on —
  * so the copied sequence is verifiable even if the user just wants to look at plain move text. */
 function moveSeqCopyText(): string {
-  const tokens = moveSeqLog.map(m => useRawVertexIds ? m.moveSeqRawTagged : m.moveSeqTagged);
-  return `${currentSpotCount}:${tokens.join('/')}`;
+  return formatMoveSequence(true);
 }
 function updateMoveSeq(): void {
-  const tokens = moveSeqTokens();
-  const text = `${currentSpotCount}:${tokens.join('/')}`;
+  const text = formatMoveSequence(moveCheckMode);
 
   if (debugUnlocked) {
     moveSeqText.textContent = text;
@@ -677,12 +686,15 @@ document.addEventListener('keydown', e => {
     wake();
     resolve(true);
   }
-  // In manual-draw mode with a proposed arc, Enter force-commits that arc as a
-  // proper edge without token verification (best-effort for blocked enclosures).
+  // Escape closes the Guide, else whichever overlay dialog is open (the Position Browser handles
+  // its own Escape — unlock a locked preview first).
   if (e.key === 'Escape') {
     if (isGuideOpen()) { closeGuide(); return; }
-    if (collectOverlay.classList.contains('visible')) { collectOverlay.classList.remove('visible'); return; }
+    const open = overlayClosers.find(o => o.overlay.classList.contains('visible'));
+    if (open) { open.close(); return; }
   }
+  // In manual-draw mode with a proposed arc, Enter force-commits that arc as a
+  // proper edge without token verification (best-effort for blocked enclosures).
   if (e.key === 'Enter' && manualAwait && proposedArc) {
     e.preventDefault();
     const arc = proposedArc;
@@ -692,10 +704,7 @@ document.addEventListener('keydown', e => {
       pushHistorySnapshot();
       applyMove(state, { v1: await_.parsed.lo, v2: await_.parsed.hi, stroke: arc });
       afterMoveCommitted(await_.parsed.lo, await_.parsed.hi, arc);
-      manualAwait = null;
-      manualHints = null;
-      subregionHighlight = null;
-      hideBanner();
+      clearManualPause();
       wake();
       await_.resolve(true);
     } catch (err) {
@@ -831,18 +840,36 @@ function collapseActive(): boolean {
 function checkForCollapses(): void {
   if (collapseActive()) return;
   if (collapseCountThisMove >= MAX_COLLAPSES_PER_MOVE) return;
-  pendingCollapse = detectLouse(state) ?? detectParallelDead(state) ?? detectTripleParallelDead(state) ?? detectTriangleDead(state) ?? detectEnclosedTriangle(state) ?? detectQuadDead(state) ?? detectBigonTip(state) ?? detectSelfConnectedDead(state);
+  pendingCollapse = detectSpecialCollapse(state);
+  collapseSnapshot = pendingCollapse ? { of: pendingCollapse, state: cloneState(state) } : null;
 }
 
-/** Vertex IDs that the active special collapse owns (excluded from deadRegionStep). */
-function collapseVertices(c: SpecialCollapse): Set<number> {
-  if (c.kind === 'louse') return new Set([...c.outer, c.inner]);
-  if (c.kind === 'parallel-dead') return new Set([c.p, c.q]);
-  if (c.kind === 'triple-parallel-dead') return new Set([c.p, c.q]);
-  if (c.kind === 'quad-dead') return new Set([c.a, c.b, c.c, c.d]);
-  if (c.kind === 'bigon-tip') return new Set([c.w, c.a]);
-  if (c.kind === 'self-connected-dead') return new Set([c.s, c.t]);
-  return new Set([c.a, c.b, c.c]);
+/** The board as it stood when the current special collapse was detected — what a refused one
+ * reverts to (its animation has moved geometry outside the encoding gate's rollback). */
+let collapseSnapshot: { of: SpecialCollapse; state: GameState } | null = null;
+
+const collapseOffNote = document.getElementById('collapse-off-note') as HTMLDivElement;
+
+/**
+ * Handle a dead-region surgery the encoding gate refused (takeEncodingGateRefusal): a collapse
+ * bug. The refused surgery itself is already rolled back; when it was the special collapse
+ * `finished`, whose animation has also moved geometry, the board goes back to how it stood when
+ * that collapse was detected. Either way collapsing is switched off (the next attempt would hit the
+ * same bug) and the playfield says so. Returns whether a refusal was handled.
+ */
+function revertIfCollapseRefused(finished?: SpecialCollapse): boolean {
+  if (!takeEncodingGateRefusal()) return false;
+  if (finished && collapseSnapshot?.of === finished) Object.assign(state, collapseSnapshot.state);
+  console.warn(`[collapse] encoding check refused ${finished ? finished.kind : 'a surgery'} — ${finished ? 'reverted; ' : ''}collapsing turned off`);
+  logCollapse(`${finished?.kind ?? 'surgery'} REFUSED — collapsing off`);
+  collapseSnapshot = null;
+  pendingCollapse = null;
+  generalCollapseFocus = null;
+  shrinkCheckbox.checked = false;
+  collapseOffNote.classList.add('visible');
+  resampleAllEdges(state);
+  wake();
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -874,12 +901,8 @@ function afterMoveCommitted(v1: number, v2: number, stroke: SpherePoint[]): void
     // resolve correctly off the POST-move map; a non-spot endpoint (or one
     // that was already fixed in an earlier move) also resolves correctly
     // since fixed entries persist in the map forever.
-    let labeled = computeMoveCode(
-      prevState, v1, v2, state,
-      labelForFromMap(state.spotLabels),
-      spotGroupForFromMap(state.spotLabels),
-    );
-    let raw = computeMoveCode(prevState, v1, v2, state);
+    const entry = moveSeqEntryOf(prevState, state, v1, v2);
+    const raw = entry.moveSeqRaw;
     // Debug-unlock detection: only live play counts (not Recreate playback), and only from a
     // fresh 4-spot game — any move off the target sequence's prefix resets the streak.
     if (!recreateActive && !debugUnlocked && currentSpotCount === DEBUG_UNLOCK_SPOTS) {
@@ -908,14 +931,8 @@ function afterMoveCommitted(v1: number, v2: number, stroke: SpherePoint[]): void
     // Recorded regardless of moveCheckMode so Recreate can verify a "C"-tagged
     // sequence even if this session's toggle happens to be off during replay.
     lastCommittedEncoding = encodePosition(state).text;
-    const tag = `{${lastCommittedEncoding}}`;
     top.committed = { v1, v2, rawStroke: stroke };
-    moveSeqLog.push({
-      moveSeq: labeled,
-      moveSeqRaw: raw,
-      moveSeqTagged: labeled + tag,
-      moveSeqRawTagged: raw + tag,
-    });
+    moveSeqLog.push(entry);
     updateMoveSeq();
   }
   updateTurnIndicator();
@@ -929,7 +946,7 @@ function afterMoveCommitted(v1: number, v2: number, stroke: SpherePoint[]): void
     // Eliminate fresh isolated midpoints synchronously before collapse detection,
     // so detectTriangleDead etc. see the final topology (not a transient degree-2 midpoint).
     while (eliminateIsolatedVertex(state) !== null) {}
-    checkForCollapses();
+    if (!revertIfCollapseRefused()) checkForCollapses();
   }
   // Record the (canonical) game-tree edge for the Position Browser's "Known Parents". The
   // position has now settled (post-collapse); prevState is the settled pre-move position.
@@ -948,6 +965,19 @@ function afterMoveCommitted(v1: number, v2: number, stroke: SpherePoint[]): void
   // reflects animation time only, not calculation time.
   resetActivityTimer(3000);
   wake();
+}
+
+/**
+ * A committed move's four recorded token forms (label / raw-id, plain / {encoding}-tagged), from
+ * the boards immediately before and after it. `after.spotLabels` must already be the post-move
+ * labels (a departing spot endpoint is only fixed once the move is made). Used at commit time and
+ * to rebuild a loaded game's log from its saved history.
+ */
+function moveSeqEntryOf(before: GameState, after: GameState, v1: VertexId, v2: VertexId): MoveSeqEntry {
+  const labeled = computeMoveCode(before, v1, v2, after, labelForFromMap(after.spotLabels), spotGroupForFromMap(after.spotLabels));
+  const raw = computeMoveCode(before, v1, v2, after);
+  const tag = `{${encodePosition(after).text}}`;
+  return { moveSeq: labeled, moveSeqRaw: raw, moveSeqTagged: labeled + tag, moveSeqRawTagged: raw + tag };
 }
 
 /** Fire the pending tracked check once topology is quiescent. Polls itself until no special
@@ -1177,50 +1207,31 @@ document.querySelectorAll<HTMLButtonElement>('.guide-hint').forEach(btn => {
   });
 });
 
-// Collect (top bar).
-const collectBtn     = document.getElementById('collect-btn')     as HTMLButtonElement;
-const collectOverlay = document.getElementById('collect-overlay') as HTMLDivElement;
-const collectClose   = document.getElementById('collect-close')   as HTMLButtonElement;
+/** Every modal overlay dialog, for Escape (see the keydown handler). */
+const overlayClosers: { overlay: HTMLElement; close: () => void }[] = [];
 
-collectBtn.addEventListener('click', e => {
-  e.stopPropagation();
-  initCollect();
-  collectOverlay.classList.add('visible');
-});
-collectClose.addEventListener('click', () => collectOverlay.classList.remove('visible'));
-collectOverlay.addEventListener('click', e => {
-  if (e.target === collectOverlay) collectOverlay.classList.remove('visible');
-});
+/** Wire a modal overlay: its close button, a click on the backdrop, and Escape all close it. */
+function wireOverlay(overlay: HTMLElement, closeBtn: HTMLElement, onClose?: () => void): void {
+  const close = (): void => { overlay.classList.remove('visible'); onClose?.(); };
+  closeBtn.addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlayClosers.push({ overlay, close });
+}
 
-// T-Tree (top bar).
-const ttreeBtn     = document.getElementById('ttree-btn')     as HTMLButtonElement;
-const ttreeOverlay = document.getElementById('ttree-overlay') as HTMLDivElement;
-const ttreeClose   = document.getElementById('ttree-close')   as HTMLButtonElement;
+/** A top-bar panel: its button builds the panel (first time) and opens the overlay. */
+function wirePanel(name: string, init: () => void): void {
+  const overlay = document.getElementById(`${name}-overlay`) as HTMLDivElement;
+  (document.getElementById(`${name}-btn`) as HTMLButtonElement).addEventListener('click', e => {
+    e.stopPropagation();
+    init();
+    overlay.classList.add('visible');
+  });
+  wireOverlay(overlay, document.getElementById(`${name}-close`) as HTMLButtonElement);
+}
 
-ttreeBtn.addEventListener('click', e => {
-  e.stopPropagation();
-  initTTree();
-  ttreeOverlay.classList.add('visible');
-});
-ttreeClose.addEventListener('click', () => ttreeOverlay.classList.remove('visible'));
-ttreeOverlay.addEventListener('click', e => {
-  if (e.target === ttreeOverlay) ttreeOverlay.classList.remove('visible');
-});
-
-// Genomes (top bar).
-const genomesBtn     = document.getElementById('genomes-btn')     as HTMLButtonElement;
-const genomesOverlay = document.getElementById('genomes-overlay') as HTMLDivElement;
-const genomesClose   = document.getElementById('genomes-close')   as HTMLButtonElement;
-
-genomesBtn.addEventListener('click', e => {
-  e.stopPropagation();
-  initGenomes();
-  genomesOverlay.classList.add('visible');
-});
-genomesClose.addEventListener('click', () => genomesOverlay.classList.remove('visible'));
-genomesOverlay.addEventListener('click', e => {
-  if (e.target === genomesOverlay) genomesOverlay.classList.remove('visible');
-});
+wirePanel('collect', initCollect);
+wirePanel('ttree', initTTree);
+wirePanel('genomes', initGenomes);
 
 // Only shown (below the wide-panel breakpoint) as a way to open the same Position Browser
 // the wide layout would otherwise show as a persistent side panel.
@@ -1277,15 +1288,7 @@ loadGameInput.addEventListener('change', () => {
 
 /** Restore `state`/`camera`/move history from a save file, resuming a paused move if one was saved. */
 function loadGameState(save: SaveFileV2): void {
-  // Abort any in-progress Recreate, mirroring the New Game confirm handler.
-  if (recreateActive) {
-    if (manualAwait) { manualAwait.resolve(false); manualAwait = null; }
-    if (candidateResolve) { candidateResolve(false); candidateResolve = null; candidatePreviewList = null; }
-    recreateActive = false;
-    manualHints = null;
-    setPaused(false);
-    hideBanner();
-  }
+  abortRecreate();
 
   const deserialized = deserializeGameState(save);
   Object.assign(state, deserialized.state);
@@ -1313,20 +1316,33 @@ function loadGameState(save: SaveFileV2): void {
   }
   state.spotLabels = replayLabels;
 
+  // Rebuild every move's four token forms the way afterMoveCommitted recorded them: replay each
+  // saved stroke on its saved pre-move board. A save only stores the label form (with or without
+  // its {encoding} tag), so this is the only source of the raw-id and tagged forms. If a step can't
+  // be replayed, or replays to a different label token than the save recorded, the saved token
+  // stands in for all four forms.
   moveSeqLog.length = 0;
-  for (const token of deserialized.moveSequence) {
+  deserialized.moveSequence.forEach((token, i) => {
     const base = stripMoveCheckTag(token);
-    const tag = moveCheckTagOf(token);
-    // A loaded save's tokens carry whatever tag they were saved with (possibly none, if
-    // Move Check was off during that play session) — there's no encoding to recover for an
-    // untagged token, so the "tagged" variant just falls back to the untagged form.
-    moveSeqLog.push({
-      moveSeq: base,
-      moveSeqRaw: base,
-      moveSeqTagged: tag ? base + tag : base,
-      moveSeqRawTagged: tag ? base + tag : base,
-    });
-  }
+    const step = history[i];
+    if (step?.committed) {
+      try {
+        const { v1, v2, rawStroke } = step.committed;
+        const after = cloneState(step.state);
+        applyMove(after, { v1, v2, stroke: rawStroke.map(p => ({ ...p })) });
+        resampleAllEdges(after);
+        after.spotLabels = recomputeSpotLabels(step.state.spotLabels, step.state, after, v1, v2);
+        const entry = moveSeqEntryOf(step.state, after, v1, v2);
+        if (entry.moveSeq === base) { moveSeqLog.push(entry); return; }
+        console.warn(`[load] move ${i + 1}: saved token ${base} but the replay records ${entry.moveSeq}; keeping the saved one`);
+      } catch (err) {
+        console.warn(`[load] move ${i + 1}: could not replay the saved stroke`, err);
+      }
+    }
+    const tagged = base + moveCheckTagOf(token);
+    moveSeqLog.push({ moveSeq: base, moveSeqRaw: base, moveSeqTagged: tagged, moveSeqRawTagged: tagged });
+  });
+  moveLog.length = 0; // the debug region-trace log starts over with the loaded game
   liveUnlockTokens.length = 0;
   currentSpotCount = deserialized.currentSpotCount;
   camera = deserialized.camera;
@@ -1462,10 +1478,7 @@ tuningBtn.addEventListener('click', e => {
 // gets a chance to react to the new constants until something else wakes it up.
 // Without this, closing the panel could silently leave stale geometry on screen
 // until the user drags a vertex.
-tuningClose.addEventListener('click', () => { tuningOverlay.classList.remove('visible'); wake(); });
-tuningOverlay.addEventListener('click', e => {
-  if (e.target === tuningOverlay) { tuningOverlay.classList.remove('visible'); wake(); }
-});
+wireOverlay(tuningOverlay, tuningClose, wake);
 tuningReset.addEventListener('click', () => {
   resetTunables();
   renderTuningPanel();
@@ -1486,7 +1499,7 @@ projCheckbox.addEventListener('change', () => {
 // Shrink dead regions (default on)
 const shrinkCheckbox = document.getElementById('shrink-checkbox') as HTMLInputElement;
 shrinkCheckbox.addEventListener('change', () => {
-  if (shrinkCheckbox.checked) checkForCollapses();
+  if (shrinkCheckbox.checked) { collapseOffNote.classList.remove('visible'); checkForCollapses(); }
   wake();
 });
 
@@ -1539,18 +1552,7 @@ invisibleLettersCheckbox.addEventListener('change', () => {
 
 // Dense Fibonacci-sphere sample for the "enclosure sides" coverage overlay — fixed,
 // generated once, reused across every move (only its classification changes).
-const ENCLOSURE_COVERAGE_SAMPLE: SpherePoint[] = (() => {
-  const N = 900;
-  const ga = Math.PI * (3 - Math.sqrt(5));
-  const pts: SpherePoint[] = [];
-  for (let i = 0; i < N; i++) {
-    const y = 1 - (2 * i + 1) / N;
-    const r = Math.sqrt(Math.max(0, 1 - y * y));
-    const th = ga * i;
-    pts.push({ x: Math.cos(th) * r, y, z: Math.sin(th) * r });
-  }
-  return pts;
-})();
+const ENCLOSURE_COVERAGE_SAMPLE: SpherePoint[] = fibonacciSphere(900);
 
 // Boundary arrows
 const arrowCheckbox    = document.getElementById('arrow-checkbox') as HTMLInputElement;
@@ -1694,17 +1696,7 @@ onNavigated(() => wake());
 // Position Browser Sync mode: the panel's back/forward arrows drive the live game's undo/redo (the
 // game history lives here, not in the browser). canBack/canForward gate the arrows; Recreate
 // playback blocks both.
-pbLiveEncoding.addEventListener('mousemove', e => {
-  const target = e.target as HTMLElement;
-  const idxAttr = target?.dataset?.idx;
-  const idx = idxAttr !== undefined ? Number(idxAttr) : NaN;
-  const info = !Number.isNaN(idx) ? lastLiveCharInfo[idx] : undefined;
-  const next = info && info.vertexIds.length > 0 ? info : null;
-  if (next !== hoverCharInfo) { hoverCharInfo = next; wake(); }
-});
-pbLiveEncoding.addEventListener('mouseleave', () => {
-  if (hoverCharInfo !== null) { hoverCharInfo = null; wake(); }
-});
+wireCharHover(pbLiveEncoding, () => lastLiveCharInfo);
 setSyncCallbacks({
   onBack: () => undoLast(true),
   onForward: () => redoLast(),
@@ -1727,17 +1719,7 @@ onSyncModeChange(() => {
 // believed encoding highlights the live vertex the engine thinks that token belongs to. On a
 // mismatch this contrasts the engine's belief against the diverged board.
 let trackedCharInfo: { vertexIds: number[] }[] = [];
-pbTrackedPanel.addEventListener('mousemove', e => {
-  const target = e.target as HTMLElement;
-  const idxAttr = target?.dataset?.idx;
-  const idx = idxAttr !== undefined ? Number(idxAttr) : NaN;
-  const info = !Number.isNaN(idx) ? trackedCharInfo[idx] : undefined;
-  const next = info && info.vertexIds.length > 0 ? info : null;
-  if (next !== hoverCharInfo) { hoverCharInfo = next; wake(); }
-});
-pbTrackedPanel.addEventListener('mouseleave', () => {
-  if (hoverCharInfo !== null) { hoverCharInfo = null; wake(); }
-});
+wireCharHover(pbTrackedPanel, () => trackedCharInfo);
 
 /**
  * Refresh the tracked believed-encoding panel from the latest shadow-check outcome. Shown only in
@@ -1776,12 +1758,7 @@ function updateTrackedPanel(
 
   const enc = document.createElement('div');
   enc.className = 'pb-tracked-enc';
-  encStr.split('').forEach((ch, idx) => {
-    const span = document.createElement('span');
-    span.textContent = ch;
-    span.dataset.idx = String(idx);
-    enc.appendChild(span);
-  });
+  renderCharSpans(enc, encStr);
   pbTrackedPanel.appendChild(enc);
 
   if (outcome.mismatch) {
@@ -1847,6 +1824,7 @@ function syncLayoutMode(): void {
   // The play gate covers the same play-area strip as the canvas, not the whole viewport —
   // otherwise it visibly recenters off the game field once the side panel claims the right edge.
   playGate.style.right = isWide ? `${PANEL_WIDTH}px` : '';
+  collapseOffNote.style.right = `${(isWide ? PANEL_WIDTH : 0) + 8}px`; // the playfield's upper right
   // The Browser button is only needed as a way to open the Position Browser when the window
   // is too small for the always-visible side panel.
   browserBtn.style.display = isWide ? 'none' : '';
@@ -1870,20 +1848,19 @@ const confirmNo      = document.getElementById('confirm-no')      as HTMLButtonE
 const spotCountInput = document.getElementById('spot-count')      as HTMLInputElement;
 
 newGameBtn.addEventListener('click', () => { confirmOverlay.classList.add('visible'); });
-confirmNo.addEventListener('click',  () => { confirmOverlay.classList.remove('visible'); });
-confirmOverlay.addEventListener('click', e => {
-  if (e.target === confirmOverlay) confirmOverlay.classList.remove('visible');
-});
+wireOverlay(confirmOverlay, confirmNo);
 /** Reset to a fresh n-spot game and re-sync all UI from current toggle state. */
 function resetGame(spots: number): void {
   currentSpotCount = spots;
   Object.assign(state, createInitialState(spots));
   history.length = 0;
   moveSeqLog.length = 0;
+  moveLog.length = 0; // the debug region-trace log (src/debug/moveLog.ts) starts over with the game
   liveUnlockTokens.length = 0;
   redoStack.length = 0;
   pendingCollapse = null;
   generalCollapseFocus = null;
+  collapseSnapshot = null;
   subregionHighlight = null;
   proposedArc = null;
   recreateCheckFailed = false;
@@ -1924,17 +1901,7 @@ function resetGame(spots: number): void {
 
 confirmYes.addEventListener('click', () => {
   confirmOverlay.classList.remove('visible');
-  // Abort any in-progress recreate (including manual-draw pause).
-  if (recreateActive) {
-    if (manualAwait) { manualAwait.resolve(false); manualAwait = null; }
-    if (candidateResolve) { candidateResolve(false); candidateResolve = null; candidatePreviewList = null; }
-    recreateActive = false;
-    manualHints = null;
-    subregionHighlight = null;
-  proposedArc = null;
-    setPaused(false);
-    hideBanner();
-  }
+  abortRecreate();
   const spots = Math.max(1, Math.min(20, parseInt(spotCountInput.value, 10) || INITIAL_SPOTS));
   resetGame(spots);
   hidePlayGate();
@@ -2004,22 +1971,12 @@ const recreateBanner  = document.getElementById('recreate-banner')  as HTMLDivEl
 const recreatePauseEl = document.getElementById('recreate-pause')   as HTMLDivElement;
 
 recreateBtn.addEventListener('click', () => {
-  if (recreateActive) {
-    if (manualAwait) { manualAwait.resolve(false); manualAwait = null; }
-    if (candidateResolve) { candidateResolve(false); candidateResolve = null; candidatePreviewList = null; }
-    recreateActive = false;
-    manualHints = null;
-    setPaused(false);
-    hideBanner();
-  }
+  abortRecreate();
   recreateError.textContent = '';
   recreateOverlay.classList.add('visible');
   recreateInput.focus();
 });
-recreateCancel.addEventListener('click', () => recreateOverlay.classList.remove('visible'));
-recreateOverlay.addEventListener('click', e => {
-  if (e.target === recreateOverlay) recreateOverlay.classList.remove('visible');
-});
+wireOverlay(recreateOverlay, recreateCancel);
 recreateGo.addEventListener('click', () => {
   let parsed;
   try {
@@ -2038,6 +1995,28 @@ function showBanner(text: string): void {
 }
 function hideBanner(): void {
   recreateBanner.classList.remove('visible');
+}
+
+/** Leave a hand-drawn-move pause: drop its hints, Voronoi overlay + path bar and proposed arc, and
+ * the banner. (Resolving the pause's promise is the caller's business.) */
+function clearManualPause(): void {
+  manualAwait = null;
+  manualHints = null;
+  subregionHighlight = null;
+  proposedArc = null;
+  voronoiPathBar.classList.remove('visible');
+  hideBanner();
+}
+
+/** Stop a running Recreate (or a paused move resumed from a save): any pending manual pause or
+ * candidate preview resolves as cancelled, and every Recreate overlay is cleared. */
+function abortRecreate(): void {
+  if (!recreateActive) return;
+  manualAwait?.resolve(false);
+  if (candidateResolve) { candidateResolve(false); candidateResolve = null; candidatePreviewList = null; }
+  recreateActive = false;
+  clearManualPause();
+  setPaused(false);
 }
 
 function setPaused(paused: boolean): void {
@@ -2185,6 +2164,7 @@ function resumePausedMove(parsed: ResolvedMove): void {
   recreateActive = true;
   setupManualPause(parsed, moveSeqLog.length + 1, cloneState(state), () => {
     recreateActive = false;
+    clearManualPause();
     setPaused(false);
     updateUndoButton();
     wake();
@@ -2196,76 +2176,23 @@ function resumePausedMove(parsed: ResolvedMove): void {
  * for the user to press Enter. Returns the first legal stroke, or null if none.
  */
 function promptCandidates(parsed: ResolvedMove, moveNum: number): Promise<SpherePoint[] | null> {
-  const isLegal = (stroke: SpherePoint[]): boolean =>
-    !strokeCrossesEdges(state, stroke, undefined, parsed.lo, parsed.hi) && strokeReproduces(state, parsed, stroke, recreateUseLabels);
+  // The one test every candidate faces: legal (crosses nothing) and reproduces the token.
+  const reproduces = (stroke: SpherePoint[]): boolean => strokeReproduces(state, parsed, stroke, recreateUseLabels);
 
-  // When not pausing, auto-commit the first legal candidate with no display. Walk the LAZY stream:
-  // most moves verify on the plain geodesic / small loop at its front, and stopping there means the
-  // router's face meshes and the legacy Voronoi candidates are never built for them.
+  // When not pausing, auto-commit the first candidate that reproduces, with no display. Walk the
+  // LAZY stream: most moves verify on the plain geodesic / small loop at its front, and stopping
+  // there means the router's face meshes and the Voronoi fallbacks (last in the stream) are never
+  // built for them. A crossing stroke is never committed — with nothing legal, the move goes to
+  // manual drawing.
   if (!pauseRecreations) {
-    let any = false;
     for (const stroke of candidateStrokeStream(state, parsed)) {
-      any = true;
-      if (isLegal(stroke)) return Promise.resolve(stroke);
+      if (reproduces(stroke)) return Promise.resolve(stroke);
     }
-    if (!any) return Promise.resolve(null);
-
     if (DEBUG.recreate) {
-      const evaluated = candidateStrokes(state, parsed).map(stroke => ({ stroke }));
-      const crossResults = evaluated.map(({ stroke }) => ({
-        crosses: strokeCrossesEdges(state, stroke, undefined, parsed.lo, parsed.hi),
-        reproduces: strokeReproduces(state, parsed, stroke, recreateUseLabels),
-      }));
-      console.log(`[Move ${moveNum}] token="${parsed.token}" lo=${parsed.lo} hi=${parsed.hi} brackets=${JSON.stringify(parsed.brackets)}`);
-      console.log(`[Move ${moveNum}] candidates: ${evaluated.length} total, ${crossResults.filter(r => !r.crosses).length} pass crossing, ${crossResults.filter(r => r.reproduces).length} pass strokeReproduces, ${crossResults.filter(r => !r.crosses && r.reproduces).length} pass both`);
+      const all = candidateStrokes(state, parsed);
+      const crossing = all.filter(s => strokeCrossesEdges(state, s)).length;
+      console.log(`[Move ${moveNum}] token="${parsed.token}" lo=${parsed.lo} hi=${parsed.hi} brackets=${JSON.stringify(parsed.brackets)}: ${all.length} candidates (${crossing} cross an edge), none reproduces → manual draw`);
     }
-
-    // The fallbacks below are only ever taken without a crossing: a stroke that crosses an existing
-    // edge is never a legal move, and committing one leaves a broken drawing (and usually a wrong
-    // position) behind — far better to drop to manual drawing.
-    const legalFallback = (stroke: SpherePoint[]): boolean =>
-      !strokeCrossesEdges(state, stroke, undefined, parsed.lo, parsed.hi) && strokeReproduces(state, parsed, stroke, recreateUseLabels);
-
-    // Final fallback for non-self-loop enclosures: try the full Voronoi path.
-    if (parsed.brackets && parsed.brackets.length > 0 && parsed.lo !== parsed.hi) {
-      const sh = buildSubregionHighlight(state, parsed.lo, parsed.hi, parsed.brackets);
-      if (sh) {
-        const vData = buildVoronoiGraph(state, sh, parsed.lo, parsed.hi);
-        const v1Pos = state.vertices.get(parsed.lo)?.pos;
-        const v2Pos = state.vertices.get(parsed.hi)?.pos;
-        const voronoiResult = computeJunctionVoronoiPath(vData, v1Pos, v2Pos);
-        const vReproduces = voronoiResult ? legalFallback(voronoiResult.pts) : false;
-        if (DEBUG.recreate) console.log(`[Move ${moveNum}] voronoi fallback: path=${!!voronoiResult} legal=${vReproduces}`);
-        if (vReproduces) return Promise.resolve(voronoiResult!.pts);
-      } else if (DEBUG.recreate) {
-        console.log(`[Move ${moveNum}] voronoi fallback: buildSubregionHighlight returned null`);
-      }
-    }
-
-    // Final fallback for self-loop enclosures: use findVoronoiPath with v1=v2 to
-    // produce a closed loop via the full Voronoi graph (with clustering fix).
-    if (parsed.brackets && parsed.brackets.length > 0 && parsed.lo === parsed.hi) {
-      const sh = buildSubregionHighlight(state, parsed.lo, parsed.hi, parsed.brackets);
-      if (sh) {
-        const vData = buildVoronoiGraph(state, sh, parsed.lo, parsed.hi);
-        const { extraSeeds } = vData;
-        const vPos = state.vertices.get(parsed.lo)?.pos;
-        const voronoiResult = computeJunctionVoronoiPath(vData, vPos, vPos);
-        const vReproduces = voronoiResult ? legalFallback(voronoiResult.pts) : false;
-        if (DEBUG.recreate) console.log(`[Move ${moveNum}] self-loop voronoi path: path=${!!voronoiResult} extraSeeds=${extraSeeds.length} legal=${vReproduces}`);
-        if (vReproduces) return Promise.resolve(voronoiResult!.pts);
-        // Also try with extra seeds in the voronoiSelfLoopArcs.
-        if (extraSeeds.length > 0) {
-          const newCandidates = candidateSelfLoopArcsWithSeeds(state, parsed, extraSeeds);
-          for (const stroke of newCandidates) {
-            if (legalFallback(stroke)) return Promise.resolve(stroke);
-          }
-          if (DEBUG.recreate) console.log(`[Move ${moveNum}] self-loop voronoi fallback: none reproduced`);
-        }
-      }
-    }
-
-    if (DEBUG.recreate) console.log(`[Move ${moveNum}] all fallbacks exhausted → going manual`);
     return Promise.resolve(null);
   }
 
@@ -2275,7 +2202,7 @@ function promptCandidates(parsed: ResolvedMove, moveNum: number): Promise<Sphere
   let firstLegal: SpherePoint[] | null = null;
   let legalCount = 0;
   const evaluated = all.map(stroke => {
-    const legal = isLegal(stroke);
+    const legal = reproduces(stroke);
     if (legal && !firstLegal) firstLegal = stroke;
     if (legal) legalCount++;
     return { stroke, legal };
@@ -2301,11 +2228,7 @@ function verifyManualMove(v1: number, v2: number): void {
   const ok = appliedMoveMatches(manualAwait.before, state, v1, v2, manualAwait.parsed.token, recreateUseLabels);
   if (ok) {
     const resolve = manualAwait.resolve;
-    manualAwait = null;
-    manualHints = null;
-    subregionHighlight = null;
-  proposedArc = null;
-    hideBanner();
+    clearManualPause();
     resolve(true);
   } else {
     // Wrong move: roll it back and ask again.
@@ -2313,6 +2236,16 @@ function verifyManualMove(v1: number, v2: number): void {
     const loop = manualAwait.parsed.lo === manualAwait.parsed.hi ? ' (self-loop)' : '';
     showBanner(`That move didn't match. Draw ${manualAwait.parsed.lo} → ${manualAwait.parsed.hi}${loop} again`);
   }
+}
+
+/** Do two position strings (encodePosition text, as Move Check tags record it) name the same
+ * position? Compared by WASM canon: the TS encoder's text isn't canonical (layOutSubposition), so
+ * a different drawing of the same position can spell it differently. Falls back to the strings. */
+function sameEncodedPosition(a: string | null, b: string): boolean {
+  if (a === b) return true;
+  if (a === null) return false;
+  const ca = canonSync(a || 'N'), cb = canonSync(b || 'N');
+  return ca !== null && ca === cb;
 }
 
 /** Drive the whole sequence move by move. */
@@ -2323,25 +2256,12 @@ async function runRecreate(seq: ReturnType<typeof parseMoveSequence>): Promise<v
   try {
     for (let i = 0; i < seq.moves.length; i++) {
       const rawMove = seq.moves[i];
-      // Labelled sequences carry spot LABELS in lo/hi/brackets; resolve to raw
-      // vertex IDs against the live label state (in lockstep with the
-      // recording) before anything downstream touches state.vertices by ID.
-      // A bracket range ("lo..hi") names a whole block of mutually-symmetric
-      // enclosed spots — resolveBracketEntry expands it to every live member.
-      // Brackets describe the label state AFTER this move's own departing
-      // endpoint(s) have shrunk their block (see resolveMoveEndpoints'
-      // contextLabels), not the state before the move.
+      // Labelled sequences carry spot LABELS in lo/hi/subscripts/brackets/parens;
+      // resolve to raw vertex IDs against the live label state (in lockstep with
+      // the recording) before anything downstream touches state.vertices by ID.
       let parsed: ResolvedMove;
       if (recreateUseLabels) {
-        const { lo, hi, contextLabels } = resolveMoveEndpoints(rawMove.lo, rawMove.hi, state.spotLabels);
-        parsed = {
-          ...rawMove,
-          lo, hi,
-          brackets: rawMove.brackets
-            ? rawMove.brackets.flatMap(e => resolveBracketEntry(e, contextLabels))
-            : null,
-          parens: resolveParensEntry(rawMove.parens, contextLabels),
-        };
+        parsed = resolveLabelledMove(rawMove, state.spotLabels);
       } else {
         parsed = {
           ...rawMove,
@@ -2354,15 +2274,27 @@ async function runRecreate(seq: ReturnType<typeof parseMoveSequence>): Promise<v
       await waitForCollapseDone();
       if (!recreateActive) return;
       // Let the user pick from verified candidates before committing.
-      const stroke = await promptCandidates(parsed, i + 1);
+      let stroke = await promptCandidates(parsed, i + 1);
       if (!recreateActive) return; // aborted during candidate selection
+      // Nothing reproduces: the board may just be under-smoothed (playback waits are wall-clock,
+      // so a slow frame rate settles less, and friction can freeze it mid-relax). Re-arm the
+      // forces, let it relax, and try again before falling back to manual drawing. Auto mode
+      // only — in pause mode the user already chose to go manual.
+      for (let retry = 0; !stroke && !pauseRecreations && retry < tunables.recreateRetries; retry++) {
+        resetActivityTimer(tunables.recreateRetrySettleMs);
+        await settle(tunables.recreateRetrySettleMs);
+        if (!recreateActive) return;
+        stroke = await promptCandidates(parsed, i + 1);
+        if (!recreateActive) return;
+        if (DEBUG.recreate) console.log(`[Move ${i + 1}] retry ${retry + 1} after re-settling: ${stroke ? 'found a candidate' : 'still none'}`);
+      }
       if (stroke) {
         pushHistorySnapshot();
         applyMove(state, { v1: parsed.lo, v2: parsed.hi, stroke });
-        // Double-check: the committed edge should not cross any other edge.
-        const newEdge = [...state.edges.values()].reduce((a, b) => b.id > a.id ? b : a);
-        if (strokeCrossesEdges(state, newEdge.points, newEdge.id, parsed.lo, parsed.hi)) {
-          console.warn(`Recreate move ${i + 1}: committed edge ${newEdge.id} crosses existing geometry`);
+        // Double-check: neither half of the committed move (the last two edges made) crosses an edge.
+        for (const eid of [state.nextEdgeId - 2, state.nextEdgeId - 1]) {
+          const e = state.edges.get(eid);
+          if (e && strokeCrossesEdges(state, e.points, eid)) console.warn(`Recreate move ${i + 1}: committed edge ${eid} crosses existing geometry`);
         }
         afterMoveCommitted(parsed.lo, parsed.hi, stroke);
         await settle(tunables.settleMs);
@@ -2378,7 +2310,7 @@ async function runRecreate(seq: ReturnType<typeof parseMoveSequence>): Promise<v
       // Move Check ("C"-tagged sequences): verify the committed move actually landed on
       // the recorded position. lastCommittedEncoding was set inside afterMoveCommitted,
       // reached via either branch above, so it always reflects this move's outcome.
-      if (seq.useCheck && rawMove.checkEncoding !== null && lastCommittedEncoding !== rawMove.checkEncoding) {
+      if (seq.useCheck && rawMove.checkEncoding !== null && !sameEncodedPosition(lastCommittedEncoding, rawMove.checkEncoding)) {
         console.error(`[Move Check] Move ${i + 1} mismatch: expected ${rawMove.checkEncoding}, got ${lastCommittedEncoding}`);
         recreateCheckFailed = true;
         return;
@@ -2386,14 +2318,10 @@ async function runRecreate(seq: ReturnType<typeof parseMoveSequence>): Promise<v
     }
   } finally {
     recreateActive = false;
-    manualAwait = null;
-    manualHints = null;
-    subregionHighlight = null;
-  proposedArc = null;
+    clearManualPause();
     candidatePreviewList = null;
     candidateResolve = null;
     setPaused(false);
-    hideBanner();
     updateUndoButton();
     wake();
   }
@@ -2418,7 +2346,7 @@ function wrapCanonDisplay(text: string, charInfo: EncodingResult['charInfo']): {
   const outInfo: EncodingResult['charInfo'] = [];
   const pushPunct = (ch: string) => { outChars.push(ch); outInfo.push({ vertexIds: [] }); };
   comps.forEach((c, i) => {
-    if (i > 0) ' ⊕ '.split('').forEach(pushPunct);
+    if (i > 0) { ci++; ' ⊕ '.split('').forEach(pushPunct); } // charInfo has an entry for the '+' too
     if (c === 'N') {
       outChars.push('N');
       outInfo.push(charInfo[ci++] ?? { vertexIds: [] });
@@ -2457,31 +2385,13 @@ function wrapCanonDisplay(text: string, charInfo: EncodingResult['charInfo']): {
  * yet (see canonSync's "load timing isn't guaranteed" note) or canonicalization fails entirely.
  */
 function computeLiveEncodingDisplay(state: GameState, enc: EncodingResult): { text: string; charInfo: EncodingResult['charInfo'] } {
-  const decomposed = encodePositionDecompressed(state);
-  const tracked = canonicalizeTrackedProvenanceSync(decomposed.text);
-  // tracked.src indexes are TOKEN-sequential (one per real token, in the same
-  // component/region/boundary/token walk order the engine parses `decomposed.text` into) —
-  // both ends skip punctuation ('[',']','|',',',' ','⊕' on the input side; ','/'|'/'+' on the
-  // output side), unlike decomposed.charInfo/tracked.enc which have one slot per character
-  // including punctuation. Build a punctuation-free view of decomposed's tokens to index by
-  // src, then re-expand per output character, inserting an empty entry for each separator.
-  const decompLiveText = tracked ? tracked.enc : enc.text;
-  const decompLiveCharInfo: EncodingResult['charInfo'] = tracked
-    ? (() => {
-        const decomposedTokens = decomposed.text
-          .split('')
-          .map((ch, i) => ({ ch, info: decomposed.charInfo[i] }))
-          .filter(({ ch }) => !'[]|, ⊕'.includes(ch))
-          .map(({ info }) => info);
-        let next = 0;
-        return decompLiveText.split('').map(ch =>
-          ',|+'.includes(ch) ? { vertexIds: [] } : decomposedTokens[tracked.src[next++]],
-        );
-      })()
-    : enc.charInfo;
+  // The engine's decompressed canonical spelling, every character traced to its live vertex.
+  const layout = trackedLayout(state);
+  const decompLiveText = layout ? layout.enc : enc.text;
+  const decompLiveCharInfo: EncodingResult['charInfo'] = layout ? layout.charInfo : enc.charInfo;
   const compact = canonSync(enc.text);
   if (compact === null) {
-    return tracked ? wrapCanonDisplay(decompLiveText, decompLiveCharInfo) : { text: decompLiveText, charInfo: decompLiveCharInfo };
+    return layout ? wrapCanonDisplay(decompLiveText, decompLiveCharInfo) : { text: decompLiveText, charInfo: decompLiveCharInfo };
   }
   if (compact === decompLiveText) {
     return wrapCanonDisplay(compact, decompLiveCharInfo);
@@ -2648,7 +2558,7 @@ function frame(now: number): void {
     }
     // Log pending collapse context.
     if (pendingCollapse) {
-      console.error('  pendingCollapse:', JSON.stringify(pendingCollapse, (k, v) => k === 'parallelEdges' || k === 'triangleEdges' || k === 'edges' || k === 'extraParallelEdges' ? v : (Array.isArray(v) ? v : v)));
+      console.error('  pendingCollapse:', JSON.stringify(pendingCollapse, (k, v) => (k === 'deflate' ? '(mesh)' : v)));
     }
     animating = false;
   }
@@ -2716,7 +2626,7 @@ function frameBody(now: number): void {
 
     // Smooth runs first so the collapse step can override vertex positions last.
     // Pass collapseSkip so smooth doesn't repel or redistribute the collapsing vertices.
-    const collapseSkip = pendingCollapse ? collapseVertices(pendingCollapse) : undefined;
+    const collapseSkip = pendingCollapse ? specialCollapseVertices(pendingCollapse) : undefined;
     if (smoothStep(state, shrinkCheckbox.checked, collapseSkip)) anyMoving = true;
     maybeStartPrecompute(); // the Position Browser's children pass waits for the board to come to rest
 
@@ -2725,14 +2635,17 @@ function frameBody(now: number): void {
     // Skip the outer (degree-3) louse vertices only. The inner vertex is allowed to
     // self-connect if it borders a living region (true scab); louse-inner-only vertices
     // are filtered out by the bordersLiving check in scabAloneCollapse.
-    const louseSkip = pendingCollapse?.kind === 'louse'
+    // Any other pending collapse owns all its vertices: the scab surgery is instant, so
+    // letting it delete them would skip that collapse's animation.
+    // Like every other collapse, only while Collapsing is on.
+    const scabSkip = pendingCollapse?.kind === 'louse'
       ? new Set([...pendingCollapse.outer])
-      : undefined;
-    if (scabAloneCollapse(state, louseSkip)) {
+      : collapseSkip;
+    if (shrinkCheckbox.checked && scabAloneCollapse(state, scabSkip)) {
       anyMoving = true;
       // If the scab collapse deleted louse outer vertices, cancel the stale louse.
       if (pendingCollapse?.kind === 'louse') {
-        const lc = pendingCollapse as LouseCollapse;
+        const lc = pendingCollapse;
         if (!state.vertices.has(lc.outer[0]) || !state.vertices.has(lc.outer[1])) {
           pendingCollapse = null;
         }
@@ -2743,7 +2656,7 @@ function frameBody(now: number): void {
     }
 
     if (shrinkCheckbox.checked) {
-      const skipVerts = pendingCollapse ? collapseVertices(pendingCollapse) : undefined;
+      const skipVerts = pendingCollapse ? specialCollapseVertices(pendingCollapse) : undefined;
 
       // Immediately splice out any isolated degree-2 vertices (no slerp needed).
       let isoPopAt: SpherePoint | null;
@@ -2779,80 +2692,18 @@ function frameBody(now: number): void {
     if (pendingCollapse) {
       anyMoving = true;
       const pc = pendingCollapse;
-      if (pc.kind === 'louse') {
-        const { done, popAt } = louseCollapseStep(state, pc);
-        if (done) {
-          logCollapse('louseCollapseStep');
-          if (popAt) popAnims.push({ pos: popAt, start: now });
-          resampleAllEdges(state);
-          pendingCollapse = null;
-          checkForCollapses();
-        }
-      } else if (pc.kind === 'parallel-dead') {
-        const { done, popAt } = parallelDeadStep(state, pc);
-        if (done) {
-          logCollapse('parallelDeadStep');
-          if (popAt) popAnims.push({ pos: popAt, start: now });
-          resampleAllEdges(state);
-          pendingCollapse = null;
-          checkForCollapses();
-        }
-      } else if (pc.kind === 'triple-parallel-dead') {
-        const { done, popAt } = tripleParallelDeadStep(state, pc);
-        if (done) {
-          logCollapse('tripleParallelDeadStep');
-          if (popAt) popAnims.push({ pos: popAt, start: now });
-          resampleAllEdges(state);
-          pendingCollapse = null;
-          checkForCollapses();
-        }
-      } else if (pc.kind === 'triangle-dead') {
-        const { done, popAt } = triangleDeadStep(state, pc);
-        if (done) {
-          logCollapse('triangleDeadStep');
-          if (popAt) popAnims.push({ pos: popAt, start: now });
-          resampleAllEdges(state);
-          pendingCollapse = null;
-          checkForCollapses();
-        }
-      } else if (pc.kind === 'quad-dead') {
-        const { done, popAt } = quadDeadStep(state, pc);
-        if (done) {
-          logCollapse('quadDeadStep');
-          if (popAt) popAnims.push({ pos: popAt, start: now });
-          resampleAllEdges(state);
-          pendingCollapse = null;
-          checkForCollapses();
-        }
-      } else if (pc.kind === 'enclosed-triangle') {
-        const { done, popAt } = enclosedTriangleStep(state, pc);
-        if (done) {
-          logCollapse('enclosedTriangleStep');
-          if (popAt) popAnims.push({ pos: popAt, start: now });
-          resampleAllEdges(state);
-          pendingCollapse = null;
-          checkForCollapses();
-        }
-      } else if (pc.kind === 'bigon-tip') {
-        const { done, popAt } = bigonTipStep(state, pc);
-        if (done) {
-          logCollapse('bigonTipStep');
-          if (popAt) popAnims.push({ pos: popAt, start: now });
-          resampleAllEdges(state);
-          pendingCollapse = null;
-          checkForCollapses();
-        }
-      } else {
-        const { done, popAt } = selfConnectedDeadStep(state, pc);
-        if (done) {
-          logCollapse(`selfConnectedDeadStep (${pc.symmetric ? 'case B symmetric' : 'case A'})`);
-          if (popAt) popAnims.push({ pos: popAt, start: now });
-          resampleAllEdges(state);
-          pendingCollapse = null;
-          checkForCollapses();
-        }
+      const { done, popAt, label } = stepSpecialCollapse(state, pc);
+      if (done && !revertIfCollapseRefused(pc)) {
+        logCollapse(label);
+        if (popAt) popAnims.push({ pos: popAt, start: now });
+        resampleAllEdges(state);
+        pendingCollapse = null;
+        checkForCollapses();
       }
     }
+    // A refusal from any other surgery this frame (instant scab/isolated-vertex splices, a general
+    // pop) was already rolled back exactly; it still means a collapse bug, so collapsing stops.
+    revertIfCollapseRefused();
 
     if (anyMoving) needsRender = true;
   }
@@ -2936,13 +2787,7 @@ function frameBody(now: number): void {
             ? wrapCanonDisplay(browsedCanon, browsedCanon.split('').map(() => ({ vertexIds: [] })))
             : { text: '(none)', charInfo: [] };
         lastLiveCharInfo = liveCharInfo;
-        pbLiveEncoding.innerHTML = '';
-        liveText.split('').forEach((ch, idx) => {
-          const span = document.createElement('span');
-          span.textContent = ch;
-          span.dataset.idx = String(idx);
-          pbLiveEncoding.appendChild(span);
-        });
+        renderCharSpans(pbLiveEncoding, liveText);
         // Auto-follow the live game only in Sync mode; free-browse leaves the panel where the user
         // navigated. Only re-navigate when the live position actually changed (not every frame).
         if (isSyncMode()) {
@@ -2957,13 +2802,7 @@ function frameBody(now: number): void {
       } else if (showPosition) {
         const { text: liveText, charInfo: liveCharInfo } = computeLiveEncodingDisplay(state, enc);
         lastCharInfo = liveCharInfo;
-        bottomBarText.innerHTML = '';
-        liveText.split('').forEach((ch, idx) => {
-          const span = document.createElement('span');
-          span.textContent = ch;
-          span.dataset.idx = String(idx);
-          bottomBarText.appendChild(span);
-        });
+        renderCharSpans(bottomBarText, liveText);
         bottomBar.classList.add('visible');
       }
     }

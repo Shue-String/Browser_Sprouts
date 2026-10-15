@@ -1,22 +1,12 @@
 // Genomes pane data: one row per (collection, offset) group of src/data/collectionElements.json --
 // its genome, rep, element count, extra-adjusted-lives range, and how often it is used as a
-// T-gene by other collections. Pure data, computed once from the JSON; src/ui/genomes.ts renders it.
-import collectionElementsJson from '../data/collectionElements.json';
-import { COLLECTION_GENOME_TEXT, storedGenomeText, type StoredGenome } from './collectAlpha';
+// T-gene by other collections. Pure data, computed once; src/ui/genomes.ts renders it. The JSON
+// itself is read once, by collectAlpha.ts (COLLECTION_ROSTERS / COLLECTION_STORED_GENOMES).
+import {
+  COLLECTION_GENOME_TEXT, COLLECTION_ROSTERS, COLLECTION_STORED_GENOMES, COLLECTION_MAX_SHIFT,
+  nameOf, storedGenomeText, type StoredGenome,
+} from './collectAlpha';
 import { adjustedLivesOf } from './ttree';
-
-type Section = 'single' | 'double' | 'multi';
-interface ElementsFile {
-  maxShift: number;
-  collections: {
-    name: string;
-    rep: string;
-    genome?: StoredGenome;
-    offsets: ({ offset: number } & Partial<Record<Section, { elements: { encoding: string }[] }>>)[];
-  }[];
-}
-const DATA = collectionElementsJson as unknown as ElementsFile;
-const SECTIONS: Section[] = ['single', 'double', 'multi'];
 
 export interface GenomeCensusRow {
   name: string;          // collection name, e.g. "S_1"
@@ -43,7 +33,9 @@ const CRIT_LIVES = 1;
 
 /** Extra-adjusted lives (total lives - #subpositions - #DisaPoints - #split points) plus
  * CRIT_LIVES. adjustedLivesOf already sums leftSideLives2 (the DisaPoint/split-point discount) and
- * subtracts only (#subpositions - 1), with crit letters at 0 -- so subtract the remaining 1. */
+ * subtracts only (#subpositions - 1), with crit letters at 0 -- so subtract the remaining 1. The
+ * encoding must be fully compressed (DisaPoints as '3' — see adjustedLivesOf); the JSON stores
+ * them that way. */
 function eal(enc: string): number {
   return adjustedLivesOf(enc) - 1 + CRIT_LIVES;
 }
@@ -54,13 +46,8 @@ function genomeDisplay(name: string, g: StoredGenome | undefined): string | null
   if (!g) return null;
   const named = g.T.filter(t => 'name' in t);
   const unnamed = g.T.length - named.length;
-  if (!unnamed) return COLLECTION_GENOME_TEXT[name];
-  // storedGenomeText always ends "...])": put the count inside the T brackets, after any names.
-  const text = storedGenomeText({ ...g, T: named });
-  return `${text.slice(0, -2)}${named.length ? ',' : ''}+${unnamed}])`;
+  return unnamed ? storedGenomeText({ ...g, T: named }, `+${unnamed}`) : COLLECTION_GENOME_TEXT[name];
 }
-
-const groupName = (name: string, offset: number) => (offset === 0 ? name : `${name}⊕${offset}`);
 
 function buildRows(): GenomeCensusRow[] {
   // Direct T-gene groups per collection, and every group referenced anywhere (nested included) --
@@ -70,34 +57,40 @@ function buildRows(): GenomeCensusRow[] {
   const collect = (g: StoredGenome, into?: Set<string>) => {
     for (const t of g.T) {
       if ('name' in t) {
-        const n = groupName(t.name, t.shift ?? 0);
+        const n = nameOf(t.name, t.shift ?? 0);
         referenced.add(n);
         into?.add(n);
       } else collect(t);
     }
   };
-  for (const c of DATA.collections) {
-    if (!c.genome) continue;
+  for (const [name, g] of Object.entries(COLLECTION_STORED_GENOMES)) {
     const d = new Set<string>();
-    collect(c.genome, d);
-    direct.set(c.name, d);
+    collect(g, d);
+    direct.set(name, d);
+  }
+
+  // The roster's groups by collection (offset 0 carries the rep), in authored order.
+  const byCollection = new Map<string, typeof COLLECTION_ROSTERS>();
+  for (const r of COLLECTION_ROSTERS) {
+    const l = byCollection.get(r.collection);
+    if (l) l.push(r); else byCollection.set(r.collection, [r]);
   }
 
   const rows: GenomeCensusRow[] = [];
-  for (const c of DATA.collections) {
-    const offsets = new Set(c.offsets.map(o => o.offset));
-    for (let k = 1; k <= DATA.maxShift; k++) if (referenced.has(groupName(c.name, k))) offsets.add(k);
+  for (const [name, groups] of byCollection) {
+    const rep = groups.find(r => r.offset === 0)?.rep ?? '';
+    const offsets = new Set(groups.map(r => r.offset));
+    for (let k = 1; k <= COLLECTION_MAX_SHIFT; k++) if (referenced.has(nameOf(name, k))) offsets.add(k);
     for (const offset of [...offsets].sort((a, b) => a - b)) {
-      const o = c.offsets.find(x => x.offset === offset);
-      const encs = SECTIONS.flatMap(s => o?.[s]?.elements.map(e => e.encoding) ?? []);
-      if (offset === 0) encs.push(c.rep);
-      const group = groupName(c.name, offset);
+      const encs = [...(groups.find(r => r.offset === offset)?.elements ?? [])];
+      if (offset === 0) encs.push(rep);
+      const group = nameOf(name, offset);
       if (!encs.length && !referenced.has(group)) continue;
       const lives = encs.map(eal);
       rows.push({
-        name: c.name, offset, group,
-        genome: genomeDisplay(c.name, c.genome),
-        rep: c.rep,
+        name, offset, group,
+        genome: genomeDisplay(name, COLLECTION_STORED_GENOMES[name]),
+        rep,
         count: encs.length,
         lo: lives.length ? Math.min(...lives) : null,
         hi: lives.length ? Math.max(...lives) : null,
