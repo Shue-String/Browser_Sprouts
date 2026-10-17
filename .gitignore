@@ -1,5 +1,6 @@
 .claude/
 node_modules/
+/dist/
 /paper/
 stalks/build/
 stalks/saves/master_meta.json
@@ -44,3 +45,6 @@ failureSaves/
 
 # Local scratch/debug scripts
 scripts/route/_tmp*.ts
+
+# Local commit/push helper (runs npm run build before committing)
+scripts/commit.sh
