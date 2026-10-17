@@ -77,11 +77,10 @@ let onPreviewCb: ((target: MovePreviewTarget | null) => void) | null = null;
 let onConfirmCb: ((target: MovePreviewTarget) => void) | null = null;
 let onChildrenBatchCb: ((targets: MovePreviewTarget[]) => void) | null = null;
 
-/** Wire the hover-preview / Enter-to-confirm callbacks (main.ts owns live-state resolution).
+/** Wire the hover-preview / double-click-to-play callbacks (main.ts owns live-state resolution).
  * `onChildrenBatch` (optional) fires once per render with every move-bearing child row on the
- * live position's list, so main.ts can precompute+cross-check all of them up front rather than
- * only whichever single row is currently hovered — see strokeSynthesis's "misidentified sibling"
- * cross-check in synthesizeVerifiedMove. */
+ * live position's list, so main.ts can precompute a stroke for each of them in the background
+ * (precomputeChildrenMoves) rather than only whichever single row is currently hovered. */
 export function setMoveCallbacks(cbs: {
   onPreview: (target: MovePreviewTarget | null) => void;
   onConfirm: (target: MovePreviewTarget) => void;
@@ -593,6 +592,37 @@ function listField(
   return field;
 }
 
+/** The "Child encodings" list of exact children (shared by every render path), ordered [nimber,
+ *  subposCount, lex]. In quick-canon mode each row is labelled by its quick-canon rep and carries no
+ *  move (so no preview); otherwise rows are move-bearing, and nimber-0 ones are highlighted green
+ *  when `highlightWinning`. */
+function childrenField(children: ChildInfo[], t: ReturnType<typeof toggles>, highlightWinning: boolean): HTMLDivElement {
+  const sorted = [...children].sort(cmpChildren);
+  return listField(
+    'Child encodings',
+    t.quick
+      ? sorted.map(c => ({
+          enc: c.enc,
+          label: c.quickCanon ? displayQuick(c.quickCanon.enc, c.quickCanon.offset) : display(c.enc),
+          nimber: c.nimber,
+        }))
+      : sorted.map(c => ({ enc: c.enc, nimber: c.nimber, winning: c.nimber === 0, move: c.move })),
+    'no children',
+    { showNimber: t.nimbers, highlightWinning },
+  );
+}
+
+/** The quick-canon reps list ("Child encodings" in the Calculate Nimber view and in quick mode). */
+function quickChildrenField(quickChildren: QuickChildInfo[], t: ReturnType<typeof toggles>): HTMLDivElement {
+  const quick = [...quickChildren].sort(cmpQuickChildren);
+  return listField(
+    'Child encodings',
+    quick.map(c => ({ enc: c.enc, label: displayQuick(c.enc, c.offset), nimber: c.nimber })),
+    'no children',
+    { showNimber: t.nimbers, highlightWinning: false },
+  );
+}
+
 /** Known Parents list (shared by every render path). */
 function parentsField(canonEnc: string): HTMLDivElement {
   const t = toggles();
@@ -665,21 +695,7 @@ function renderNeedsCalculation(result: AnalysisErr & { reason: 'needs-calculati
 
   if (children) {
     body.appendChild(togglesEl);
-    const sorted = [...children].sort(cmpChildren);
-    body.appendChild(
-      listField(
-        'Child encodings',
-        t.quick
-          ? sorted.map(c => ({
-              enc: c.enc,
-              label: c.quickCanon ? displayQuick(c.quickCanon.enc, c.quickCanon.offset) : display(c.enc),
-              nimber: c.nimber,
-            }))
-          : sorted.map(c => ({ enc: c.enc, nimber: c.nimber, move: c.move })),
-        'no children',
-        { showNimber: t.nimbers, highlightWinning: t.winning },
-      ),
-    );
+    body.appendChild(childrenField(children, t, false));
   }
 
   if (result.canon) body.appendChild(parentsField(result.canon));
@@ -716,15 +732,7 @@ function renderQuick(result: QuickAnalysisOk): void {
 
   notify('Quick-canon cannot draw moves in the play field.');
 
-  const quick = [...result.quickChildren].sort(cmpQuickChildren);
-  body.appendChild(
-    listField(
-      'Child encodings',
-      quick.map(c => ({ enc: c.enc, label: displayQuick(c.enc, c.offset), nimber: c.nimber })),
-      'no children',
-      { showNimber: t.nimbers, highlightWinning: false },
-    ),
-  );
+  body.appendChild(quickChildrenField(result.quickChildren, t));
 
   body.appendChild(parentsField(result.canon));
 }
@@ -808,21 +816,7 @@ function renderError(result: Extract<AnalysisResult, { ok: false }>): void {
 
     if (result.children) {
       body.appendChild(togglesEl);
-      const children = [...result.children].sort(cmpChildren);
-      body.appendChild(
-        listField(
-          'Child encodings',
-          t.quick
-            ? children.map(c => ({
-                enc: c.enc,
-                label: c.quickCanon ? displayQuick(c.quickCanon.enc, c.quickCanon.offset) : display(c.enc),
-                nimber: c.nimber,
-              }))
-            : children.map(c => ({ enc: c.enc, nimber: c.nimber, move: c.move })),
-          'no children',
-          { showNimber: t.nimbers, highlightWinning: false },
-        ),
-      );
+      body.appendChild(childrenField(result.children, t, false));
     }
     if (result.canon) body.appendChild(parentsField(result.canon));
     return;
@@ -880,25 +874,9 @@ function renderOk(result: Extract<AnalysisResult, { ok: true }>): void {
   if (!t.quick && !canonValuesCalculated) {
     body.appendChild(field('Child encodings', 'canon values not calculated', true));
   } else if (t.quick) {
-    const quick = [...result.quickChildren].sort(cmpQuickChildren);
-    body.appendChild(
-      listField(
-        'Child encodings',
-        quick.map(c => ({ enc: c.enc, label: displayQuick(c.enc, c.offset), nimber: c.nimber })),
-        'no children',
-        { showNimber: t.nimbers, highlightWinning: false },
-      ),
-    );
+    body.appendChild(quickChildrenField(result.quickChildren, t));
   } else {
-    const children = [...result.children].sort(cmpChildren);
-    body.appendChild(
-      listField(
-        'Child encodings',
-        children.map(c => ({ enc: c.enc, nimber: c.nimber, winning: c.nimber === 0, move: c.move })),
-        'no children',
-        { showNimber: t.nimbers, highlightWinning: t.winning },
-      ),
-    );
+    body.appendChild(childrenField(result.children, t, t.winning));
   }
 
   // In quick-canon mode, note that these reps are equivalence-class representatives, not real moves.

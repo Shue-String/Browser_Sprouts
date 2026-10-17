@@ -8,6 +8,7 @@
 
 import type { GameState, Edge, Region, RegionId, VertexId } from '../model/types';
 import type { RecreateHints } from '../model/recreate';
+import type { VoronoiData } from '../model/voronoiGraph';
 import { VertexVisualState } from '../model/types';
 import type { RotationMatrix, CanvasPoint, SpherePoint } from '../math/sphere';
 import { rotateSpherePoint, unrotateSpherePoint, normalize, project, projectRect, slerp } from '../math/sphere';
@@ -45,6 +46,10 @@ const VERTEX_COLOR_SATURATED  = '#cccccc';
 const VERTEX_COLOR_GRAYED     = '#cccccc';
 const BACKGROUND_COLOR        = '#f9f9f6';
 const DISK_BORDER_COLOR       = '#cccccc';
+
+/** buildVoronoiGraph's output plus the junction path's mono-boundary "fake" CGR node id (drawn
+ *  with the same purple circle as a real CW/CGR node), for the Recreate manual-draw overlay. */
+export type VoronoiOverlay = VoronoiData & { fakeCgrId: number | null };
 
 export interface RenderOptions {
   grayedVertexIds?: Set<number>;
@@ -91,18 +96,8 @@ export interface RenderOptions {
   movePreviewFailRing?: VertexId[];
   /** Sub-boundary components of an intercepted enclosure move, each with a hue (0–360). */
   subregionHighlight?: SubregionHighlight;
-  /** Voronoi graph for debug overlays (CW/CCW circles, V1/V2 labels). */
-  voronoiGraph?: import('../model/voronoiGraph').VoronoiGraph;
-  /** Merged circumcenter positions indexed by node id, from buildVoronoiGraph. */
-  voronoiCircumcenters?: SpherePoint[];
-  /** Synthetic seeds inserted at crowded-junction centroids, for cell rasterization. */
-  voronoiExtraSeeds?: { pos: SpherePoint; hue: number }[];
-  /** Every Voronoi junction (unfiltered), for the "id name" node label text. */
-  voronoiFullNodes?: import('../model/voronoiGraph').VoronoiNodeData[];
-  /** Node ids to keep (path exists to a C-bordering node) — others are skipped entirely. */
-  voronoiSurvivingIds?: number[];
-  /** Mono-boundary case: node id treated as a "fake" CGR — drawn with the same purple circle as a real CW/CGR node. */
-  voronoiFakeCgrId?: number;
+  /** Voronoi debug overlay drawn over subregionHighlight (CW/CCW circles, node labels, extra seeds). */
+  voronoi?: VoronoiOverlay;
   /** Transient "pop" bursts where dead components vanished; age is 0→1. */
   popAnimations?: { pos: SpherePoint; age: number }[];
   /** Whose turn it is — tints the outer ring in lambert mode. */
@@ -671,7 +666,7 @@ export class Renderer {
 
     // --- Subregion component fills (debug) ---
     if (opts.subregionHighlight) {
-      this.renderSubregionHighlight(state, camera, opts.subregionHighlight, opts.voronoiGraph, opts.voronoiCircumcenters, opts.voronoiExtraSeeds, opts.voronoiFullNodes, opts.voronoiSurvivingIds, opts.voronoiFakeCgrId);
+      this.renderSubregionHighlight(state, camera, opts.subregionHighlight, opts.voronoi);
     }
 
     // --- Candidate arc preview (all candidates, legal=orange illegal=red) ---
@@ -1335,7 +1330,9 @@ export class Renderer {
    * at 1/3 resolution for performance, then scale up via drawImage (which
    * respects the canvas clip path set to region R's boundary).
    */
-  private renderSubregionHighlight(state: GameState, camera: RotationMatrix, hl: SubregionHighlight, vGraph?: import('../model/voronoiGraph').VoronoiGraph, passedCCs?: SpherePoint[], extraSeeds?: { pos: SpherePoint; hue: number }[], fullNodes?: import('../model/voronoiGraph').VoronoiNodeData[], survivingNodeIds?: number[], fakeCgrId?: number): void {
+  private renderSubregionHighlight(state: GameState, camera: RotationMatrix, hl: SubregionHighlight, voronoi?: VoronoiOverlay): void {
+    const vGraph = voronoi?.graph, passedCCs = voronoi?.circumcenters, extraSeeds = voronoi?.extraSeeds;
+    const fullNodes = voronoi?.fullNodes, survivingNodeIds = voronoi?.survivingNodeIds, fakeCgrId = voronoi?.fakeCgrId ?? undefined;
     const ctx = this.ctx;
     const W = this.canvas.width, H = this.canvas.height;
     const STEP = 3; // sample every 3rd pixel; 3×3 blocks when scaled up

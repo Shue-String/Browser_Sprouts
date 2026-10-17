@@ -8,7 +8,7 @@
  */
 import { createInitialState, cloneState } from '../../src/model/gameState';
 import { applyMove, recomputeRegions } from '../../src/model/moves';
-import { parseMoveSequence } from '../../src/model/moveCodeParse';
+import { parseMoveSequence, rawResolvedMove } from '../../src/model/moveCodeParse';
 import { candidateStrokes, strokeCrossesEdges } from '../../src/model/strokeSynthesis';
 import { strokeReproduces } from '../../src/model/recreate';
 import { computeMoveCode, computeEnclosureSideColoring } from '../../src/model/moveCode';
@@ -33,7 +33,7 @@ const state = createInitialState(seq.spots);
 async function main(): Promise<void> {
 for (let i = 0; i < seq.moves.length; i++) {
   const m = seq.moves[i];
-  const parsed = { ...m, brackets: m.brackets as number[] | null, parens: m.parens as any };
+  const parsed = rawResolvedMove(m);
   const cands = candidateStrokes(state, parsed);
   const rows = cands.map(s => {
     const crosses = strokeCrossesEdges(state, s);

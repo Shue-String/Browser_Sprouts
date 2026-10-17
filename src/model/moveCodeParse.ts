@@ -69,6 +69,12 @@ export interface ResolvedMove extends Omit<ParsedMove, 'brackets' | 'parens'> {
   parens: VertexId | 'empty' | null;
 }
 
+/** A raw-ID (unlabelled) ParsedMove as a ResolvedMove: its brackets/parens are already plain
+ *  vertex IDs (range entries only appear in labelled sequences — see resolveLabelledMove). */
+export function rawResolvedMove(move: ParsedMove): ResolvedMove {
+  return { ...move, brackets: move.brackets as VertexId[] | null, parens: move.parens as ResolvedMove['parens'] };
+}
+
 export interface ParsedSequence {
   spots: number;
   /** True when the "n:" prefix carried the "L" marker — lo/hi/brackets are

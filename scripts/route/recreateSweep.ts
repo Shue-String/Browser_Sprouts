@@ -20,8 +20,7 @@ import { applyMove } from '../../src/model/moves';
 import { encodePositionDecompressed } from '../../src/model/encoding';
 import { canon } from '../../src/engine/stalks';
 import { computeMoveCode, findMoveRegion, findEnclosedSideRegion } from '../../src/model/moveCode';
-import { parseMoveSequence } from '../../src/model/moveCodeParse';
-import type { ResolvedMove } from '../../src/model/moveCodeParse';
+import { parseMoveSequence, rawResolvedMove } from '../../src/model/moveCodeParse';
 import { synthesizeMove } from '../../src/model/recreate';
 import { strokeCrossesEdges } from '../../src/model/strokeSynthesis';
 import { allRoutedMoves } from '../../src/model/moveRouter';
@@ -80,9 +79,7 @@ for (let g = 0; g < games; g++) {
   let result = 'faithful';
   for (let i = 0; i < seq.moves.length; i++) {
     const mv = seq.moves[i];
-    let parsed: ResolvedMove;
-    if (LBL) parsed = resolveLabelledMove(mv, rp.spotLabels);
-    else parsed = { ...mv, brackets: mv.brackets as number[] | null, parens: mv.parens as ResolvedMove['parens'] };
+    const parsed = LBL ? resolveLabelledMove(mv, rp.spotLabels) : rawResolvedMove(mv);
     let stroke = synthesizeMove(rp, parsed, LBL);
     // Mirror runRecreate's no-candidate retry: re-arm the forces and relax ~recreateRetrySettleMs
     // of 60 fps frames before giving up.

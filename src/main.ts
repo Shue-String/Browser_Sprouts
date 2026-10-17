@@ -6,7 +6,7 @@ import { VertexType } from './model/types';
 import type { EncodingResult } from './model/encoding';
 import { computeMoveCode, computeEnclosureSideColoring, computeEnclosureCoverage } from './model/moveCode';
 import { recomputeSpotLabels, initialSpotLabels, labelledMoveCode, formatSpotLabel } from './model/vertexLabels';
-import { parseMoveSequence } from './model/moveCodeParse';
+import { parseMoveSequence, rawResolvedMove } from './model/moveCodeParse';
 import type { ResolvedMove } from './model/moveCodeParse';
 import { synthesizeMove, appliedMoveMatches, computeRecreateHints, strokeReproduces, applyTrial } from './model/recreate';
 import type { RecreateHints } from './model/recreate';
@@ -21,7 +21,7 @@ import { tunables, TUNABLE_SPECS, loadTunables, saveTunables, resetTunables } fr
 import { deadRegionStep, eliminateIsolatedVertex, detectLouse, scabAloneCollapse, detectSpecialCollapse, specialCollapseVertices, stepSpecialCollapse, takeEncodingGateRefusal } from './model/deadRegions';
 import type { SpecialCollapse } from './model/deadRegions';
 import { Renderer } from './render/renderer';
-import type { SubregionHighlight } from './render/renderer';
+import type { SubregionHighlight, VoronoiOverlay } from './render/renderer';
 import { InputHandler } from './input/inputHandler';
 import { identityRotation, rotationX, rotationY, composeRotations, rotateSpherePoint, axisAngleRotation, fibonacciSphere } from './math/sphere';
 import type { RotationMatrix, SpherePoint } from './math/sphere';
@@ -165,10 +165,15 @@ wireCharHover(bottomBarText, () => lastCharInfo);
 // Position Browser move hover/lock preview: a dashed arc on the playfield for whatever child
 // move the browser is currently hovering/locking, resolved from the engine's abstract MoveInfo
 // against the live state (only meaningful while the browser is showing the live position).
-let movePreviewArc: SpherePoint[] | null = null;
-let movePreviewStroke: { v1: number; v2: number; stroke: SpherePoint[] } | null = null;
-let movePreviewFailRing: number[] | null = null;
-let movePreviewFailCandidates: { stroke: SpherePoint[]; legal: boolean }[] | null = null;
+// `found` is the verified stroke for `targetEnc` (drawn dashed, and what a double-click on that
+// same child commits); for an unreachable child, `failRing` rings its endpoints and `failCandidates`
+// shows what was tried (both debug-gated).
+let movePreview: {
+  targetEnc: string;
+  found: { v1: number; v2: number; stroke: SpherePoint[] } | null;
+  failRing: number[] | null;
+  failCandidates: { stroke: SpherePoint[]; legal: boolean }[] | null;
+} | null = null;
 let movePreviewToken = 0;
 
 // Background stroke cache for the Position Browser's children, keyed by the canon each stroke
@@ -278,38 +283,41 @@ setMoveCallbacks({
   onPreview(target: MovePreviewTarget | null) {
     const myToken = ++movePreviewToken;
     if (!target || !isShowingLive()) {
-      movePreviewStroke = null;
-      movePreviewArc = null;
-      movePreviewFailRing = null;
-      movePreviewFailCandidates = null;
+      movePreview = null;
       wake();
       return;
     }
     void synthesizeVerifiedMove(target).then(result => {
       if (myToken !== movePreviewToken) return; // superseded by a later hover
-      movePreviewStroke = result.kind === 'found' ? result : null;
-      movePreviewArc = result.kind === 'found' ? result.stroke : null;
-      movePreviewFailRing = result.kind === 'unreachable' && showBroken ? [result.v1, result.v2] : null;
-      // Only surface the auto-checked candidate strokes ("what did we try and
-      // reject") when Pause Recreations is on — same debug-oriented gate the
-      // manual-draw fallback's own candidate overlay uses, so this doesn't
-      // clutter normal play.
-      movePreviewFailCandidates = result.kind === 'unreachable' && pauseRecreations ? result.candidates : null;
+      movePreview = {
+        targetEnc: target.targetEnc,
+        found: result.kind === 'found' ? result : null,
+        failRing: result.kind === 'unreachable' && showBroken ? [result.v1, result.v2] : null,
+        // Only surface the auto-checked candidate strokes ("what did we try and reject") when Pause
+        // Recreations is on — same debug-oriented gate the manual-draw fallback's own candidate
+        // overlay uses, so this doesn't clutter normal play.
+        failCandidates: result.kind === 'unreachable' && pauseRecreations ? result.candidates : null,
+      };
       wake();
     });
   },
   onConfirm(target: MovePreviewTarget) {
     if (!isShowingLive()) return;
+    const historyAtClick = history.length;
+    const legalNow = (s: { stroke: SpherePoint[] }): boolean => !strokeCrossesEdges(state, s.stroke);
     void (async () => {
-      const resolved = movePreviewStroke ?? await synthesizeVerifiedMove(target).then(r => r.kind === 'found' ? r : null);
-      if (!resolved) return;
-      pushHistorySnapshot();
-      applyMove(state, { v1: resolved.v1, v2: resolved.v2, stroke: resolved.stroke });
-      afterMoveCommitted(resolved.v1, resolved.v2, resolved.stroke);
-      movePreviewArc = null;
-      movePreviewStroke = null;
-      movePreviewFailRing = null;
-      movePreviewFailCandidates = null;
+      // The hover's stroke only stands in for this child if it was found for this child (a pending
+      // hover can leave a sibling's stroke in place) and still crosses nothing (layout physics may
+      // have moved the board since it was verified); otherwise synthesize afresh.
+      const hovered = movePreview?.targetEnc === target.targetEnc ? movePreview.found : null;
+      const resolved = hovered && legalNow(hovered)
+        ? hovered
+        : await synthesizeVerifiedMove(target).then(r => r.kind === 'found' ? r : null);
+      // Synthesis awaits the WASM canon, so the board can move or a move land before we get here:
+      // re-check right before committing, synchronously with it.
+      if (!resolved || history.length !== historyAtClick || !isShowingLive() || !legalNow(resolved)) return;
+      commitStroke(resolved.v1, resolved.v2, resolved.stroke);
+      movePreview = null;
       wake();
     })();
   },
@@ -353,13 +361,6 @@ async function synthesizeVerifiedMove(target: MovePreviewTarget): Promise<Synthe
   const resolved = resolveMoveVertices(state, target.move);
   if (!resolved) return (await cached()) ?? { kind: 'unresolved' };
   const parsed = parsedFromResolved(resolved);
-  // target.targetEnc comes straight from the WASM engine's analyze() child
-  // list, which is not guaranteed to already be in the same bracketless/
-  // DisaPoint-compressed form that canonEncoding() below produces for the
-  // trial position (e.g. a two-vertex "(29)"/"(2,9)" region vs. its
-  // compressed "3" token for the same equivalence class) — normalize both
-  // sides through canonEncoding() so the comparison isn't representation-
-  // sensitive.
   const targetCanon = await canonEncoding(target.targetEnc);
   const candidates: { stroke: SpherePoint[]; legal: boolean }[] = [];
   for (const stroke of candidateStrokeStream(state, parsed)) {
@@ -415,10 +416,7 @@ let   camera: RotationMatrix = identityRotation();
   /** Dev aid: full commit pipeline (history snapshot + applyMove + afterMoveCommitted), so a
    *  console-driven move behaves like a real one (tracked-check scheduling, committedMoves, etc). */
   commitMove(v1: number, v2: number, stroke: unknown[]) {
-    pushHistorySnapshot();
-    const sphereStroke = stroke as SpherePoint[];
-    applyMove(state, { v1, v2, stroke: sphereStroke });
-    afterMoveCommitted(v1, v2, sphereStroke);
+    commitStroke(v1, v2, stroke as SpherePoint[]);
   },
   undoLast: () => undoLast(),
   get committedMoves() {
@@ -596,16 +594,10 @@ let manualAwait: { parsed: ResolvedMove; before: GameState; resolve: (ok: boolea
 let manualHints: RecreateHints | null = null;
 
 // Voronoi subregion visualization — shown during Recreate manual-draw fallback for enclosure moves.
-let subregionHighlight: SubregionHighlight | null = null;
+let subregionOverlay: { highlight: SubregionHighlight; voronoi: VoronoiOverlay } | null = null;
 
 // Blue hint arc shown during manual-draw fallback (the best Voronoi candidate, even if it didn't verify).
 let proposedArc: SpherePoint[] | null = null;
-let lastVoronoiGraph: import('./model/voronoiGraph').VoronoiGraph | null = null;
-let lastVoronoiCCs: import('./math/sphere').SpherePoint[] | null = null;
-let lastVoronoiExtraSeeds: { pos: import('./math/sphere').SpherePoint; hue: number }[] | null = null;
-let lastVoronoiFullNodes: import('./model/voronoiGraph').VoronoiNodeData[] | null = null;
-let lastVoronoiSurvivingIds: number[] | null = null;
-let lastVoronoiFakeCgrId: number | null = null;
 
 // When true, pause on every automated Recreate move to show candidates before committing.
 let pauseRecreations = false;
@@ -708,9 +700,7 @@ document.addEventListener('keydown', e => {
       return;
     }
     try {
-      pushHistorySnapshot();
-      applyMove(state, { v1: await_.parsed.lo, v2: await_.parsed.hi, stroke: arc });
-      afterMoveCommitted(await_.parsed.lo, await_.parsed.hi, arc);
+      commitStroke(await_.parsed.lo, await_.parsed.hi, arc);
       clearManualPause();
       wake();
       await_.resolve(true);
@@ -887,6 +877,19 @@ function revertIfCollapseRefused(finished?: SpecialCollapse): boolean {
 function pushHistorySnapshot(): void {
   history.push({ state: cloneState(state), committed: null });
   updateUndoButton();
+}
+
+/** Commit a programmatic stroke (Recreate, the Position Browser, Enter force-commit, the console
+ *  dev aid) exactly as live input does: undo snapshot, applyMove, then afterMoveCommitted. */
+function commitStroke(v1: number, v2: number, stroke: SpherePoint[]): void {
+  pushHistorySnapshot();
+  applyMove(state, { v1, v2, stroke });
+  // Double-check: neither half of the committed move (the last two edges made) crosses an edge.
+  for (const eid of [state.nextEdgeId - 2, state.nextEdgeId - 1]) {
+    const e = state.edges.get(eid);
+    if (e && strokeCrossesEdges(state, e.points, eid)) console.warn(`Move ${moveSeqLog.length + 1}: committed edge ${eid} crosses existing geometry`);
+  }
+  afterMoveCommitted(v1, v2, stroke);
 }
 
 /**
@@ -1355,7 +1358,7 @@ function loadGameState(save: SaveFileV2): void {
   camera = deserialized.camera;
   pendingCollapse = null;
   generalCollapseFocus = null;
-  subregionHighlight = null;
+  subregionOverlay = null;
   proposedArc = null;
   recenterAxis = null;
   recenterAngleLeft = 0;
@@ -1386,11 +1389,7 @@ function loadGameState(save: SaveFileV2): void {
   // Saved pending moves predate range-brackets support (a mid-recreate save
   // always resumes in raw-id terms) — brackets are already plain vertex ids.
   if (deserialized.pendingMove) {
-    resumePausedMove({
-      ...deserialized.pendingMove,
-      brackets: deserialized.pendingMove.brackets as number[] | null,
-      parens: deserialized.pendingMove.parens as VertexId | 'empty' | null,
-    });
+    resumePausedMove(rawResolvedMove(deserialized.pendingMove));
   }
 }
 document.addEventListener('click', () => {
@@ -1868,7 +1867,7 @@ function resetGame(spots: number): void {
   pendingCollapse = null;
   generalCollapseFocus = null;
   collapseSnapshot = null;
-  subregionHighlight = null;
+  subregionOverlay = null;
   proposedArc = null;
   recreateCheckFailed = false;
   lastCommittedEncoding = null;
@@ -2009,7 +2008,7 @@ function hideBanner(): void {
 function clearManualPause(): void {
   manualAwait = null;
   manualHints = null;
-  subregionHighlight = null;
+  subregionOverlay = null;
   proposedArc = null;
   voronoiPathBar.classList.remove('visible');
   hideBanner();
@@ -2020,10 +2019,18 @@ function clearManualPause(): void {
 function abortRecreate(): void {
   if (!recreateActive) return;
   manualAwait?.resolve(false);
-  if (candidateResolve) { candidateResolve(false); candidateResolve = null; candidatePreviewList = null; }
+  candidateResolve?.(false);
+  endRecreate();
+}
+
+/** Leave Recreate mode: drop every pause/preview overlay and re-enable live input. */
+function endRecreate(): void {
   recreateActive = false;
+  candidatePreviewList = null;
+  candidateResolve = null;
   clearManualPause();
   setPaused(false);
+  updateUndoButton();
 }
 
 function setPaused(paused: boolean): void {
@@ -2119,25 +2126,18 @@ function setupManualPause(
 ): void {
   manualAwait = { parsed, before, resolve };
   manualHints = computeRecreateHints(state, parsed);
-  const showVoronoi = forceVoronoi || pauseRecreations;
   // Voronoi cell coloring for enclosure moves — pause mode only; in
   // no-pause mode it just occludes the red/blue recreate-hint markers.
-  subregionHighlight = (showVoronoi && parsed.brackets && parsed.brackets.length > 0)
-    ? buildSubregionHighlight(state, parsed.lo, parsed.hi, parsed.brackets ?? [])
+  const showVoronoi = forceVoronoi || pauseRecreations;
+  const highlight = showVoronoi && parsed.brackets && parsed.brackets.length > 0
+    ? buildSubregionHighlight(state, parsed.lo, parsed.hi, parsed.brackets)
     : null;
-  if (subregionHighlight && showVoronoi) {
-    const vData = buildVoronoiGraph(state, subregionHighlight, parsed.lo, parsed.hi);
-    const { graph: vGraph, circumcenters, extraSeeds, fullNodes, survivingNodeIds } = vData;
-    lastVoronoiGraph = vGraph;
-    lastVoronoiCCs = circumcenters;
-    lastVoronoiExtraSeeds = extraSeeds.length > 0 ? extraSeeds : null;
-    lastVoronoiFullNodes = fullNodes;
-    lastVoronoiSurvivingIds = survivingNodeIds;
-    if (DEBUG.recreate) console.log('[VoronoiGraph]', JSON.stringify(vGraph, null, 2));
-    const v1Pos = state.vertices.get(parsed.lo)?.pos;
-    const v2Pos = state.vertices.get(parsed.hi)?.pos;
-    const voronoiResult = computeJunctionVoronoiPath(vData, v1Pos, v2Pos);
-    lastVoronoiFakeCgrId = voronoiResult?.fakeCgrNodeId ?? null;
+  subregionOverlay = null;
+  if (highlight) {
+    const vData = buildVoronoiGraph(state, highlight, parsed.lo, parsed.hi);
+    if (DEBUG.recreate) console.log('[VoronoiGraph]', JSON.stringify(vData.graph, null, 2));
+    const voronoiResult = computeJunctionVoronoiPath(vData, state.vertices.get(parsed.lo)?.pos, state.vertices.get(parsed.hi)?.pos);
+    subregionOverlay = { highlight, voronoi: { ...vData, fakeCgrId: voronoiResult?.fakeCgrNodeId ?? null } };
     proposedArc = voronoiResult && !strokeCrossesEdges(state, voronoiResult.pts) ? voronoiResult.pts : firstLegalCandidate(parsed);
     if (voronoiResult) {
       const { nodeIds, seg2Start, seg3Start } = voronoiResult;
@@ -2176,13 +2176,7 @@ function promptManual(parsed: ResolvedMove, moveNum: number): Promise<boolean> {
 /** Re-enter a hand-drawn-move pause after Load restores a saved paused position. */
 function resumePausedMove(parsed: ResolvedMove): void {
   recreateActive = true;
-  setupManualPause(parsed, moveSeqLog.length + 1, cloneState(state), () => {
-    recreateActive = false;
-    clearManualPause();
-    setPaused(false);
-    updateUndoButton();
-    wake();
-  }, true);
+  setupManualPause(parsed, moveSeqLog.length + 1, cloneState(state), endRecreate, true);
 }
 
 /**
@@ -2190,18 +2184,14 @@ function resumePausedMove(parsed: ResolvedMove): void {
  * for the user to press Enter. Returns the first legal stroke, or null if none.
  */
 function promptCandidates(parsed: ResolvedMove, moveNum: number): Promise<SpherePoint[] | null> {
-  // The one test every candidate faces: legal (crosses nothing) and reproduces the token.
-  const reproduces = (stroke: SpherePoint[]): boolean => strokeReproduces(state, parsed, stroke, recreateUseLabels);
-
-  // When not pausing, auto-commit the first candidate that reproduces, with no display. Walk the
-  // LAZY stream: most moves verify on the plain geodesic / small loop at its front, and stopping
-  // there means the router's face meshes and the Voronoi fallbacks (last in the stream) are never
-  // built for them. A crossing stroke is never committed — with nothing legal, the move goes to
-  // manual drawing.
+  // When not pausing, auto-commit the first candidate that reproduces, with no display.
+  // synthesizeMove walks the LAZY stream: most moves verify on the plain geodesic / small loop at
+  // its front, and stopping there means the router's face meshes and the Voronoi fallbacks (last in
+  // the stream) are never built for them. A crossing stroke is never committed — with nothing
+  // legal, the move goes to manual drawing.
   if (!pauseRecreations) {
-    for (const stroke of candidateStrokeStream(state, parsed)) {
-      if (reproduces(stroke)) return Promise.resolve(stroke);
-    }
+    const stroke = synthesizeMove(state, parsed, recreateUseLabels);
+    if (stroke) return Promise.resolve(stroke);
     if (DEBUG.recreate) {
       const all = candidateStrokes(state, parsed);
       const crossing = all.filter(s => strokeCrossesEdges(state, s)).length;
@@ -2216,7 +2206,8 @@ function promptCandidates(parsed: ResolvedMove, moveNum: number): Promise<Sphere
   let firstLegal: SpherePoint[] | null = null;
   let legalCount = 0;
   const evaluated = all.map(stroke => {
-    const legal = reproduces(stroke);
+    // Legal (crosses nothing) and reproduces the token.
+    const legal = strokeReproduces(state, parsed, stroke, recreateUseLabels);
     if (legal && !firstLegal) firstLegal = stroke;
     if (legal) legalCount++;
     return { stroke, legal };
@@ -2273,16 +2264,7 @@ async function runRecreate(seq: ReturnType<typeof parseMoveSequence>): Promise<v
       // Labelled sequences carry spot LABELS in lo/hi/subscripts/brackets/parens;
       // resolve to raw vertex IDs against the live label state (in lockstep with
       // the recording) before anything downstream touches state.vertices by ID.
-      let parsed: ResolvedMove;
-      if (recreateUseLabels) {
-        parsed = resolveLabelledMove(rawMove, state.spotLabels);
-      } else {
-        parsed = {
-          ...rawMove,
-          brackets: rawMove.brackets as number[] | null,
-          parens: rawMove.parens as VertexId | 'empty' | null,
-        };
-      }
+      const parsed = recreateUseLabels ? resolveLabelledMove(rawMove, state.spotLabels) : rawResolvedMove(rawMove);
       // Ensure any collapse chain from the previous move finishes before we
       // freeze the frame loop with the candidate preview.
       await waitForCollapseDone();
@@ -2302,25 +2284,11 @@ async function runRecreate(seq: ReturnType<typeof parseMoveSequence>): Promise<v
         if (!recreateActive) return;
         if (DEBUG.recreate) console.log(`[Move ${i + 1}] retry ${retry + 1} after re-settling: ${stroke ? 'found a candidate' : 'still none'}`);
       }
-      if (stroke) {
-        pushHistorySnapshot();
-        applyMove(state, { v1: parsed.lo, v2: parsed.hi, stroke });
-        // Double-check: neither half of the committed move (the last two edges made) crosses an edge.
-        for (const eid of [state.nextEdgeId - 2, state.nextEdgeId - 1]) {
-          const e = state.edges.get(eid);
-          if (e && strokeCrossesEdges(state, e.points, eid)) console.warn(`Recreate move ${i + 1}: committed edge ${eid} crosses existing geometry`);
-        }
-        afterMoveCommitted(parsed.lo, parsed.hi, stroke);
-        await settle(tunables.settleMs);
-        await waitForFullSettle();
-        await waitForUnpause();
-      } else {
-        const accepted = await promptManual(parsed, i + 1);
-        if (!accepted) return; // cancelled
-        await settle(tunables.settleMs);
-        await waitForFullSettle();
-        await waitForUnpause();
-      }
+      if (stroke) commitStroke(parsed.lo, parsed.hi, stroke);
+      else if (!(await promptManual(parsed, i + 1))) return; // cancelled
+      await settle(tunables.settleMs);
+      await waitForFullSettle();
+      await waitForUnpause();
       // Move Check ("C"-tagged sequences): verify the committed move actually landed on
       // the recorded position. lastCommittedEncoding was set inside afterMoveCommitted,
       // reached via either branch above, so it always reflects this move's outcome.
@@ -2331,13 +2299,7 @@ async function runRecreate(seq: ReturnType<typeof parseMoveSequence>): Promise<v
       }
     }
   } finally {
-    recreateActive = false;
-    clearManualPause();
-    candidatePreviewList = null;
-    candidateResolve = null;
-    setPaused(false);
-    updateUndoButton();
-    wake();
+    endRecreate();
   }
 }
 
@@ -2821,7 +2783,7 @@ function frameBody(now: number): void {
       }
     }
     const playerTurn = (state.moveCount % 2 === 0 ? 1 : 2) as 1 | 2;
-    renderer.render(state, camera, { ...extras, showMidpoints, showRegions, showVertexIds, showBoundaryArrows, showRegionDiagnostic, showRegionNetwork, vertexLabels, spotLabels: spotLabelsDisplay, popAnimations: activePops, gameOver: isGameOver(), playerTurn, checkFailed: recreateCheckFailed, recreateHints: manualHints ?? undefined, candidatePreviewStrokes: candidatePreviewList ?? movePreviewFailCandidates ?? undefined, subregionHighlight: subregionHighlight ?? undefined, proposedArc: proposedArc ?? undefined, movePreviewArc: movePreviewArc ?? undefined, movePreviewRawArc: showRawMovePlan && movePreviewArc ? rawRouteOf(movePreviewArc) : undefined, movePreviewFailRing: movePreviewFailRing ?? undefined, voronoiGraph: lastVoronoiGraph ?? undefined, voronoiCircumcenters: lastVoronoiCCs ?? undefined, voronoiExtraSeeds: lastVoronoiExtraSeeds ?? undefined, voronoiFullNodes: lastVoronoiFullNodes ?? undefined, voronoiSurvivingIds: lastVoronoiSurvivingIds ?? undefined, voronoiFakeCgrId: lastVoronoiFakeCgrId ?? undefined, hoverHighlight: hoverCharInfo ?? undefined, enclosureSideColors: showEnclosureSides ? lastEnclosureSideColors : undefined, enclosureCoverage: showEnclosureSides ? lastEnclosureCoverage : undefined, vertexIdLabels: canvasVertexLabels });
+    renderer.render(state, camera, { ...extras, showMidpoints, showRegions, showVertexIds, showBoundaryArrows, showRegionDiagnostic, showRegionNetwork, vertexLabels, spotLabels: spotLabelsDisplay, popAnimations: activePops, gameOver: isGameOver(), playerTurn, checkFailed: recreateCheckFailed, recreateHints: manualHints ?? undefined, candidatePreviewStrokes: candidatePreviewList ?? movePreview?.failCandidates ?? undefined, subregionHighlight: subregionOverlay?.highlight, voronoi: subregionOverlay?.voronoi, proposedArc: proposedArc ?? undefined, movePreviewArc: movePreview?.found?.stroke, movePreviewRawArc: showRawMovePlan && movePreview?.found ? rawRouteOf(movePreview.found.stroke) : undefined, movePreviewFailRing: movePreview?.failRing ?? undefined, hoverHighlight: hoverCharInfo ?? undefined, enclosureSideColors: showEnclosureSides ? lastEnclosureSideColors : undefined, enclosureCoverage: showEnclosureSides ? lastEnclosureCoverage : undefined, vertexIdLabels: canvasVertexLabels });
   }
 
   if (needsRender) {

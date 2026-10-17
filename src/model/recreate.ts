@@ -138,17 +138,16 @@ export function computeRecreateHints(state: GameState, parsed: ResolvedMove): Re
   const iLo = findOccurrence(entries, parsed.lo, parsed.loSub);
   const iHi = parsed.lo === parsed.hi ? -1 : findOccurrence(entries, parsed.hi, parsed.hiSub);
 
-  // Joint check: if side !== 'only', record the in/out edge pair for that visit.
-  if (iLo >= 0 && entries[iLo].side !== 'only') {
-    const inEid  = entries[(iLo - 1 + N) % N].edgeId;
-    const outEid = entries[iLo].edgeId;
-    if (inEid != null && outEid != null) hints.loJointEdges = [inEid, outEid];
-  }
-  if (iHi >= 0 && entries[iHi].side !== 'only') {
-    const inEid  = entries[(iHi - 1 + N) % N].edgeId;
-    const outEid = entries[iHi].edgeId;
-    if (inEid != null && outEid != null) hints.hiJointEdges = [inEid, outEid];
-  }
+  // Joint check: if side !== 'only', the in/out edge pair for that visit.
+  const jointEdges = (i: number): [EdgeId, EdgeId] | null => {
+    if (i < 0 || entries[i].side === 'only') return null;
+    const inEid  = entries[(i - 1 + N) % N].edgeId;
+    const outEid = entries[i].edgeId;
+    return inEid != null && outEid != null ? [inEid, outEid] : null;
+  };
+  const loJoint = jointEdges(iLo), hiJoint = jointEdges(iHi);
+  if (loJoint) hints.loJointEdges = loJoint;
+  if (hiJoint) hints.hiJointEdges = hiJoint;
 
   // Bracket geometry (enclosure moves only).
   if (!parsed.brackets || parsed.brackets.length === 0) return hints;
@@ -201,7 +200,6 @@ export function computeRecreateHints(state: GameState, parsed: ResolvedMove): Re
 
   return hints;
 }
-
 
 /**
  * Verify a move that has ALREADY been applied (e.g. drawn by hand during the

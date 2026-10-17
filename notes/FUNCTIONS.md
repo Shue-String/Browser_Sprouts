@@ -184,6 +184,7 @@ Internal pipeline: `assignMembraneLetters` → `buildVertexSymbols` → `buildRe
 |---|---|
 | `parseMoveSequence(input)` | Parse a full move-sequence string into a `ParsedSequence` of `ParsedMove` tokens |
 | `parseToken(token, index)` | Parse one move token (loXhi format, with optional brackets/parens) into a `ParsedMove` |
+| `rawResolvedMove(move)` | A raw-ID (unlabelled) `ParsedMove` as a `ResolvedMove` (labelled ones go through `resolveLabelledMove`) |
 
 Key types: `BracketEntry`, `ParsedMove`, `ResolvedMove` (a `ParsedMove` with brackets/parens
 resolved to concrete vertex IDs), `ParsedSequence`.
@@ -814,14 +815,15 @@ Key internal functions (selected):
 - `wireOverlay(overlay, closeBtn, onClose?)` / `wirePanel(name, init)` — every modal overlay's close button, backdrop click and Escape (`overlayClosers`); `wirePanel` adds the top-bar button for Collect / T-Tree / Genomes
 - `wireCharHover(el, infoOf)` / `renderCharSpans(el, text)` — encoding-bar hover highlight: one indexed span per character, mousemove looks up that character's vertex provenance (bottom bar, Position Browser live row, tracked panel)
 - `computeLiveEncodingDisplay(state, enc)` — encoding-bar text + per-character provenance (compact canon when it lines up, else the decompressed `trackedLayout`)
-- `clearManualPause()` / `abortRecreate()` — leave a hand-drawn-move pause (hints, Voronoi overlay + path bar, banner) / stop a running Recreate entirely (a superset: also cancels the pending pause or candidate preview); called on New Game, Load, and opening Recreate
+- `clearManualPause()` / `endRecreate()` / `abortRecreate()` — leave a hand-drawn-move pause (hints, Voronoi overlay + path bar, banner) / leave Recreate mode (also drops the candidate preview, unpauses, re-enables input) / stop a running Recreate (resolves the pending pause or candidate preview as cancelled, then `endRecreate`); abort is called on New Game, Load, and opening Recreate
 - `scheduleTrackedCheck()` / `runPendingTrackedCheck()` — debounce and run the engine-vs-geometry check after a move
 - `resyncTrackedFromHistory()` — rebuild engine tracking state by replaying move history (after undo/load)
-- `precomputeChildrenMoves(targets)` / `synthesizeVerifiedMove(target)` — Position Browser move-preview stroke synthesis. The background pass only runs while the board is at rest (`layoutQuiet`: no Recreate, no collapse, no drag, last smoothStep under settleEpsilon); a new position's children wait in `pendingChildTargets` and `maybeStartPrecompute` (called every frame) starts/resumes it; it yields per candidate and parks itself if the board moves. A hover checks the cache first, else computes its own child on demand. (Running it during motion rebuilt router face meshes per child — ~4 fps and multi-second freezes during Recreate.)
+- `precomputeChildrenMoves(targets)` / `synthesizeVerifiedMove(target)` — Position Browser move-preview stroke synthesis. The background pass only runs while the board is at rest (`layoutQuiet`: no Recreate, no collapse, no drag, last smoothStep under settleEpsilon); a new position's children wait in `pendingChildTargets` and `maybeStartPrecompute` (called every frame) starts/resumes it; it yields per candidate and parks itself if the board moves. A hover checks the cache first, else computes its own child on demand. A double-click (`onConfirm`) reuses the hover's stroke only if it was found for that same child and still crosses nothing, and re-checks crossings, live-ness and that no move landed right before committing. (Running it during motion rebuilt router face meshes per child — ~4 fps and multi-second freezes during Recreate.)
 - `runRecreate(seq)` — replay a parsed Move Sequence into the current position
-- `promptManual(parsed, moveNum)` / `promptCandidates(parsed, moveNum)` / `verifyManualMove(v1, v2)` — manual (user-drawn) Recreate flow
+- `promptManual(parsed, moveNum)` / `promptCandidates(parsed, moveNum)` / `verifyManualMove(v1, v2)` — manual (user-drawn) Recreate flow; `promptCandidates`' no-pause path is recreate.ts `synthesizeMove`, the same call the route scripts replay through
 - `firstLegalCandidate(parsed)` — the manual-pause blue hint arc (`proposedArc`): first candidate that crosses nothing. Enter force-commits it without token verification, and re-checks crossings first (the board may have moved)
 - `undoLast(recordRedo?)` / `redoLast()` / `pushHistorySnapshot()` — undo/redo stack
+- `commitStroke(v1, v2, stroke)` — commit a programmatic stroke exactly as live input does (snapshot, applyMove, warn if a new edge crosses, afterMoveCommitted); used by Recreate, Enter force-commit, the Position Browser's double-click and `__sprouts.commitMove`
 - `updateMoveSeq()` / `moveSeqCopyText()` — Move Sequence bar (see memory `project_pb_panel_move_seq_bar.md`)
 - `loadGameState(save)` / `resetGame(spots)` — load a save / start a fresh game
 - `unlockDebugMode()` — debug-unlock keystroke sequence handler
