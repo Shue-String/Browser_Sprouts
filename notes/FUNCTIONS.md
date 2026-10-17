@@ -142,6 +142,22 @@ is `classifyVertexFull` in encoding.ts).
 
 ---
 
+## `src/model/drawOrigin.ts` — Which end an automatic move's edge draws from
+
+| Function | Description |
+|---|---|
+| `drawOriginVertex(state, v1, v2)` | The endpoint the drawn-commit animation starts at. Precedence: appendage, spot, decayed scab, membrane, joint, distal scab; ties keep `v1`. Any vertex in a compressed notation (3/4/5/6, ~5) ranks as a membrane except a DisaPoint's interior scab (`~3`); a `3`↔`~3` move (through the DisaPoint interior) always starts at the membrane. Distal vs decayed scab: a distal scab appears twice in one living face's boundary walk (private `isDistal`). |
+
+---
+
+## `src/model/computerPlayer.ts` — Computer player's move order
+
+| Function | Description |
+|---|---|
+| `computerMoveOrder(children, strength)` | Async generator over the engine's move-bearing children, best first; main.ts plays them in order until one draws. `random`: game-ending children (`maxMoves === 0` or all-`N` enc), then everything. `smart`: known nimber-0 children, then UNKNOWN children valued one at a time via `analyze()` (so only those under the engine's automatic gate, largest minimal subposition ≤ 10 lives, kAutoLives2; results `record`ed), yielding the zeros, then everything. Each tier shuffled; no child repeats. Lazy, so Smart stops valuing once a zero draws. |
+
+---
+
 ## `src/model/encoding.ts` — Position encoding (canonical invariant string)
 
 | Function | Description |
@@ -589,7 +605,8 @@ Bump `FULL_KEY` (this file) whenever the `AnalysisOk`/`ChildInfo` shape changes 
 Notable private helpers: `drawHoverWedge`/`computeScabArc`/`drawHoverCircle` (scab wedge
 rendering — see memory `project_scab_rendering.md`), `renderRegionDiagnostic` (region
 bookkeeping-vs-geometry cross-check overlay), `renderRecreateHints`,
-`renderRegionNetwork`, `renderPop`, `computeRegionHues`, `renderRegionFills`,
+`renderRegionNetwork`, `renderPop`, `renderDrawFx` (drawn-commit red pop / inward un-pop),
+`computeRegionHues`, `renderRegionFills`,
 `screenOuterRegion`, `boundarySphereLoop`/`boundaryPolygon`, `renderBoundaryArrows`,
 `projectAdaptive` (adaptive edge subdivision near projection singularities),
 `renderSubregionHighlight`.
@@ -731,6 +748,7 @@ Key type: `TrackedStatus` (`'match' | 'mismatch' | 'indeterminate' | 'desynced' 
 | `openPositionBrowser(initialInput)` | Open the panel, seeded at a given encoding/position input |
 | `notifyLivePosition(inputText)` | Push the current live game position into the panel (for Sync mode) |
 | `isShowingLive()` | Whether the panel is currently showing the live game position |
+| `childrenWithMoves(inputText)` | The move-bearing children the panel's rows show (via `analyzeCached` + `backfillChildren`), nimbers where known, UNKNOWN_VALUE elsewhere; null if the engine returns none. Used by the computer player |
 
 Key type: `MovePreviewTarget`, `SyncCallbacks`.
 
@@ -818,12 +836,16 @@ Key internal functions (selected):
 - `clearManualPause()` / `endRecreate()` / `abortRecreate()` — leave a hand-drawn-move pause (hints, Voronoi overlay + path bar, banner) / leave Recreate mode (also drops the candidate preview, unpauses, re-enables input) / stop a running Recreate (resolves the pending pause or candidate preview as cancelled, then `endRecreate`); abort is called on New Game, Load, and opening Recreate
 - `scheduleTrackedCheck()` / `runPendingTrackedCheck()` — debounce and run the engine-vs-geometry check after a move
 - `resyncTrackedFromHistory()` — rebuild engine tracking state by replaying move history (after undo/load)
-- `precomputeChildrenMoves(targets)` / `synthesizeVerifiedMove(target)` — Position Browser move-preview stroke synthesis. The background pass only runs while the board is at rest (`layoutQuiet`: no Recreate, no collapse, no drag, last smoothStep under settleEpsilon); a new position's children wait in `pendingChildTargets` and `maybeStartPrecompute` (called every frame) starts/resumes it; it yields per candidate and parks itself if the board moves. A hover checks the cache first, else computes its own child on demand. A double-click (`onConfirm`) reuses the hover's stroke only if it was found for that same child and still crosses nothing, and re-checks crossings, live-ness and that no move landed right before committing. (Running it during motion rebuilt router face meshes per child — ~4 fps and multi-second freezes during Recreate.)
+- `precomputeChildrenMoves(targets)` / `synthesizeVerifiedMove(target)` — Position Browser move-preview stroke synthesis. The background pass only runs while the board is at rest (`layoutQuiet`: no Recreate, no collapse, no drag, last smoothStep under settleEpsilon); a new position's children wait in `pendingChildTargets` and `maybeStartPrecompute` (called every frame) starts/resumes it; it yields per candidate and parks itself if the board moves. A hover checks the cache first, else computes its own child on demand. A double-click (`onConfirm`) re-synthesizes fresh against the held board (see below), and re-checks crossings, live-ness and that no move landed right before committing. (Running it during motion rebuilt router face meshes per child — ~4 fps and multi-second freezes during Recreate.)
 - `runRecreate(seq)` — replay a parsed Move Sequence into the current position
 - `promptManual(parsed, moveNum)` / `promptCandidates(parsed, moveNum)` / `verifyManualMove(v1, v2)` — manual (user-drawn) Recreate flow; `promptCandidates`' no-pause path is recreate.ts `synthesizeMove`, the same call the route scripts replay through
 - `firstLegalCandidate(parsed)` — the manual-pause blue hint arc (`proposedArc`): first candidate that crosses nothing. Enter force-commits it without token verification, and re-checks crossings first (the board may have moved)
 - `undoLast(recordRedo?)` / `redoLast()` / `pushHistorySnapshot()` — undo/redo stack
-- `commitStroke(v1, v2, stroke)` — commit a programmatic stroke exactly as live input does (snapshot, applyMove, warn if a new edge crosses, afterMoveCommitted); used by Recreate, Enter force-commit, the Position Browser's double-click and `__sprouts.commitMove`
+- `commitStroke(v1, v2, stroke)` — commit a programmatic stroke exactly as live input does (snapshot, applyMove, warn if a new edge crosses, afterMoveCommitted); used by Enter force-commit and `__sprouts.commitMove` directly, and by Recreate and the Position Browser's double-click via `drawAndCommitStroke`
+- `drawAndCommitStroke(v1, v2, stroke, stillWanted?)` → `Promise<boolean>` — the drawn commit: the edge grows from `drawOriginVertex`'s end (350–1100 ms by arc length, eased) while all other animation holds (physics, collapses, pop bursts, drags; `edgeDraw` non-null), then commits via `commitStroke`. Red `pop` at the source as it starts, `unpop` at the destination (tracks the vertex) once it lands; neither blocks anything (`drawFx`, never frozen). Resolves false if another draw is running, `stillWanted()` goes false, `history.length` changed, or the stroke now crosses. Debug "Instant Draw" (`instantDraw`) commits immediately. Helpers: `stepEdgeDraw` (frame loop, dt clamped to 50 ms), `partialPath`, `cancelEdgeDraw` (undoLast / resetGame / loadGameState). `__sprouts.edgeDraw` exposes the in-flight draw.
+- `playTargetMove(target, stillWanted, walk?)` → `Promise<boolean>` — plays an engine child drawn in; shared by the PB double-click (`onConfirm`) and the computer player. Optional `RoutedWalk` (`routedWalk()` / `routedStrokeFor`) is the last resort: the background pass's allRoutedMoves phase run on demand and resumable across one position's children — covers moves `resolveMoveVertices` can't translate (e.g. InteriorPseudo joins like `[AB|AB]` → `N`) when no PB background pass ran.
+- Computer player (New Game dialog: None/Random/Smart, moves first/second; `computerMode`/`computerSide`): `turnChanged()` (replaces the bare `updateTurnIndicator()` at undo/redo/commit/load/reset) bumps `computerGen` and starts `runComputerTurn` when `computerToMove()`: settle `COMPUTER_SETTLE_MS` (2 s), wait out collapses/strokes/draws, `childrenWithMoves` → `computerMoveOrder` → `playTargetMove` until one commits; nothing draws → `computerStuck` (indicator says so, the human may draw it). `humanMayMove()` gates hand drawing (InputHandler `canDraw`) and PB confirm on the computer's turn. `userUndo`/`userRedo` step over the computer's move so the human lands on their own turn. Load and Recreate set the computer off (saves don't record it).
+- Position Browser `onConfirm`: sets `confirmHold` (board frozen like a draw) and re-synthesizes with `synthesizeVerifiedMove(target, fresh=true)` (skips the background cache) so the line is routed against the points at click time, not hover time; falls back to the hover stroke, then the cache, only if nothing fresh verifies. Ignores clicks while a confirm/draw is in flight.
 - `updateMoveSeq()` / `moveSeqCopyText()` — Move Sequence bar (see memory `project_pb_panel_move_seq_bar.md`)
 - `loadGameState(save)` / `resetGame(spots)` — load a save / start a fresh game
 - `unlockDebugMode()` — debug-unlock keystroke sequence handler

@@ -407,6 +407,20 @@ async function analyzeCached(inputText: string): Promise<{ result: View; canonEn
   return { result, canonEnc };
 }
 
+/**
+ * The move-bearing children of a position — the list the panel's child rows show — valued wherever
+ * the cache or the engine's automatic pass already knows them (UNKNOWN_VALUE elsewhere). null when
+ * the engine returns no children at all. Used by the computer player (main.ts).
+ */
+export async function childrenWithMoves(inputText: string): Promise<ChildInfo[] | null> {
+  const { result } = await analyzeCached(inputText);
+  if (result.ok && 'children' in result) return result.children;
+  // A quick-canon or meta-only view carries no move-bearing children: enumerate them afresh.
+  const raw = result.ok ? await analyze(inputText) : result;
+  if (raw.ok) return raw.children;
+  return raw.children ? backfillChildren(raw.children) : null;
+}
+
 // --- rendering ------------------------------------------------------------------------------
 
 /**

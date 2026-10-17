@@ -368,6 +368,13 @@
         font-size: 13px;
         color: #555;
       }
+      #confirm-dialog .spot-row.computer-row { margin-top: -10px; }
+      #confirm-dialog .spot-row select {
+        padding: 3px 6px;
+        font: 13px/1 system-ui, sans-serif;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
       #confirm-dialog .spot-row input {
         width: 50px;
         padding: 3px 6px;
@@ -1373,6 +1380,15 @@
             </span>
           </label>
 
+          <label class="toggle-row" title="Moves made automatically (Recreate, Position Browser children) appear at once instead of their edge being drawn in">
+            <span>Instant Draw</span>
+            <span class="switch">
+              <input type="checkbox" id="instant-draw-checkbox" />
+              <span class="track"></span>
+              <span class="thumb"></span>
+            </span>
+          </label>
+
           <label class="toggle-row" title="Position Browser: when hovering/locking a child, also draw the router's raw route (before smoothing) as a dashed orange line under the purple preview">
             <span>Raw Move Plan</span>
             <span class="switch">
@@ -1448,6 +1464,18 @@
         <div class="spot-row">
           <label for="spot-count">Starting spots:</label>
           <input type="number" id="spot-count" min="1" max="20" value="6" />
+        </div>
+        <div class="spot-row computer-row">
+          <label for="computer-mode">Computer player:</label>
+          <select id="computer-mode">
+            <option value="off">None</option>
+            <option value="random">Random</option>
+            <option value="smart">Smart</option>
+          </select>
+          <select id="computer-side" title="Which player the computer plays">
+            <option value="2">moves second</option>
+            <option value="1">moves first</option>
+          </select>
         </div>
         <div class="btn-row">
           <button id="confirm-yes">New Game</button>

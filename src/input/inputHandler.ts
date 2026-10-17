@@ -72,6 +72,7 @@ export class InputHandler {
   private getCameraRef: () => RotationMatrix;
   private onMoveCommitted: (v1: VertexId, v2: VertexId, stroke: SpherePoint[]) => void;
   private onBeforeMove: () => void;
+  private canDraw: () => boolean;
 
   constructor(opts: {
     gameState: GameState;
@@ -82,6 +83,8 @@ export class InputHandler {
     onMoveCommitted: (v1: VertexId, v2: VertexId, stroke: SpherePoint[]) => void;
     /** Fires immediately before a move mutates state (for undo snapshots). */
     onBeforeMove?: () => void;
+    /** While false, a press on a vertex rotates instead of starting a stroke (the computer's turn). */
+    canDraw?: () => boolean;
   }) {
     this.gameState       = opts.gameState;
     this.renderer        = opts.renderer;
@@ -90,6 +93,7 @@ export class InputHandler {
     this.onRotateEnd     = opts.onRotateEnd;
     this.onMoveCommitted = opts.onMoveCommitted;
     this.onBeforeMove    = opts.onBeforeMove ?? (() => {});
+    this.canDraw         = opts.canDraw ?? (() => true);
   }
 
   // ---------------------------------------------------------------------------
@@ -111,7 +115,7 @@ if (hit === null) return;
 
   pointerDown(px: number, py: number): void {
     const hit = this.vertexAt(px, py);
-    if (hit !== null && this.canStartFrom(hit)) {
+    if (hit !== null && this.canDraw() && this.canStartFrom(hit)) {
       this.state        = 'drawing';
       this.startVertex  = hit;
       // Snap stroke origin to exact vertex position so the committed edge

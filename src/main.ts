@@ -13,6 +13,9 @@ import type { RecreateHints } from './model/recreate';
 import { resolveLabelledMove } from './model/vertexLabels';
 import { rawRouteOf } from './model/moveRouter';
 import { strokeCrossesEdges, candidateStrokes, candidateStrokeStream } from './model/strokeSynthesis';
+import { drawOriginVertex } from './model/drawOrigin';
+import { computerMoveOrder } from './model/computerPlayer';
+import type { ComputerStrength } from './model/computerPlayer';
 import { allRoutedMoves } from './model/moveRouter';
 import { moveLog } from './debug/moveLog';
 import { DEBUG } from './debug/flags';
@@ -23,7 +26,7 @@ import type { SpecialCollapse } from './model/deadRegions';
 import { Renderer } from './render/renderer';
 import type { SubregionHighlight, VoronoiOverlay } from './render/renderer';
 import { InputHandler } from './input/inputHandler';
-import { identityRotation, rotationX, rotationY, composeRotations, rotateSpherePoint, axisAngleRotation, fibonacciSphere } from './math/sphere';
+import { identityRotation, rotationX, rotationY, composeRotations, rotateSpherePoint, axisAngleRotation, fibonacciSphere, sphereAngle, slerp } from './math/sphere';
 import type { RotationMatrix, SpherePoint } from './math/sphere';
 import type { GameState, VertexId } from './model/types';
 import { buildVoronoiGraph } from './model/voronoiGraph';
@@ -31,7 +34,7 @@ import { computeJunctionVoronoiPath } from './model/voronoiJunctionPath';
 import { buildSubregionHighlight } from './model/subregionHighlight';
 import { serializeGameState, deserializeGameState } from './model/saveState';
 import type { SaveFileV2, HistoryStepInput } from './model/saveState';
-import { openPositionBrowser, ensureWired as ensureBrowserWired, notifyLivePosition, isShowingLive, currentBrowsedCanon, onNavigated, setMoveCallbacks, setSyncCallbacks, onSyncModeChange, isSyncMode, setSyncMode, setSyncToggleEnabled, updateNavButtons, PB_PANEL_ID, PB_BODY_ID } from './ui/positionBrowser';
+import { openPositionBrowser, ensureWired as ensureBrowserWired, notifyLivePosition, childrenWithMoves, isShowingLive, currentBrowsedCanon, onNavigated, setMoveCallbacks, setSyncCallbacks, onSyncModeChange, isSyncMode, setSyncMode, setSyncToggleEnabled, updateNavButtons, PB_PANEL_ID, PB_BODY_ID } from './ui/positionBrowser';
 import { TrackedGame } from './engine/trackedGame';
 import type { MovePreviewTarget } from './ui/positionBrowser';
 import { openGuide, closeGuide, isGuideOpen } from './ui/guide';
@@ -302,26 +305,79 @@ setMoveCallbacks({
     });
   },
   onConfirm(target: MovePreviewTarget) {
-    if (!isShowingLive()) return;
-    const historyAtClick = history.length;
-    const legalNow = (s: { stroke: SpherePoint[] }): boolean => !strokeCrossesEdges(state, s.stroke);
-    void (async () => {
-      // The hover's stroke only stands in for this child if it was found for this child (a pending
-      // hover can leave a sibling's stroke in place) and still crosses nothing (layout physics may
-      // have moved the board since it was verified); otherwise synthesize afresh.
-      const hovered = movePreview?.targetEnc === target.targetEnc ? movePreview.found : null;
-      const resolved = hovered && legalNow(hovered)
-        ? hovered
-        : await synthesizeVerifiedMove(target).then(r => r.kind === 'found' ? r : null);
-      // Synthesis awaits the WASM canon, so the board can move or a move land before we get here:
-      // re-check right before committing, synchronously with it.
-      if (!resolved || history.length !== historyAtClick || !isShowingLive() || !legalNow(resolved)) return;
-      commitStroke(resolved.v1, resolved.v2, resolved.stroke);
-      movePreview = null;
-      wake();
-    })();
+    if (!isShowingLive() || !humanMayMove()) return;
+    void playTargetMove(target, isShowingLive);
   },
 });
+
+/**
+ * Play an engine child on the live board, drawn in — a Position Browser confirm or a computer move.
+ * Resolves true once committed; false if no stroke verified, a draw or confirm is already under
+ * way, or `stillWanted` went false / the board changed before the commit. `walk`, when given, is
+ * the last resort for a child the move's own candidates can't reach (see RoutedWalk).
+ */
+async function playTargetMove(target: MovePreviewTarget, stillWanted: () => boolean, walk?: RoutedWalk): Promise<boolean> {
+  if (confirmHold || edgeDraw) return false;
+  const historyAtClick = history.length;
+  const legalNow = (s: { stroke: SpherePoint[] }): boolean => !strokeCrossesEdges(state, s.stroke);
+  // Hold the board from the click until the draw starts, and route the stroke against the points
+  // as they stand now — the hover's stroke (and the background cache's) were routed against
+  // wherever the points were back then. Those stand in only if no fresh stroke verifies.
+  confirmHold = true;
+  wake();
+  let drawn: Promise<boolean> | null = null;
+  try {
+    let resolved: { v1: number; v2: number; stroke: SpherePoint[] } | null = await synthesizeVerifiedMove(target, true).then(r => r.kind === 'found' ? r : null);
+    if (!resolved) {
+      const hovered = movePreview?.targetEnc === target.targetEnc ? movePreview.found : null;
+      resolved = hovered && legalNow(hovered)
+        ? hovered
+        : await synthesizeVerifiedMove(target).then(r => r.kind === 'found' ? r : null);
+    }
+    if (!resolved && walk) resolved = await routedStrokeFor(walk, target.targetEnc);
+    // Synthesis awaits the WASM canon, so a move can land (or the panel leave live) before we
+    // get here: re-check right before committing, synchronously with it.
+    if (!resolved || history.length !== historyAtClick || !stillWanted() || !legalNow(resolved)) return false;
+    movePreview = null;
+    drawn = drawAndCommitStroke(resolved.v1, resolved.v2, resolved.stroke, stillWanted);
+  } finally {
+    confirmHold = false; // the draw (if any) has taken over the hold
+    wake();
+  }
+  const committed = await drawn;
+  movePreview = null;
+  wake();
+  return committed;
+}
+
+/**
+ * The background children pass's second phase (precomputeChildrenMoves), run on demand for one
+ * position: every reading the topological router can draw, tried in order and recorded by the canon
+ * it reaches. Resumable, so successive children of one position share a single walk. Needed where
+ * resolveMoveVertices can't translate a move (e.g. InteriorPseudo joins) and the Position Browser's
+ * background pass isn't there to cover it.
+ */
+interface RoutedWalk {
+  found: Map<string, { v1: number; v2: number; stroke: SpherePoint[] }>;
+  moves: Generator<{ v1: number; v2: number; stroke: SpherePoint[] }>;
+}
+
+function routedWalk(): RoutedWalk {
+  return { found: new Map(), moves: allRoutedMoves(state) };
+}
+
+/** A legal stroke reaching `targetEnc`, walking on as far as needed; null if none does. */
+async function routedStrokeFor(walk: RoutedWalk, targetEnc: string): Promise<{ v1: number; v2: number; stroke: SpherePoint[] } | null> {
+  const target = await canonEncoding(targetEnc);
+  for (;;) {
+    const hit = walk.found.get(target);
+    if (hit && !strokeCrossesEdges(state, hit.stroke)) return hit;
+    const next = walk.moves.next();
+    if (next.done) return null;
+    await new Promise(r => setTimeout(r, 0)); // let frames through between trials
+    await tryStroke(next.value.v1, next.value.v2, next.value.stroke, walk.found);
+  }
+}
 
 type SynthesizeResult =
   | { kind: 'found'; v1: number; v2: number; stroke: SpherePoint[] }
@@ -347,8 +403,11 @@ type SynthesizeResult =
  * should connect — reported as 'unreachable' so the UI can ring them instead of drawing nothing —
  * plus every candidate stroke that was tried, tagged `legal` (didn't cross existing geometry) or
  * not, so the caller can optionally show what was auto-checked and rejected.
+ *
+ * `fresh` skips the background cache, whose strokes were routed against an earlier layout: every
+ * stroke returned is routed against the points as they stand now.
  */
-async function synthesizeVerifiedMove(target: MovePreviewTarget): Promise<SynthesizeResult> {
+async function synthesizeVerifiedMove(target: MovePreviewTarget, fresh = false): Promise<SynthesizeResult> {
   // A stroke from the background cache (see precomputeChildrenMoves) — re-checked against the
   // current drawing, since layout physics may have moved things since it was verified. Checked
   // first: when the pass has covered this child, the hover is instant.
@@ -356,10 +415,10 @@ async function synthesizeVerifiedMove(target: MovePreviewTarget): Promise<Synthe
     const hit = attemptedResultCanons.get(await canonEncoding(target.targetEnc));
     return hit && !strokeCrossesEdges(state, hit.stroke) ? { kind: 'found', ...hit } : null;
   };
-  const early = await cached();
+  const early = fresh ? null : await cached();
   if (early) return early;
   const resolved = resolveMoveVertices(state, target.move);
-  if (!resolved) return (await cached()) ?? { kind: 'unresolved' };
+  if (!resolved) return (fresh ? null : await cached()) ?? { kind: 'unresolved' };
   const parsed = parsedFromResolved(resolved);
   const targetCanon = await canonEncoding(target.targetEnc);
   const candidates: { stroke: SpherePoint[]; legal: boolean }[] = [];
@@ -370,7 +429,7 @@ async function synthesizeVerifiedMove(target: MovePreviewTarget): Promise<Synthe
   }
   // None of this move's own candidates reach it directly — the background pass may have found a
   // stroke for it anyway (see precomputeChildrenMoves above).
-  return (await cached()) ?? { kind: 'unreachable', v1: resolved.v1, v2: resolved.v2, candidates };
+  return (fresh ? null : await cached()) ?? { kind: 'unreachable', v1: resolved.v1, v2: resolved.v2, candidates };
 }
 
 function fitCanvas(): void {
@@ -419,6 +478,8 @@ let   camera: RotationMatrix = identityRotation();
     commitStroke(v1, v2, stroke as SpherePoint[]);
   },
   undoLast: () => undoLast(),
+  /** The automatic move whose edge is drawing in right now, null when none. */
+  get edgeDraw() { return edgeDraw; },
   get committedMoves() {
     return history.flatMap(h => h.committed ? [h.committed] : []);
   },
@@ -482,17 +543,80 @@ let gameStarted = false;
 function updateTurnIndicator(): void {
   if (!gameStarted) { turnIndicator.textContent = ''; topBar.classList.remove('game-over'); return; }
   const movesMade = state.moveCount;
+  const who = (p: 1 | 2): string => `Player ${p}${computerMode !== 'off' && p === computerSide ? ' (computer)' : ''}`;
   if (isGameOver()) {
     // The player to move (movesMade % 2) can't, so they lose; the other wins.
-    const winner = ((movesMade + 1) % 2) + 1;
-    turnIndicator.textContent = `Player ${winner} wins!`;
+    const winner = (((movesMade + 1) % 2) + 1) as 1 | 2;
+    turnIndicator.textContent = `${who(winner)} wins!`;
     turnIndicator.style.color = '#8b0000';
     topBar.classList.add('game-over');
   } else {
-    turnIndicator.textContent = `Player ${(movesMade % 2) + 1}'s turn`;
+    const toMove = ((movesMade % 2) + 1) as 1 | 2;
+    turnIndicator.textContent = computerStuck
+      ? `${who(toMove)} found no drawable move — draw one for it`
+      : `${who(toMove)}'s turn`;
     turnIndicator.style.color = '';
     topBar.classList.remove('game-over');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Computer player (New Game dialog): plays one side, drawn in like a Position Browser confirm
+// ---------------------------------------------------------------------------
+//
+// On its turn it waits for collapses to finish plus COMPUTER_SETTLE_MS, asks the engine for the
+// live position's children, and plays them in computerMoveOrder's order through playTargetMove
+// until one draws. Any turn change (a move, undo/redo, new game, load) restarts the cycle via
+// computerGen, abandoning whatever an earlier turn's run was doing. If nothing draws, the human
+// may draw the computer's move by hand (computerStuck).
+
+const COMPUTER_SETTLE_MS = 2000;
+let computerMode: 'off' | ComputerStrength = 'off';
+let computerSide: 1 | 2 = 2;
+let computerGen = 0;
+let computerStuck = false;
+
+function computerToMove(): boolean {
+  return computerMode !== 'off' && gameStarted && !recreateActive && !isGameOver()
+    && (state.moveCount % 2 === 0 ? 1 : 2) === computerSide;
+}
+
+/** The human may draw (or confirm a Position Browser child) unless the computer is to move — or
+ *  it gave up on this turn. */
+function humanMayMove(): boolean {
+  return !computerToMove() || computerStuck;
+}
+
+/** Refresh the turn indicator and start the computer's turn if it's now to move. */
+function turnChanged(): void {
+  const gen = ++computerGen;
+  computerStuck = false;
+  updateTurnIndicator();
+  if (computerToMove()) void runComputerTurn(gen);
+}
+
+async function runComputerTurn(gen: number): Promise<void> {
+  const current = (): boolean => gen === computerGen && computerToMove();
+  await settle(COMPUTER_SETTLE_MS);
+  // A long collapse chain can outlast the settle; and never start over a hand stroke in progress
+  // or another automatic move.
+  while (collapseActive() || input.isDrawing() || confirmHold || edgeDraw) {
+    if (!current()) return;
+    await settle(100);
+  }
+  if (!current()) return;
+  const children = await childrenWithMoves(liveAnalysisText(state));
+  if (children) {
+    const walk = routedWalk();
+    for await (const child of computerMoveOrder(children, computerMode as ComputerStrength)) {
+      if (!current()) return;
+      if (await playTargetMove({ move: child.move!, targetEnc: child.enc }, current, walk)) return;
+    }
+  }
+  if (!current()) return;
+  console.warn('[Computer] no child of the live position could be drawn');
+  computerStuck = true;
+  updateTurnIndicator();
 }
 updateTurnIndicator();
 
@@ -716,6 +840,7 @@ document.addEventListener('keydown', e => {
  * onto the redo stack so it can be replayed; internal cancel-style undos (candidate-preview discard,
  * Recreate rollback) pass false so they don't create bogus redo entries. */
 function undoLast(recordRedo = false): void {
+  cancelEdgeDraw();
   if (history.length === 0) return;
   const top = history[history.length - 1];
   if (recordRedo) {
@@ -746,7 +871,7 @@ function undoLast(recordRedo = false): void {
   updateTrackedPanel(null);
   void resyncTrackedFromHistory();
   input.pointerCancel();
-  updateTurnIndicator();
+  turnChanged();
   updateUndoButton();
   updateMoveSeq();
   wake();
@@ -769,7 +894,7 @@ function redoLast(): void {
   updateTrackedPanel(null);
   void resyncTrackedFromHistory();
   input.pointerCancel();
-  updateTurnIndicator();
+  turnChanged();
   updateUndoButton();
   updateMoveSeq();
   wake();
@@ -808,7 +933,18 @@ async function resyncTrackedFromHistory(): Promise<void> {
   updateTrackedPanel(null);
 }
 
-undoBtn.addEventListener('click', () => undoLast(true));
+/** A user undo/redo. Against the computer it steps over the computer's own move too, so the
+ *  human lands back on their own turn instead of the computer replaying straight away. */
+function userUndo(): void {
+  undoLast(true);
+  if (computerToMove() && history.length > 0) undoLast(true);
+}
+function userRedo(): void {
+  redoLast();
+  if (computerToMove() && redoStack.length > 0) redoLast();
+}
+
+undoBtn.addEventListener('click', () => userUndo());
 
 bottomBarCopy.addEventListener('click', () => {
   navigator.clipboard.writeText(bottomBarText.textContent ?? '');
@@ -892,6 +1028,109 @@ function commitStroke(v1: number, v2: number, stroke: SpherePoint[]): void {
   afterMoveCommitted(v1, v2, stroke);
 }
 
+// ---------------------------------------------------------------------------
+// Drawn commits: an automatic move (Recreate, the Position Browser) draws its edge in
+// ---------------------------------------------------------------------------
+//
+// While the edge draws, every other animation holds (physics, collapses, pop bursts) so the
+// board stays exactly the one the stroke was verified against; the move commits when the line
+// reaches its far end and the animations pick up from there. The draw starts at whichever end
+// drawOriginVertex ranks first. "Instant Draw" (Debug) commits immediately, as before.
+
+const EDGE_DRAW_MIN_MS = 350, EDGE_DRAW_MAX_MS = 1100, EDGE_DRAW_MS_PER_RAD = 650;
+const DRAW_FX_MS = 450;
+
+interface EdgeDraw {
+  v1: VertexId; v2: VertexId;
+  stroke: SpherePoint[];               // as committed (v1 → v2)
+  path: SpherePoint[];                 // as drawn (origin → far end)
+  cum: number[];                       // cumulative arc length along `path`
+  dest: VertexId;
+  elapsed: number; duration: number;
+  historyAtStart: number;
+  stillWanted: () => boolean;
+  resolve: (committed: boolean) => void;
+}
+let edgeDraw: EdgeDraw | null = null;
+/** A Position Browser confirm is routing its stroke: the board holds, as during the draw itself. */
+let confirmHold = false;
+/** Source pops / destination un-pops; an un-pop follows its vertex as the board relaxes. */
+const drawFx: { pos: SpherePoint; vid: VertexId | null; start: number; kind: 'pop' | 'unpop' }[] = [];
+let instantDraw = false;
+
+/**
+ * Commit an automatic move, drawing its edge in first (unless Instant Draw is on). Resolves true
+ * once committed; false if it was dropped — another draw is already running, `stillWanted` went
+ * false, or the board changed under it (an undo, a new game) so the stroke no longer applies.
+ */
+function drawAndCommitStroke(v1: VertexId, v2: VertexId, stroke: SpherePoint[], stillWanted: () => boolean = () => true): Promise<boolean> {
+  if (edgeDraw) return Promise.resolve(false);
+  if (instantDraw || stroke.length < 2) {
+    commitStroke(v1, v2, stroke);
+    return Promise.resolve(true);
+  }
+  const origin = drawOriginVertex(state, v1, v2);
+  // Orient by geometry, not by assumption: whichever stroke end sits on the origin vertex.
+  const originPos = state.vertices.get(origin)!.pos;
+  const forward = v1 === v2 || sphereAngle(stroke[0], originPos) <= sphereAngle(stroke[stroke.length - 1], originPos);
+  const path = forward ? stroke.slice() : stroke.slice().reverse();
+  const cum = [0];
+  for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + sphereAngle(path[i - 1], path[i]));
+  const len = cum[cum.length - 1];
+  drawFx.push({ pos: path[0], vid: null, start: performance.now(), kind: 'pop' });
+  return new Promise(resolve => {
+    edgeDraw = {
+      v1, v2, stroke, path, cum,
+      dest: origin === v1 ? v2 : v1,
+      elapsed: 0,
+      duration: Math.min(EDGE_DRAW_MAX_MS, Math.max(EDGE_DRAW_MIN_MS, len * EDGE_DRAW_MS_PER_RAD)),
+      historyAtStart: history.length,
+      stillWanted,
+      resolve,
+    };
+    wake();
+  });
+}
+
+/** Drop an in-flight draw without committing it (undo, new game, load). */
+function cancelEdgeDraw(): void {
+  const d = edgeDraw;
+  if (!d) return;
+  edgeDraw = null;
+  d.resolve(false);
+  wake();
+}
+
+/** The drawn prefix of `path` up to fraction `t` of its arc length. */
+function partialPath(d: EdgeDraw, t: number): SpherePoint[] {
+  const target = t * d.cum[d.cum.length - 1];
+  const out: SpherePoint[] = [d.path[0]];
+  for (let i = 1; i < d.path.length; i++) {
+    if (d.cum[i] <= target) { out.push(d.path[i]); continue; }
+    const seg = d.cum[i] - d.cum[i - 1];
+    out.push(slerp(d.path[i - 1], d.path[i], seg > 0 ? (target - d.cum[i - 1]) / seg : 0));
+    break;
+  }
+  return out;
+}
+
+/** Advance the draw by `dt`; on reaching the far end, commit (if still valid) and release. */
+function stepEdgeDraw(dt: number, now: number): void {
+  const d = edgeDraw;
+  if (!d) return;
+  d.elapsed += dt;
+  if (d.elapsed < d.duration) return;
+  edgeDraw = null;
+  if (!d.stillWanted() || history.length !== d.historyAtStart || strokeCrossesEdges(state, d.stroke)) {
+    d.resolve(false);
+    return;
+  }
+  const destPos = state.vertices.get(d.dest)?.pos ?? d.path[d.path.length - 1];
+  commitStroke(d.v1, d.v2, d.stroke);
+  drawFx.push({ pos: destPos, vid: d.dest, start: now, kind: 'unpop' });
+  d.resolve(true);
+}
+
 /**
  * The post-move commit pipeline: resample edges, record the move code, advance
  * the turn indicator, and run dead-region collapses. Shared by live play and
@@ -945,7 +1184,7 @@ function afterMoveCommitted(v1: number, v2: number, stroke: SpherePoint[]): void
     moveSeqLog.push(entry);
     updateMoveSeq();
   }
-  updateTurnIndicator();
+  turnChanged();
   if (shrinkCheckbox.checked) {
     // Collapse dead-region scabs first so their vertex lands in livingVertexSet
     // before eliminateIsolatedVertex runs — otherwise the scab is wrongly spliced out.
@@ -1063,6 +1302,7 @@ const input = new InputHandler({
   },
   onRotateEnd: () => { startRecenter(); wake(); },
   onBeforeMove: () => { pushHistorySnapshot(); },
+  canDraw:      () => humanMayMove(),
   onMoveCommitted: (v1, v2, stroke) => {
     // Discard strokes drawn during candidate preview (only rotation is intended).
     if (candidatePreviewList) { undoLast(); return; }
@@ -1299,6 +1539,8 @@ loadGameInput.addEventListener('change', () => {
 /** Restore `state`/`camera`/move history from a save file, resuming a paused move if one was saved. */
 function loadGameState(save: SaveFileV2): void {
   abortRecreate();
+  cancelEdgeDraw();
+  computerMode = 'off'; // the computer is set per game in the New Game dialog; saves don't record it
 
   const deserialized = deserializeGameState(save);
   Object.assign(state, deserialized.state);
@@ -1377,7 +1619,7 @@ function loadGameState(save: SaveFileV2): void {
   gameStarted = true;
   updateSaveButton();
   hidePlayGate();
-  updateTurnIndicator();
+  turnChanged();
   fitCanvas();
   renderer.resize();
   // A loaded board settles like a freshly committed move: full forces for the hold, then the
@@ -1579,6 +1821,10 @@ const showBrokenCheckbox = document.getElementById('show-broken-checkbox') as HT
 showBroken = showBrokenCheckbox.checked; // sync on (re)load — survives HMR
 showBrokenCheckbox.addEventListener('change', () => { showBroken = showBrokenCheckbox.checked; wake(); });
 
+const instantDrawCheckbox = document.getElementById('instant-draw-checkbox') as HTMLInputElement;
+instantDraw = instantDrawCheckbox.checked; // sync on (re)load — survives HMR
+instantDrawCheckbox.addEventListener('change', () => { instantDraw = instantDrawCheckbox.checked; });
+
 const rawMovePlanCheckbox = document.getElementById('raw-move-plan-checkbox') as HTMLInputElement;
 showRawMovePlan = rawMovePlanCheckbox.checked; // sync on (re)load — survives HMR
 rawMovePlanCheckbox.addEventListener('change', () => { showRawMovePlan = rawMovePlanCheckbox.checked; wake(); });
@@ -1704,8 +1950,8 @@ onNavigated(() => wake());
 // playback blocks both.
 wireCharHover(pbLiveEncoding, () => lastLiveCharInfo);
 setSyncCallbacks({
-  onBack: () => undoLast(true),
-  onForward: () => redoLast(),
+  onBack: () => userUndo(),
+  onForward: () => userRedo(),
   canBack: () => history.length > 0 && !recreateActive,
   canForward: () => redoStack.length > 0 && !recreateActive,
 });
@@ -1852,11 +2098,17 @@ const confirmOverlay = document.getElementById('confirm-overlay') as HTMLDivElem
 const confirmYes     = document.getElementById('confirm-yes')     as HTMLButtonElement;
 const confirmNo      = document.getElementById('confirm-no')      as HTMLButtonElement;
 const spotCountInput = document.getElementById('spot-count')      as HTMLInputElement;
+const computerModeSelect = document.getElementById('computer-mode') as HTMLSelectElement;
+const computerSideSelect = document.getElementById('computer-side') as HTMLSelectElement;
+const syncComputerSide = (): void => { computerSideSelect.disabled = computerModeSelect.value === 'off'; };
+computerModeSelect.addEventListener('change', syncComputerSide);
+syncComputerSide();
 
 newGameBtn.addEventListener('click', () => { confirmOverlay.classList.add('visible'); });
 wireOverlay(confirmOverlay, confirmNo);
 /** Reset to a fresh n-spot game and re-sync all UI from current toggle state. */
 function resetGame(spots: number): void {
+  cancelEdgeDraw();
   currentSpotCount = spots;
   Object.assign(state, createInitialState(spots));
   history.length = 0;
@@ -1901,7 +2153,7 @@ function resetGame(spots: number): void {
 
   gameStarted = true;
   updateSaveButton();
-  updateTurnIndicator();
+  turnChanged();
   wake();
 }
 
@@ -1909,7 +2161,9 @@ confirmYes.addEventListener('click', () => {
   confirmOverlay.classList.remove('visible');
   abortRecreate();
   const spots = Math.max(1, Math.min(20, parseInt(spotCountInput.value, 10) || INITIAL_SPOTS));
-  resetGame(spots);
+  computerMode = computerModeSelect.value as typeof computerMode;
+  computerSide = computerSideSelect.value === '1' ? 1 : 2;
+  resetGame(spots); // starts the computer's turn if it moves first
   hidePlayGate();
 });
 
@@ -2255,6 +2509,7 @@ function sameEncodedPosition(a: string | null, b: string): boolean {
 
 /** Drive the whole sequence move by move. */
 async function runRecreate(seq: ReturnType<typeof parseMoveSequence>): Promise<void> {
+  computerMode = 'off'; // a replayed game has no computer side
   resetGame(seq.spots);
   recreateActive = true;
   recreateUseLabels = seq.useLabels;
@@ -2284,8 +2539,9 @@ async function runRecreate(seq: ReturnType<typeof parseMoveSequence>): Promise<v
         if (!recreateActive) return;
         if (DEBUG.recreate) console.log(`[Move ${i + 1}] retry ${retry + 1} after re-settling: ${stroke ? 'found a candidate' : 'still none'}`);
       }
-      if (stroke) commitStroke(parsed.lo, parsed.hi, stroke);
-      else if (!(await promptManual(parsed, i + 1))) return; // cancelled
+      if (stroke) {
+        if (!(await drawAndCommitStroke(parsed.lo, parsed.hi, stroke, () => recreateActive))) return; // aborted mid-draw
+      } else if (!(await promptManual(parsed, i + 1))) return; // cancelled
       await settle(tunables.settleMs);
       await waitForFullSettle();
       await waitForUnpause();
@@ -2591,7 +2847,9 @@ function frameBody(now: number): void {
 
   input.tick(dt);
 
-  if (input.isDrawing() || input.isRotating() || input.isRejecting()) {
+  stepEdgeDraw(Math.min(dt, 50), now); // a frame after an idle gap carries the whole gap as dt
+
+  if (input.isDrawing() || input.isRotating() || input.isRejecting() || edgeDraw || confirmHold) {
     needsRender = true;
   } else if (input.isDragging()) {
     const drag = input.getDragTarget()!;
@@ -2690,7 +2948,7 @@ function frameBody(now: number): void {
   // its remaining progress is preserved instead of the burst silently aging —
   // or even finishing — off-screen and then jumping on resume.
   let activePops: { pos: SpherePoint; age: number }[] | undefined;
-  if (recreatePaused || candidatePreviewList || manualAwait) {
+  if (recreatePaused || candidatePreviewList || manualAwait || edgeDraw || confirmHold) {
     for (const p of popAnims) p.start += dt;
   } else if (popAnims.length > 0) {
     for (let i = popAnims.length - 1; i >= 0; i--) {
@@ -2700,6 +2958,25 @@ function frameBody(now: number): void {
       activePops = popAnims.map(p => ({ pos: p.pos, age: (now - p.start) / POP_DURATION }));
       needsRender = true;
     }
+  }
+
+  // The draw bursts run on through any freeze — they ride alongside the draw and what follows it.
+  let activeDrawFx: { pos: SpherePoint; age: number; kind: 'pop' | 'unpop' }[] | undefined;
+  for (let i = drawFx.length - 1; i >= 0; i--) {
+    if (now - drawFx[i].start >= DRAW_FX_MS) drawFx.splice(i, 1);
+  }
+  if (drawFx.length > 0) {
+    activeDrawFx = drawFx.map(f => ({
+      pos: (f.vid !== null ? state.vertices.get(f.vid)?.pos : undefined) ?? f.pos,
+      age: Math.max(0, now - f.start) / DRAW_FX_MS,
+      kind: f.kind,
+    }));
+    needsRender = true;
+  }
+  let drawingEdge: SpherePoint[] | undefined;
+  if (edgeDraw) {
+    const t = Math.min(1, edgeDraw.elapsed / edgeDraw.duration);
+    drawingEdge = partialPath(edgeDraw, t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t)); // ease in-out
   }
 
   if (needsRender || needsInitialRender) {
@@ -2783,7 +3060,8 @@ function frameBody(now: number): void {
       }
     }
     const playerTurn = (state.moveCount % 2 === 0 ? 1 : 2) as 1 | 2;
-    renderer.render(state, camera, { ...extras, showMidpoints, showRegions, showVertexIds, showBoundaryArrows, showRegionDiagnostic, showRegionNetwork, vertexLabels, spotLabels: spotLabelsDisplay, popAnimations: activePops, gameOver: isGameOver(), playerTurn, checkFailed: recreateCheckFailed, recreateHints: manualHints ?? undefined, candidatePreviewStrokes: candidatePreviewList ?? movePreview?.failCandidates ?? undefined, subregionHighlight: subregionOverlay?.highlight, voronoi: subregionOverlay?.voronoi, proposedArc: proposedArc ?? undefined, movePreviewArc: movePreview?.found?.stroke, movePreviewRawArc: showRawMovePlan && movePreview?.found ? rawRouteOf(movePreview.found.stroke) : undefined, movePreviewFailRing: movePreview?.failRing ?? undefined, hoverHighlight: hoverCharInfo ?? undefined, enclosureSideColors: showEnclosureSides ? lastEnclosureSideColors : undefined, enclosureCoverage: showEnclosureSides ? lastEnclosureCoverage : undefined, vertexIdLabels: canvasVertexLabels });
+    const shownPreview = edgeDraw ? null : movePreview; // the drawing edge replaces its own preview
+    renderer.render(state, camera, { ...extras, showMidpoints, showRegions, showVertexIds, showBoundaryArrows, showRegionDiagnostic, showRegionNetwork, vertexLabels, spotLabels: spotLabelsDisplay, popAnimations: activePops, drawingEdge, drawFx: activeDrawFx, gameOver: isGameOver(), playerTurn, checkFailed: recreateCheckFailed, recreateHints: manualHints ?? undefined, candidatePreviewStrokes: candidatePreviewList ?? shownPreview?.failCandidates ?? undefined, subregionHighlight: subregionOverlay?.highlight, voronoi: subregionOverlay?.voronoi, proposedArc: proposedArc ?? undefined, movePreviewArc: shownPreview?.found?.stroke, movePreviewRawArc: showRawMovePlan && shownPreview?.found ? rawRouteOf(shownPreview.found.stroke) : undefined, movePreviewFailRing: shownPreview?.failRing ?? undefined, hoverHighlight: hoverCharInfo ?? undefined, enclosureSideColors: showEnclosureSides ? lastEnclosureSideColors : undefined, enclosureCoverage: showEnclosureSides ? lastEnclosureCoverage : undefined, vertexIdLabels: canvasVertexLabels });
   }
 
   if (needsRender) {

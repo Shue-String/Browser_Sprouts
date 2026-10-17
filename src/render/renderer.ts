@@ -100,6 +100,11 @@ export interface RenderOptions {
   voronoi?: VoronoiOverlay;
   /** Transient "pop" bursts where dead components vanished; age is 0→1. */
   popAnimations?: { pos: SpherePoint; age: number }[];
+  /** An automatically-made move's edge being drawn in, start to tip — drawn as a normal edge. */
+  drawingEdge?: SpherePoint[];
+  /** Small red bursts at a drawn move's ends: 'pop' at the source as the draw starts, 'unpop'
+   *  (lines in, ring collapsing) at the destination once it lands; age is 0→1. */
+  drawFx?: { pos: SpherePoint; age: number; kind: 'pop' | 'unpop' }[];
   /** Whose turn it is — tints the outer ring in lambert mode. */
   playerTurn?: 1 | 2;
   /** A Recreate replay halted on a Move Check mismatch — overrides the ring to dark maroon. */
@@ -485,6 +490,21 @@ export class Renderer {
     // --- Region bookkeeping vs. geometry cross-check (debug) ---
     if (opts.showRegionDiagnostic) this.renderRegionDiagnostic(state, camera);
 
+    // --- Edge being drawn in (an automatic move) ---
+    if (opts.drawingEdge && opts.drawingEdge.length >= 2) {
+      const smoothed = chaikin(this.projectAdaptive(opts.drawingEdge, camera), 3);
+      if (smoothed.length >= 2) {
+        ctx.strokeStyle = EDGE_COLOR;
+        ctx.lineWidth   = EDGE_LINE_WIDTH;
+        ctx.lineCap     = 'round';
+        ctx.lineJoin    = 'round';
+        ctx.beginPath();
+        ctx.moveTo(smoothed[0].px, smoothed[0].py);
+        for (let i = 1; i < smoothed.length; i++) ctx.lineTo(smoothed[i].px, smoothed[i].py);
+        ctx.stroke();
+      }
+    }
+
     // --- Active stroke ---
     if (opts.activeStroke && opts.activeStroke.length > 1) {
       ctx.strokeStyle = '#555555';
@@ -839,6 +859,9 @@ export class Renderer {
         this.renderPop(this.toCanvas(pop.pos, camera), pop.age);
       }
     }
+    if (opts.drawFx) {
+      for (const fx of opts.drawFx) this.renderDrawFx(this.toCanvas(fx.pos, camera), fx.age, fx.kind === 'unpop');
+    }
 
   }
 
@@ -1014,6 +1037,32 @@ export class Renderer {
       ctx.arc(px + Math.cos(ang) * d, py + Math.sin(ang) * d, 2.4 * fade + 0.4, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  /** The draw-move bursts: a smaller red cousin of renderPop with radial strokes. `inward` plays
+   *  it backwards — the strokes converge and the ring collapses onto the point. */
+  private renderDrawFx({ px, py }: CanvasPoint, age: number, inward: boolean): void {
+    const ctx  = this.ctx;
+    const t    = inward ? 1 - age : age;   // 0 = at the point, 1 = fully spread
+    const ease = 1 - (1 - t) * (1 - t);
+    const fade = inward ? Math.min(1, 4 * age) * (0.35 + 0.65 * t) : 1 - age;
+    ctx.save();
+    ctx.lineCap     = 'round';
+    ctx.strokeStyle = `hsla(0, 85%, 48%, ${fade})`;
+    ctx.lineWidth   = 1.8 * fade + 0.4;
+    ctx.beginPath();
+    ctx.arc(px, py, 2 + ease * 13, 0, Math.PI * 2);
+    ctx.stroke();
+    const RAYS = 6;
+    for (let k = 0; k < RAYS; k++) {
+      const ang = (2 * Math.PI * k) / RAYS + Math.PI / RAYS;
+      const r0 = 4 + ease * 12, r1 = r0 + 3 + 4 * (1 - ease);
+      ctx.beginPath();
+      ctx.moveTo(px + Math.cos(ang) * r0, py + Math.sin(ang) * r0);
+      ctx.lineTo(px + Math.cos(ang) * r1, py + Math.sin(ang) * r1);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   /** Clear stored region colors — call when starting a new game. */
