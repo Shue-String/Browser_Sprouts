@@ -1386,6 +1386,14 @@ export function scabAloneCollapse(state: GameState, skipVertices?: Set<VertexId>
         // scab's face. Anything alive in such a pocket would change face (failureSaves/
         // fail-s4-g11-m11.json move 5: a pocket holding another component with a life left).
         const incident = [...state.edges.values()].filter(e => safeSet.has(e.v1) || safeSet.has(e.v2));
+        // ...which only holds if no deleted edge OFF the retraced loop bounds a live face. Such an
+        // edge (a second edge between two dead vertices, wrapping round another component) would
+        // vanish from that face's boundary, merging it with whatever lies beyond: game-equivalent
+        // when the far side holds no lives, but the enclosed component visibly jumps out
+        // (replay-2026-10-16 g17 move 9, `-4X2(6)[]`).
+        const onLoop = new Set(b.entries.map(e => e.edgeId));
+        const liveFace = (id: number): boolean => { const f = state.regions.get(id); return !!f && !f.isDead; };
+        if (incident.some(e => !onLoop.has(e.id) && (liveFace(e.leftRegion) || liveFace(e.rightRegion)))) continue;
         const scabFaces = facesOf(incident.filter(e => e.v1 === scabId || e.v2 === scabId));
         if ([...facesOf(incident)].some(f => f !== r.id && !scabFaces.has(f) && !holdsNothingAlive(state, f, safeSet))) continue;
 

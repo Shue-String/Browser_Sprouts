@@ -32,7 +32,7 @@
  */
 
 import type { GameState, VertexId, SpotLabel, SpotGroupInfo } from './types';
-import { findMoveRegion, findEnclosedSideRegion } from './moveCode';
+import { findMoveRegion, findEnclosedSideRegion, computeMoveCode } from './moveCode';
 import type { ParsedMove, ResolvedMove } from './moveCodeParse';
 
 export function isSpotLabelRange(l: SpotLabel): l is { lo: number; hi: number } {
@@ -359,4 +359,10 @@ export function spotGroupInfo(vid: VertexId, spotLabels: Map<VertexId, SpotLabel
 /** Build a computeMoveCode `spotGroupFor` resolver from a post-move label map. */
 export function spotGroupForFromMap(spotLabels: Map<VertexId, SpotLabel>): (vid: VertexId) => SpotGroupInfo | null {
   return (vid: VertexId) => spotGroupInfo(vid, spotLabels);
+}
+
+/** The labelled move code — the form a save's moveSequence stores and an "nL:" sequence uses.
+ *  `after.spotLabels` must already be the post-move map (recomputeSpotLabels). */
+export function labelledMoveCode(before: GameState, v1: VertexId, v2: VertexId, after: GameState): string {
+  return computeMoveCode(before, v1, v2, after, labelForFromMap(after.spotLabels), spotGroupForFromMap(after.spotLabels));
 }

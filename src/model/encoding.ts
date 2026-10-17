@@ -170,7 +170,9 @@ export function classifyVertexFull(vid: VertexId, state: GameState): VertexType 
 
       if (arcAHas && arcBHas) return VertexType.Joint;
       if (arcAHas || arcBHas) return VertexType.Scab;
-      return VertexType.Dead;
+      // Neither arc of its own walk has a live vertex, but the face's OTHER boundaries can (a spot,
+      // another component): still a scab — a distal one, reaching them across the face.
+      return availableCount(region.id, vid, state) > 0 ? VertexType.Scab : VertexType.Dead;
     }
   }
 

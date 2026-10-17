@@ -25,7 +25,7 @@ import type { ResolvedMove } from '../../src/model/moveCodeParse';
 import { synthesizeMove } from '../../src/model/recreate';
 import { strokeCrossesEdges } from '../../src/model/strokeSynthesis';
 import { allRoutedMoves } from '../../src/model/moveRouter';
-import { recomputeSpotLabels, labelForFromMap, spotGroupForFromMap, resolveLabelledMove } from '../../src/model/vertexLabels';
+import { recomputeSpotLabels, labelledMoveCode, resolveLabelledMove } from '../../src/model/vertexLabels';
 import { relax } from './routeHarness';
 import { smoothStep, resampleAllEdges, resetActivityTimer } from '../../src/model/smooth';
 import { tunables } from '../../src/model/tunables';
@@ -45,7 +45,7 @@ const bump = (k: string) => { tally[k] = (tally[k] ?? 0) + 1; };
 for (let g = 0; g < games; g++) {
   const spots = 2 + Math.floor(rnd() * (maxSpots - 1));
   const st = createInitialState(spots);
-  const tokens: string[] = [], canons: string[] = [], kinds: string[] = [], states: GameState[] = [];
+  const tokens: string[] = [], savedTokens: string[] = [], canons: string[] = [], kinds: string[] = [], states: GameState[] = [];
   const history: HistoryStepInput[] = [];
   for (let m = 0; m < 3 * spots; m++) {
     const opts = [...allRoutedMoves(st, 4)].filter(mv => !strokeCrossesEdges(st, mv.stroke));
@@ -64,8 +64,12 @@ for (let g = 0; g < games; g++) {
       console.log('  regionR', f && 'R' + f.regionR.id, f && showB(before, f.regionR), 'mainComp', f && f.mainComp.entries.map(e => e.vertexId).join(' '));
       if (f) { const r = findEnclosedSideRegion(f.regionR, f.mainComp, pick.v1, pick.v1, before, st, null, null); console.log('  enclosed side', r && 'R' + r.id); }
     }
-    if (LBL) { st.spotLabels = recomputeSpotLabels(before.spotLabels, before, st, pick.v1, pick.v2); tokens.push(computeMoveCode(before, pick.v1, pick.v2, st, labelForFromMap(st.spotLabels), spotGroupForFromMap(st.spotLabels))); }
-    else tokens.push(computeMoveCode(before, pick.v1, pick.v2, st)); kinds.push(kind(before, pick.v1, pick.v2));
+    st.spotLabels = recomputeSpotLabels(before.spotLabels, before, st, pick.v1, pick.v2);
+    // A save's moveSequence is always the labelled form (that's what Load reads); the replay below
+    // uses whichever form LABELS selects.
+    savedTokens.push(labelledMoveCode(before, pick.v1, pick.v2, st));
+    tokens.push(LBL ? savedTokens[savedTokens.length - 1] : computeMoveCode(before, pick.v1, pick.v2, st));
+    kinds.push(kind(before, pick.v1, pick.v2));
     canons.push(await tc(st)); states.push(cloneState(st));
     relax(st);
   }
@@ -100,11 +104,11 @@ for (let g = 0; g < games; g++) {
   if (process.env.SAVE_DIR && result !== 'faithful') {
     mkdirSync(process.env.SAVE_DIR, { recursive: true });
     const m = result.match(/^(stuck|DIVERGED) at (\d+)/)!;
-    writeFileSync(`${process.env.SAVE_DIR}/sweep-s${seed}-g${g}-${m[1].toLowerCase()}-m${m[2]}.json`, JSON.stringify(serializeGameState(st, IDENTITY, spots, tokens, null, history)));
+    writeFileSync(`${process.env.SAVE_DIR}/sweep-s${seed}-g${g}-${m[1].toLowerCase()}-m${m[2]}.json`, JSON.stringify(serializeGameState(st, IDENTITY, spots, savedTokens, null, history)));
     // The recorded game as it stood just before the failing move: the position Recreate had to reproduce
     // from, with the history trimmed to match (load it and play the failing move yourself).
     const n = Number(m[2]) - 1;
-    writeFileSync(`${process.env.SAVE_DIR}/sweep-s${seed}-g${g}-${m[1].toLowerCase()}-m${m[2]}-before.json`, JSON.stringify(serializeGameState(history[n].state, IDENTITY, spots, tokens.slice(0, n), null, history.slice(0, n))));
+    writeFileSync(`${process.env.SAVE_DIR}/sweep-s${seed}-g${g}-${m[1].toLowerCase()}-m${m[2]}-before.json`, JSON.stringify(serializeGameState(history[n].state, IDENTITY, spots, savedTokens.slice(0, n), null, history.slice(0, n))));
   }
   console.log(`g${g} ${spots} spots, ${tokens.length} moves: ${result}`);
 }

@@ -551,10 +551,15 @@ function routeSplit(mesh: FaceMesh, spec: Extract<RouteSpec, { kind: 'split' }>,
   const N = mesh.pts.length;
   const label = new Int8Array(N).fill(-1);
   const fixed: number[] = [];
+  // Route within the mesh piece holding the departure corner. A thin wedge can leave a few seeds
+  // as an island (every triangle linking them to the rest crosses a wall); the stroke never passes
+  // through such a sliver, so it lands on its wedge's side anyway, and as an unreachable "stray"
+  // piece it would fail every route in the face.
+  const piece = meshPieceOf(mesh, spec.a);
   for (let i = 0; i < N; i++) {
     const tag = mesh.tags[i];
     // A seed whose triangles were all cut (e.g. pinched against a wall) isn't in the mesh at all.
-    if (tag && mesh.nbrs[i].length > 0) { label[i] = seedLabel(tag, spec, mesh.region); fixed.push(i); }
+    if (tag && piece[i]) { label[i] = seedLabel(tag, spec, mesh.region); fixed.push(i); }
   }
   const seedLabelOf = (i: number): number => seedLabel(mesh.tags[i]!, spec, mesh.region);
   const len = (u: number, v: number): number => ang(mesh.pts[u], mesh.pts[v]);
@@ -674,6 +679,30 @@ function routeSplit(mesh: FaceMesh, spec: Extract<RouteSpec, { kind: 'split' }>,
     if (diag) diag.trace = path;
   }
   return fail(`frontier from the departure corner doesn't reach the arrival corner (${mixedBoundary.length} mixed boundary edges)`);
+}
+
+/** Membership of the connected mesh piece holding the most of corner c's seeds (all false if none). */
+function meshPieceOf(mesh: FaceMesh, c: Corner): Uint8Array {
+  const N = mesh.pts.length;
+  const comp = new Int32Array(N).fill(-1);
+  const count: number[] = [];
+  for (let s = 0; s < N; s++) {
+    if (comp[s] >= 0 || mesh.nbrs[s].length === 0) continue;
+    const id = count.length;
+    count.push(0);
+    const stack = [s];
+    comp[s] = id;
+    while (stack.length > 0) {
+      const u = stack.pop()!;
+      if (isCornerSeed(mesh, u, c)) count[id]++;
+      for (const v of mesh.nbrs[u]) if (comp[v] < 0) { comp[v] = id; stack.push(v); }
+    }
+  }
+  let best = -1;
+  for (let id = 0; id < count.length; id++) if (count[id] > 0 && (best < 0 || count[id] > count[best])) best = id;
+  const inPiece = new Uint8Array(N);
+  if (best >= 0) for (let i = 0; i < N; i++) if (comp[i] === best) inPiece[i] = 1;
+  return inPiece;
 }
 
 /** Is mesh point i one of corner c's arc seeds? */

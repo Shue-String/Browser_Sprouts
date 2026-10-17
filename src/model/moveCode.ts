@@ -391,6 +391,12 @@ export function findEnclosedSideRegion(
         loToHiReg = r; break;
       }
     }
+    // When BOTH faces hold nameable boundaries, "first in region order" is a drawing artifact, and
+    // the side picked also decides which interchangeable spots take the best labels (vertexLabels.ts
+    // findEnclosedSpots), so a replay drawing the same loop could record a different labelled
+    // token. Pick by name instead: the face whose boundaries' bracket names read smaller by `key`.
+    const byName = bareSpotSideByName(newRegsWithW, subBounds, before, key);
+    if (byName) loToHiReg = byName;
     if (loToHiReg === null) loToHiReg = newRegsWithW[0] ?? null;
     // "First in region order" depends on stroke direction, so a bare-spot loop can record either
     // side's bracket; Recreate's matcher asks for the other one when the first doesn't match.
@@ -628,6 +634,33 @@ function bracketSideByName(
     if (d !== 0) return d < 0 ? newRegs[0] : newRegs[1];
   }
   return a.length === b.length ? null : a.length < b.length ? newRegs[0] : newRegs[1];
+}
+
+/**
+ * For a self-loop at a bare spot whose two new faces BOTH hold nameable boundaries of the old
+ * region: the face with FEWER of them (the small loop's side — what a natural stroke round the
+ * few encloses), then the one whose bracket names (bracketRepOf by `key`) read higher, i.e. closer
+ * to -1, compared from the highest down. Null when only one face holds any, or both read
+ * identically (then the faces are interchangeable by name and either is right).
+ */
+function bareSpotSideByName(newRegs: Region[], subBounds: Boundary[], before: GameState, key: (vid: VertexId) => number): Region | null {
+  if (newRegs.length !== 2) return null;
+  const names = newRegs.map(r => {
+    const onFace = new Set<VertexId>();
+    for (const b of r.boundaries) for (const e of b.entries) onFace.add(e.vertexId);
+    const out: number[] = [];
+    for (const sub of subBounds) {
+      if (!sub.entries.some(e => onFace.has(e.vertexId))) continue;
+      const rep = bracketRepOf(sub, before, key);
+      if (rep !== null) out.push(key(rep));
+    }
+    return out.sort((x, y) => y - x);
+  });
+  const [a, b] = names;
+  if (a.length === 0 || b.length === 0) return null;
+  if (a.length !== b.length) return a.length < b.length ? newRegs[0] : newRegs[1];
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i] ? newRegs[0] : newRegs[1];
+  return null;
 }
 
 /**

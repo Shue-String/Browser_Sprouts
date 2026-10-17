@@ -5,7 +5,7 @@ import type { ResolvedMoveVertices } from './model/encoding';
 import { VertexType } from './model/types';
 import type { EncodingResult } from './model/encoding';
 import { computeMoveCode, computeEnclosureSideColoring, computeEnclosureCoverage } from './model/moveCode';
-import { recomputeSpotLabels, initialSpotLabels, labelForFromMap, spotGroupForFromMap, formatSpotLabel } from './model/vertexLabels';
+import { recomputeSpotLabels, initialSpotLabels, labelledMoveCode, formatSpotLabel } from './model/vertexLabels';
 import { parseMoveSequence } from './model/moveCodeParse';
 import type { ResolvedMove } from './model/moveCodeParse';
 import { synthesizeMove, appliedMoveMatches, computeRecreateHints, strokeReproduces, applyTrial } from './model/recreate';
@@ -700,6 +700,13 @@ document.addEventListener('keydown', e => {
     const arc = proposedArc;
     proposedArc = null; // consume immediately so rapid Enter presses are no-ops
     const await_ = manualAwait;
+    // Unverified is allowed (that's the point of force-commit); crossing is not. The hint was legal
+    // when picked, but the board can have moved since.
+    if (strokeCrossesEdges(state, arc)) {
+      showBanner(`The suggested line now crosses an edge. Draw ${await_.parsed.lo} → ${await_.parsed.hi} by hand`);
+      wake();
+      return;
+    }
     try {
       pushHistorySnapshot();
       applyMove(state, { v1: await_.parsed.lo, v2: await_.parsed.hi, stroke: arc });
@@ -974,7 +981,7 @@ function afterMoveCommitted(v1: number, v2: number, stroke: SpherePoint[]): void
  * to rebuild a loaded game's log from its saved history.
  */
 function moveSeqEntryOf(before: GameState, after: GameState, v1: VertexId, v2: VertexId): MoveSeqEntry {
-  const labeled = computeMoveCode(before, v1, v2, after, labelForFromMap(after.spotLabels), spotGroupForFromMap(after.spotLabels));
+  const labeled = labelledMoveCode(before, v1, v2, after);
   const raw = computeMoveCode(before, v1, v2, after);
   const tag = `{${encodePosition(after).text}}`;
   return { moveSeq: labeled, moveSeqRaw: raw, moveSeqTagged: labeled + tag, moveSeqRawTagged: raw + tag };
@@ -2131,7 +2138,7 @@ function setupManualPause(
     const v2Pos = state.vertices.get(parsed.hi)?.pos;
     const voronoiResult = computeJunctionVoronoiPath(vData, v1Pos, v2Pos);
     lastVoronoiFakeCgrId = voronoiResult?.fakeCgrNodeId ?? null;
-    proposedArc = voronoiResult ? voronoiResult.pts : (candidateStrokeStream(state, parsed).next().value ?? null);
+    proposedArc = voronoiResult && !strokeCrossesEdges(state, voronoiResult.pts) ? voronoiResult.pts : firstLegalCandidate(parsed);
     if (voronoiResult) {
       const { nodeIds, seg2Start, seg3Start } = voronoiResult;
       const parts = nodeIds.map((id, i) => {
@@ -2145,11 +2152,18 @@ function setupManualPause(
     voronoiPathBar.classList.add('visible');
   } else {
     voronoiPathBar.classList.remove('visible');
-    // Blue hint arc: first Voronoi-guided candidate (may not verify, still useful visually).
-    proposedArc = pauseRecreations ? (candidateStrokeStream(state, parsed).next().value ?? null) : null;
+    // Blue hint arc: first legal candidate (may not verify, still useful visually).
+    proposedArc = pauseRecreations ? firstLegalCandidate(parsed) : null;
   }
   wake();
   showBanner(`Move ${moveNum}: connect the circled vertices`);
+}
+
+/** The first candidate stroke for `parsed` that crosses nothing — the manual-draw hint arc, which
+ * Enter commits without token verification, so it must at least be a legal line. */
+function firstLegalCandidate(parsed: ResolvedMove): SpherePoint[] | null {
+  for (const stroke of candidateStrokeStream(state, parsed)) if (!strokeCrossesEdges(state, stroke)) return stroke;
+  return null;
 }
 
 /** Pause playback for a hand-drawn move; resolves true on a matching move. */

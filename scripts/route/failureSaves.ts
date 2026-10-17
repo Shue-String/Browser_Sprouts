@@ -20,7 +20,7 @@ import { applyMove, recomputeRegions } from '../../src/model/moves';
 import { encodePosition, encodePositionDecompressed } from '../../src/model/encoding';
 import { analyze, canon, canonFull, MoveKind } from '../../src/engine/stalks';
 import type { ChildInfo } from '../../src/engine/stalks';
-import { computeMoveCode } from '../../src/model/moveCode';
+import { recomputeSpotLabels, labelledMoveCode, resolveLabelledMove } from '../../src/model/vertexLabels';
 import { parseMoveSequence } from '../../src/model/moveCodeParse';
 import type { ResolvedMove } from '../../src/model/moveCodeParse';
 import { synthesizeMove } from '../../src/model/recreate';
@@ -63,17 +63,18 @@ function describeMove(c: ChildInfo): string {
     : `Join comp ${mv.component} region ${mv.region} boundary ${mv.b1} token ${mv.i} → boundary ${mv.b2} token ${mv.j}`;
 }
 
-/** Replays a move sequence through Recreate's synthesizeMove; the 0-based index of the first move
- *  it can't reproduce, or -1 when every move replays. */
+/** Replays a labelled ("nL:") move sequence through Recreate's synthesizeMove, as the app does; the
+ *  0-based index of the first move it can't reproduce, or -1 when every move replays. */
 function recreateStopsAt(seqText: string): number {
   const seq = parseMoveSequence(seqText);
   const st = createInitialState(seq.spots);
   for (let i = 0; i < seq.moves.length; i++) {
-    const m = seq.moves[i];
-    const parsed: ResolvedMove = { ...m, brackets: m.brackets as number[] | null, parens: m.parens as ResolvedMove['parens'] };
-    const stroke = synthesizeMove(st, parsed);
+    const parsed: ResolvedMove = resolveLabelledMove(seq.moves[i], st.spotLabels);
+    const stroke = synthesizeMove(st, parsed, true);
     if (!stroke) return i;
+    const before = cloneState(st);
     applyMove(st, { v1: parsed.lo, v2: parsed.hi, stroke });
+    st.spotLabels = recomputeSpotLabels(before.spotLabels, before, st, parsed.lo, parsed.hi);
     relax(st);
   }
   return -1;
@@ -145,7 +146,7 @@ async function main(): Promise<void> {
           if (crossings.length) brokenDrawings++;
           report.push(`## ${name}`, '');
           report.push(`Position \`${encodePosition(loaded).text}\` — ${spots} spots, ${m} moves played  `);
-          const seqText = `${spots}:${tokens.join('/')}`;
+          const seqText = `${spots}L:${tokens.join('/')}`;
           const stop = tokens.length ? recreateStopsAt(seqText) : -1;
           report.push(`Move sequence: \`${seqText}\` — Recreate replays it: ${stop < 0 ? 'yes, all moves' : `**no, stops at move ${stop + 1}** (\`${tokens[stop]}\`)`}`, '');
           if (crossings.length) {
@@ -192,7 +193,9 @@ async function main(): Promise<void> {
         const stroke: SpherePoint[] = pick.stroke.map(q => ({ ...q }));
         const before = cloneState(state);
         applyMove(state, { v1: pick.v1, v2: pick.v2, stroke });
-        tokens.push(computeMoveCode(before, pick.v1, pick.v2, state));
+        // Labelled codes, as live play records them: a save's moveSequence is the labelled form.
+        state.spotLabels = recomputeSpotLabels(before.spotLabels, before, state, pick.v1, pick.v2);
+        tokens.push(labelledMoveCode(before, pick.v1, pick.v2, state));
         history.push({ state: before, committed: { v1: pick.v1, v2: pick.v2, rawStroke: stroke } });
         relax(state);
       }
