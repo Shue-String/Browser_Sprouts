@@ -4934,6 +4934,21 @@
       ]
     },
     {
+      "name": "Z_3",
+      "rep": "37a8b",
+      "offsets": [
+        {
+          "offset": 0,
+          "unhandled": {
+            "notes": "[37β8α/ is [37α8β/ with its crits exchanged: same left-side key, different wiring. The genome is symmetric in α/β, so the two orientations are equivalent, but the registry cannot reduce one to the other (it would swap the region back and forth forever), so this member is display-only.",
+            "elements": [
+              {"encoding":"37b8a","minSpots":null}
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "Z_4",
       "rep": "2,b,2a",
       "offsets": [

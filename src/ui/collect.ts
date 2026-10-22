@@ -57,6 +57,7 @@ import {
   GENOME_NAMES,
   KNOWN_COLLECTION_MEMBERS,
   KNOWN_COLLECTION_REP,
+  KNOWN_COLLECTION_UNHANDLED,
   NAMED_FAMILIES,
   NAMED_FAMILY_GENOME_TEXT,
   classifyTChildren,
@@ -1138,7 +1139,7 @@ async function runExport(): Promise<void> {
  * changes, this function's count would silently stop matching renderCollectionItems' real count and
  * needs updating alongside it. */
 function collectionItemStats(name: string): { count: number; hasContent: boolean } {
-  const staticCount = (KNOWN_COLLECTION_MEMBERS[name] ?? []).length;
+  const staticCount = (KNOWN_COLLECTION_MEMBERS[name] ?? []).length + (KNOWN_COLLECTION_UNHANDLED[name] ?? []).length;
   const hasRep = !!KNOWN_COLLECTION_REP[name];
   return { count: staticCount + (hasRep ? 1 : 0), hasContent: staticCount > 0 };
 }
@@ -1202,12 +1203,20 @@ function renderCollectionItems(name: string, members: Entry[]): { itemsHtml: str
           s =>
             `<div class="collect-coll-member collect-coll-static" title="Known roster member from stalks/src/collections.cpp -- a schematic left-side shape, not an analyzed Collect entry.">${escapeHtml(s)}</div>`,
         );
-  const allItems = [repItem, ...memberItems, ...staticItems].filter(Boolean);
+  // Display-only members the engine never reduces (the JSON's "unhandled" section) -- listed last
+  // and tagged, so they read as members of the collection without implying quickCanon uses them.
+  const unhandledLabels = (KNOWN_COLLECTION_UNHANDLED[name] ?? []).filter(s => !memberLabels.has(s));
+  const unhandledItems = unhandledLabels.map(
+    s =>
+      `<div class="collect-coll-member collect-coll-static" title="Collection member that quick-canon deliberately does not reduce (the &quot;unhandled&quot; section of collectionElements.json).">${escapeHtml(s)} <span class="collect-coll-unhandled-tag">unhandled</span></div>`,
+  );
+  const allItems = [repItem, ...memberItems, ...staticItems, ...unhandledItems].filter(Boolean);
   const itemsHtml = allItems.length === 0 ? '<div class="collect-coll-empty">(none)</div>' : allItems.join('');
   // hasContent deliberately excludes the pinned rep -- it's not an ordinary member (see repItem's
   // own comment above), so an offset with a rep but no real members/static elements still counts
   // as empty for renderCollectionGroup's "drop an offset with nothing in it" rule.
-  return { itemsHtml, count: members.length + staticLabels.length + (repItem ? 1 : 0), hasContent: members.length + staticLabels.length > 0 };
+  const listed = members.length + staticLabels.length + unhandledLabels.length;
+  return { itemsHtml, count: listed + (repItem ? 1 : 0), hasContent: listed > 0 };
 }
 
 /** The name/count/genome header row shared by both a top-level group's <summary> and a nested

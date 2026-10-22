@@ -82,7 +82,8 @@ function buildRows(): GenomeCensusRow[] {
     const offsets = new Set(groups.map(r => r.offset));
     for (let k = 1; k <= COLLECTION_MAX_SHIFT; k++) if (referenced.has(nameOf(name, k))) offsets.add(k);
     for (const offset of [...offsets].sort((a, b) => a - b)) {
-      const encs = [...(groups.find(r => r.offset === offset)?.elements ?? [])];
+      const g = groups.find(r => r.offset === offset);
+      const encs = [...(g?.elements ?? []), ...(g?.unhandled ?? [])];  // unhandled members count too
       if (offset === 0) encs.push(rep);
       const group = nameOf(name, offset);
       if (!encs.length && !referenced.has(group)) continue;

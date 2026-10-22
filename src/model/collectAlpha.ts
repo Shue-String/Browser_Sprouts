@@ -688,20 +688,24 @@ function withCompactKeys(names: Record<string, string>): Record<string, string> 
 /** One (collection, offset) group of src/data/collectionElements.json: its display name ("S_1",
  * "S_1⊕1"), its left-side elements across the single/double/multi sections, and the collection's
  * shared rep -- on the offset-0 group only; an offset group shares its base's rep, so it carries
- * "" here (KNOWN_COLLECTION_REP filters on that). */
+ * "" here (KNOWN_COLLECTION_REP filters on that). `unhandled` holds the display-only members the
+ * engine never reduces (the JSON's "unhandled" section) -- kept out of `elements` so nothing that
+ * assumes an element quick-canons to its rep (buildRegistryIndex) ever sees them. */
 export interface CollectionRosterEntry {
   /** The collection this group belongs to ("S_1"). */
   collection: string;
   name: string;
   offset: number;
   elements: string[];
+  unhandled: string[];
   rep: string;
 }
+type RosterSection = 'single' | 'double' | 'multi' | 'unhandled';
 interface CollectionElementsFile {
   collections: {
     name: string;
     rep: string;
-    offsets: ({ offset: number } & Partial<Record<'single' | 'double' | 'multi', { elements: { encoding: string }[] }>>)[];
+    offsets: ({ offset: number } & Partial<Record<RosterSection, { elements: { encoding: string }[] }>>)[];
   }[];
 }
 export const COLLECTION_ROSTERS: CollectionRosterEntry[] = (collectionElementsJson as unknown as CollectionElementsFile).collections.flatMap(c =>
@@ -710,6 +714,7 @@ export const COLLECTION_ROSTERS: CollectionRosterEntry[] = (collectionElementsJs
     name: nameOf(c.name, o.offset),
     offset: o.offset,
     elements: (['single', 'double', 'multi'] as const).flatMap(s => o[s]?.elements.map(e => e.encoding) ?? []),
+    unhandled: o.unhandled?.elements.map(e => e.encoding) ?? [],
     rep: o.offset === 0 ? c.rep : '',
   })),
 );
@@ -858,6 +863,12 @@ function leftSideDisplay(enc: string): string {
  * panel's item list, in bold) since it's the shared reduction target, not an ordinary member. */
 export const KNOWN_COLLECTION_MEMBERS: Record<string, string[]> = Object.fromEntries(
   COLLECTION_ROSTERS.map(r => [rosterFolderName(r.name), r.elements.map(leftSideDisplay)]),
+);
+
+/** Same keying as KNOWN_COLLECTION_MEMBERS, for each group's display-only "unhandled" members --
+ * real collection members quickCanon deliberately never reduces (see CollectionRosterEntry). */
+export const KNOWN_COLLECTION_UNHANDLED: Record<string, string[]> = Object.fromEntries(
+  COLLECTION_ROSTERS.map(r => [rosterFolderName(r.name), r.unhandled.map(leftSideDisplay)]),
 );
 
 /** A collection's own shared reduction target (the roster's deliberately-OMITTED lowest-order/rep

@@ -12,7 +12,13 @@
 //             "offset": 0,
 //             "single"?: { "notes"?, "elements": [ {encoding,minSpots} ] },
 //             "double"?: { ...same shape... },
-//             "multi"?:  { ...same shape... } } ] } ] }
+//             "multi"?:  { ...same shape... },
+//             "unhandled"?: { ...same shape... } } ] } ] }
+//
+// "unhandled" holds genuine members the engine deliberately does NOT reduce (e.g. Z_3's
+// [37β8α/, which shares its rep's left-side key, so registering it would make quickCanon swap
+// the region back and forth forever). The engine and the generated WASM header never read this
+// section; the UI lists these elements alongside the rest, marked as unhandled.
 //
 // `rep` lives once, on the collection -- never per section. An offset's display name is never
 // stored: it is `name` for offset 0 and `name⊕offset` otherwise.
@@ -26,7 +32,7 @@ const fs = require('fs');
 const path = require('path');
 
 const JSON_PATH = path.resolve(__dirname, '..', 'src', 'data', 'collectionElements.json');
-const SECTIONS = ['single', 'double', 'multi'];
+const SECTIONS = ['single', 'double', 'multi', 'unhandled'];
 
 function groupName(collectionName, offset) {
   return offset === 0 ? collectionName : `${collectionName}⊕${offset}`;

@@ -1076,7 +1076,8 @@ struct CritFamily {
 // The collections having a `section` ("single"/"double"/"multi") list, one family each, in JSON
 // order: rep = the collection's rep, groups = the offsets that have that section (named "S_n" at
 // offset 0, "S_n⊕k" otherwise) -- the same flattening scripts/collectionsJson.cjs's flatFamilies
-// does for the generated header.
+// does for the generated header. The fourth, display-only "unhandled" section is never loaded:
+// its members are real but deliberately not reduced (see collectionsJson.cjs's schema doc).
 std::vector<CritFamily> loadFamilies(const std::string& section) {
     std::vector<CritFamily> out;
     for (const auto& c : json::asArray(json::member(collectionElementsJson(), "collections", "root"), "collections")) {
