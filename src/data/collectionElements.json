@@ -207,10 +207,8 @@
               {"encoding":"12C|5Ca","minSpots":7},
               {"encoding":"12C|77C88a","minSpots":6},
               {"encoding":"12C|C,1a","minSpots":6},
-              {"encoding":"12C|C,37a8","minSpots":7},
               {"encoding":"12C|C,5a","minSpots":7},
               {"encoding":"12C|a,1C","minSpots":6},
-              {"encoding":"12C|a,37C8","minSpots":7},
               {"encoding":"12C|a,5C","minSpots":7},
               {"encoding":"13,CDEF|2a,CDEF","minSpots":null},
               {"encoding":"13,CD|2a,CD","minSpots":7},
@@ -266,9 +264,7 @@
               {"encoding":"2,1C|3,C,2a","minSpots":null},
               {"encoding":"2,1C|5,C,a","minSpots":7},
               {"encoding":"2,1C|C,1a","minSpots":6},
-              {"encoding":"2,1C|C,37a8","minSpots":7},
               {"encoding":"2,1C|C,5a","minSpots":7},
-              {"encoding":"2,1C|a,37C8","minSpots":7},
               {"encoding":"2,1C|a,5C","minSpots":7},
               {"encoding":"2,222CD|2a,CD","minSpots":null},
               {"encoding":"2,22C2D|2a,CD","minSpots":null},
@@ -751,12 +747,9 @@
               {"encoding":"2a,CD|3,4,CD","minSpots":7},
               {"encoding":"2a,CD|3,5,CD","minSpots":null},
               {"encoding":"2a,CD|34,CD","minSpots":7},
-              {"encoding":"2a,CD|35,CD","minSpots":null},
               {"encoding":"2a,CD|CD,222","minSpots":7},
               {"encoding":"2a,CD|CD,223","minSpots":null},
-              {"encoding":"2a,CD|CD,2728","minSpots":6},
               {"encoding":"2a,CD|CD,2738","minSpots":7},
-              {"encoding":"2a,CD|CD,3738","minSpots":null},
               {"encoding":"3,11C|C,1a","minSpots":null},
               {"encoding":"3,17C8|0,C,a","minSpots":7},
               {"encoding":"3,17C8|1C,2a","minSpots":null},
@@ -775,7 +768,6 @@
               {"encoding":"34C|5,C,a","minSpots":7},
               {"encoding":"34C|77C88a","minSpots":6},
               {"encoding":"34C|C,1a","minSpots":6},
-              {"encoding":"34C|a,37C8","minSpots":7},
               {"encoding":"34C|a,5C","minSpots":7},
               {"encoding":"377CD88|2a,CD","minSpots":7},
               {"encoding":"37C8a|1,2,C","minSpots":null},
@@ -905,7 +897,6 @@
               {"encoding":"4C|2a,DE|3,C,DE","minSpots":null},
               {"encoding":"4C|2a,DE|3C,DE","minSpots":null},
               {"encoding":"4C|3,CDE|2a,DE","minSpots":null},
-              {"encoding":"4C|35,Ca","minSpots":null},
               {"encoding":"4C|37DE8|C,DEa","minSpots":null},
               {"encoding":"4C|37DE8|DE,Ca","minSpots":null},
               {"encoding":"4C|3CDE|2a,DE","minSpots":null},
@@ -960,7 +951,6 @@
               {"encoding":"4C|CDEa|37DE8","minSpots":null},
               {"encoding":"4C|CD|DEF|2a,EF","minSpots":7},
               {"encoding":"4C|CD|EF|2Ga|DEGF","minSpots":7},
-              {"encoding":"4C|Ca,3738","minSpots":null},
               {"encoding":"4C|DCEa|27DE8","minSpots":7},
               {"encoding":"4C|DCEa|37DE8","minSpots":null},
               {"encoding":"4C|DEF|DEG|C,FGa","minSpots":7},
@@ -1060,16 +1050,13 @@
               {"encoding":"7CD8a|3,4,CD","minSpots":7},
               {"encoding":"7CD8a|3,5,CD","minSpots":null},
               {"encoding":"7CD8a|34,CD","minSpots":7},
-              {"encoding":"7CD8a|35,CD","minSpots":null},
               {"encoding":"7CD8a|377CD88","minSpots":7},
               {"encoding":"7CD8a|4,2C2D","minSpots":7},
               {"encoding":"7CD8a|4,3CD","minSpots":7},
               {"encoding":"7CD8a|5,3CD","minSpots":null},
               {"encoding":"7CD8a|CD,222","minSpots":7},
               {"encoding":"7CD8a|CD,223","minSpots":null},
-              {"encoding":"7CD8a|CD,2728","minSpots":6},
               {"encoding":"7CD8a|CD,2738","minSpots":7},
-              {"encoding":"7CD8a|CD,3738","minSpots":null},
               {"encoding":"7CD8a|CD,EF|2,2,EF","minSpots":7},
               {"encoding":"7CD8a|CDEFG|2,EFG","minSpots":7},
               {"encoding":"7CD8a|CEFGH|DEFGH","minSpots":6},
@@ -1085,9 +1072,7 @@
               {"encoding":"C,12|3,C,2a","minSpots":null},
               {"encoding":"C,12|5,C,a","minSpots":7},
               {"encoding":"C,12|C,1a","minSpots":6},
-              {"encoding":"C,12|C,37a8","minSpots":7},
               {"encoding":"C,12|C,5a","minSpots":7},
-              {"encoding":"C,12|a,37C8","minSpots":7},
               {"encoding":"C,12|a,5C","minSpots":7},
               {"encoding":"C,15|1C,2a","minSpots":null},
               {"encoding":"C,1728|13,Ca","minSpots":null},
@@ -1095,7 +1080,6 @@
               {"encoding":"C,1a|0,3,2C","minSpots":null},
               {"encoding":"C,1a|1,2,C","minSpots":7},
               {"encoding":"C,1a|2,3,2C","minSpots":null},
-              {"encoding":"C,37a8|1,2,C","minSpots":null},
               {"encoding":"C,5a|1,2,C","minSpots":null},
               {"encoding":"CDEFG|2,CDE|2a,FG","minSpots":7},
               {"encoding":"CDEFG|2a,CDEFG","minSpots":6},
@@ -1129,7 +1113,6 @@
               {"encoding":"CDEF|CDEFG|5,G,a","minSpots":7},
               {"encoding":"CDEF|CDEFG|77G88a","minSpots":6},
               {"encoding":"CDEF|CDEFG|G,1a","minSpots":6},
-              {"encoding":"CDEF|CDEFG|G,37a8","minSpots":7},
               {"encoding":"CDEF|CDEFG|G,5a","minSpots":7},
               {"encoding":"CDEF|CDEFG|a,1G","minSpots":6},
               {"encoding":"CDEF|G,CDEF|2,2,G,a","minSpots":7},
@@ -2332,7 +2315,6 @@
               {"encoding":"2Ca|2,7C8D|1,2,D","minSpots":null},
               {"encoding":"2Ca|2,7C8D|D,12","minSpots":7},
               {"encoding":"2Ca|2,CDE|12,DE","minSpots":7},
-              {"encoding":"2Ca|2,CDE|DE,2728","minSpots":7},
               {"encoding":"2Ca|2,DEF|1C,DEF","minSpots":7},
               {"encoding":"2Ca|22DE|1,C,DE","minSpots":null},
               {"encoding":"2Ca|22DE|1,CDE","minSpots":null},
@@ -2371,7 +2353,6 @@
               {"encoding":"2Ca|2CDE|12,DE","minSpots":7},
               {"encoding":"2Ca|2CDE|17DE8","minSpots":7},
               {"encoding":"2Ca|2CDE|277DE88","minSpots":7},
-              {"encoding":"2Ca|2CDE|DE,2728","minSpots":7},
               {"encoding":"2Ca|2DCE|17DE8","minSpots":7},
               {"encoding":"2Ca|2DEF|1C,DEF","minSpots":7},
               {"encoding":"2Ca|34C","minSpots":5},
@@ -2439,7 +2420,6 @@
               {"encoding":"2Ca|C,1D|1,2,D","minSpots":null},
               {"encoding":"2Ca|C,27D8|1,2,D","minSpots":null},
               {"encoding":"2Ca|C,2DE|12,DE","minSpots":7},
-              {"encoding":"2Ca|C,2DE|DE,2728","minSpots":7},
               {"encoding":"2Ca|C,4D|1,2,D","minSpots":null},
               {"encoding":"2Ca|C,DEF|1,2,DEF","minSpots":null},
               {"encoding":"2Ca|CDEFG|1,DEFG","minSpots":7},
@@ -2479,7 +2459,6 @@
               {"encoding":"2Ca|D,12|D,4C","minSpots":7},
               {"encoding":"2Ca|D,27C8|1,2,D","minSpots":null},
               {"encoding":"2Ca|D,4C|1,2,D","minSpots":null},
-              {"encoding":"2Ca|DE,2728|2,C,DE","minSpots":7},
               {"encoding":"2Ca|DEFGHI|C,DEFGHI","minSpots":6},
               {"encoding":"2Ca|DEFG|1,CDEFG","minSpots":7},
               {"encoding":"2Ca|DEFG|5,CDEFG","minSpots":7},
@@ -2498,7 +2477,6 @@
               {"encoding":"2a,2C2D|1,2,CD","minSpots":null},
               {"encoding":"2a,2CD|2,2,1CD","minSpots":null},
               {"encoding":"2a,37C8|1,2,C","minSpots":null},
-              {"encoding":"2a,3CD|CD,2728","minSpots":null},
               {"encoding":"2a,5C|1,2,C","minSpots":null},
               {"encoding":"2a,6CD|2,2,CD","minSpots":null},
               {"encoding":"2a,6C|1,2,C","minSpots":null},
@@ -2751,7 +2729,6 @@
               {"encoding":"4C|C,1a","minSpots":5},
               {"encoding":"4C|C,2DE|1a,DE","minSpots":7},
               {"encoding":"4C|C,33a","minSpots":null},
-              {"encoding":"4C|C,37a8","minSpots":6},
               {"encoding":"4C|C,4D|2D,2a","minSpots":7},
               {"encoding":"4C|C,5a","minSpots":6},
               {"encoding":"4C|C,DEFG|2a,DEFG","minSpots":7},
@@ -2787,7 +2764,6 @@
               {"encoding":"4C|DE|CDF|EFa","minSpots":6},
               {"encoding":"4C|DE|DF|ECFa","minSpots":6},
               {"encoding":"4C|a,1C","minSpots":5},
-              {"encoding":"4C|a,37C8","minSpots":6},
               {"encoding":"4C|a,5C","minSpots":6},
               {"encoding":"5,3CD|1a,CD","minSpots":null},
               {"encoding":"5,6CD|2a,CD","minSpots":null},
@@ -3226,7 +3202,12 @@
               {"encoding":"CD|EF|2Ca|1,2EDF","minSpots":null},
               {"encoding":"CD|EF|2GCEH|2a,DFHG","minSpots":null},
               {"encoding":"CD|EF|CGH|EGH|DFa","minSpots":7},
-              {"encoding":"CD|EF|GH|CEGI|2a,DFHI","minSpots":null}
+              {"encoding":"CD|EF|GH|CEGI|2a,DFHI","minSpots":null},
+              {"encoding":"2Ca|2,CDE|DE,223","minSpots":null},
+              {"encoding":"2Ca|2CDE|DE,223","minSpots":null},
+              {"encoding":"2Ca|C,2DE|DE,223","minSpots":null},
+              {"encoding":"2Ca|DE,223|2,C,DE","minSpots":null},
+              {"encoding":"2a,3CD|CD,223","minSpots":null}
             ]
           }
         },
@@ -3362,8 +3343,6 @@
               {"encoding":"CDE|CDF|GHa|EF,GH","minSpots":6},
               {"encoding":"CDE|CDF|GHa|EFGH","minSpots":6},
               {"encoding":"CDa|13,CD","minSpots":6},
-              {"encoding":"CDa|35,CD","minSpots":7},
-              {"encoding":"CDa|CD,3738","minSpots":7},
               {"encoding":"CD|3CE|FGa|DE,FG","minSpots":7},
               {"encoding":"CD|3CE|FGa|DEFG","minSpots":null},
               {"encoding":"CD|CEF|GHa|GH,DEF","minSpots":6},
@@ -3522,7 +3501,6 @@
               {"encoding":"2CaD|37CD8","minSpots":7},
               {"encoding":"37CD8|2,a,CD","minSpots":7},
               {"encoding":"4C|2,a,2C","minSpots":6},
-              {"encoding":"4C|2,a,3C","minSpots":7},
               {"encoding":"5CD|2,a,CD","minSpots":7},
               {"encoding":"5CD|2CaD","minSpots":7},
               {"encoding":"CD|CEF|DEG|2,a,FG","minSpots":7},
@@ -4153,9 +4131,7 @@
         {
           "offset": 0,
           "single": {
-            "elements": [
-              {"encoding":"3a,2728","minSpots":6}
-            ]
+            "elements": []
           }
         }
       ]
@@ -4924,7 +4900,9 @@
               {"encoding":"b7a8","minSpots":4},
               {"encoding":"2,ba","minSpots":3},
               {"encoding":"b,2a","minSpots":5},
-              {"encoding":"2,b,a","minSpots":5}
+              {"encoding":"2,b,a","minSpots":5},
+              {"encoding":"35,ba","minSpots":null},
+              {"encoding":"3738,ba","minSpots":null}
             ]
           }
         },
@@ -4936,6 +4914,48 @@
               {"encoding":"5,ba","minSpots":4},
               {"encoding":"23,ba","minSpots":6},
               {"encoding":"3b,2a","minSpots":null}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Z_2",
+      "rep": "a,5b",
+      "offsets": [
+        {
+          "offset": 0,
+          "double": {
+            "elements": [
+              {"encoding":"a,37b8","minSpots":null}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Z_4",
+      "rep": "2,b,2a",
+      "offsets": [
+        {
+          "offset": 0,
+          "double": {
+            "elements": [
+              {"encoding":"2,b,3a","minSpots":null}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Z_5",
+      "rep": "223,ab",
+      "offsets": [
+        {
+          "offset": 0,
+          "double": {
+            "elements": [
+              {"encoding":"2728,ab","minSpots":null}
             ]
           }
         }
@@ -5085,8 +5105,7 @@
           "offset": 0,
           "multi": {
             "elements": [
-              {"encoding":"3C|C,5a","minSpots":7},
-              {"encoding":"3C|C,37a8","minSpots":7}
+              {"encoding":"3C|C,5a","minSpots":7}
             ]
           }
         }
@@ -5118,9 +5137,7 @@
         {
           "offset": 0,
           "multi": {
-            "elements": [
-              {"encoding":"3C|a,37C8","minSpots":null}
-            ]
+            "elements": []
           }
         }
       ]
@@ -5181,8 +5198,7 @@
           "offset": 0,
           "multi": {
             "elements": [
-              {"encoding":"3C|2,C,2a","minSpots":7},
-              {"encoding":"3C|2,C,3a","minSpots":7}
+              {"encoding":"3C|2,C,2a","minSpots":7}
             ]
           }
         }
@@ -5467,9 +5483,7 @@
         {
           "offset": 0,
           "multi": {
-            "elements": [
-              {"encoding":"4C|2,C,3a","minSpots":7}
-            ]
+            "elements": []
           }
         }
       ]
@@ -5482,9 +5496,7 @@
         {
           "offset": 0,
           "multi": {
-            "elements": [
-              {"encoding":"CDa|CD,2728","minSpots":5}
-            ]
+            "elements": []
           }
         }
       ]

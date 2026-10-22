@@ -118,9 +118,20 @@ std::string geometricKey(const std::vector<Bnd>& region) {
 // addition to the geometric symmetries. For k=1 (S1/S2) there is one port, so this is the
 // identity and every existing single-crit key is unchanged; for k=2 (S3/S4) it collapses a left
 // side and its port-swap ([.,βα/ and [.,αβ/) to one key -- they are the same left side under crit
-// renaming. Treating the two crits as interchangeable is sound for the left-side match (the swap
-// re-wires the same physical hosts); it is gated end to end by testQuickNimber.
-std::string regionKey(const std::vector<Bnd>& region) {
+// renaming. Treating the two crits as interchangeable is sound for the left-side MATCH (both
+// labellings describe the same physical region) -- but NOT for the swap that follows: a family
+// whose genome is asymmetric in its crits (g(Dα) != g(Dβ), e.g. Z_2 [α,5β/) needs each physical
+// crit to land on the rep port playing the same role. regionKeyPerm below also reports WHICH
+// labelling won, so the double-crit swap can line the crits up by role (see stepDoubleCrit).
+struct KeyPerm {
+    std::string key;
+    // perm[i] = canonical label rank (0..k-1) given to the region's port of rank i (ports ranked
+    // ascending by token). Ties (a region symmetric under some port relabeling) keep the first
+    // minimal permutation; any tied choice is geometrically equivalent, so the roles it implies are too.
+    std::vector<std::size_t> perm;
+};
+
+KeyPerm regionKeyPerm(const std::vector<Bnd>& region) {
     std::set<Token> portSet;
     for (const Bnd& b : region)
         for (Token t : b)
@@ -128,8 +139,11 @@ std::string regionKey(const std::vector<Bnd>& region) {
                 portSet.insert(t);
     const std::vector<Token> ports(portSet.begin(), portSet.end());  // sorted ascending
 
-    std::vector<Token> perm = ports;
-    std::optional<std::string> best;
+    std::vector<std::size_t> perm(ports.size());
+    for (std::size_t i = 0; i < perm.size(); ++i)
+        perm[i] = i;
+    KeyPerm best;
+    bool have = false;
     do {
         std::vector<Bnd> relabeled;
         relabeled.reserve(region.size());
@@ -139,7 +153,7 @@ std::string regionKey(const std::vector<Bnd>& region) {
             for (Token t : b) {
                 if (isPort(t)) {
                     const auto it = std::lower_bound(ports.begin(), ports.end(), t);
-                    nb.push_back(perm[static_cast<std::size_t>(it - ports.begin())]);
+                    nb.push_back(ports[perm[static_cast<std::size_t>(it - ports.begin())]]);
                 } else {
                     nb.push_back(t);
                 }
@@ -147,10 +161,15 @@ std::string regionKey(const std::vector<Bnd>& region) {
             relabeled.push_back(std::move(nb));
         }
         std::string k = geometricKey(relabeled);
-        if (!best || k < *best)
-            best = std::move(k);
+        if (!have || k < best.key) {
+            best = KeyPerm{std::move(k), perm};
+            have = true;
+        }
     } while (std::next_permutation(perm.begin(), perm.end()));
-    return *best;
+    return best;
+}
+
+std::string regionKey(const std::vector<Bnd>& region) { return regionKeyPerm(region).key;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +308,9 @@ struct DoubleCritCandidate {
     CritSlot slot1;
     CritSlot slot2;
     std::string leftKey;
+    // regionKeyPerm's winning labelling: slotPerm[i] = canonical label rank of slot i+1 (markedRegion
+    // numbers ports in critSlots order, so slot i is port rank i).
+    std::vector<std::size_t> slotPerm;
 };
 
 std::vector<DoubleCritCandidate> enumerateDoubleCrits(const Component& c) {
@@ -304,7 +326,9 @@ std::vector<DoubleCritCandidate> enumerateDoubleCrits(const Component& c) {
         cand.region = R;
         cand.slot1 = (*slots)[0];
         cand.slot2 = (*slots)[1];
-        cand.leftKey = regionKey(markedRegion(c.regions[R]));
+        KeyPerm kp = regionKeyPerm(markedRegion(c.regions[R]));
+        cand.leftKey = std::move(kp.key);
+        cand.slotPerm = std::move(kp.perm);
         out.push_back(std::move(cand));
     }
     return out;
@@ -1106,6 +1130,11 @@ struct CritMatch {
     // The roster's own authored left-side text (pre-canonicalization), e.g. "1a", "0,a", "2CD|2a,CD"
     // -- used to label which collection member fired a reduction, see quickReductionCounts.
     std::string display;
+    // Double-crit only: roleOfLabel[m] = the authored port rank ('a'=0, 'b'=1) of this element's
+    // port that regionKeyPerm gave canonical label m. An element's 'a' plays the same role as its
+    // rep's 'a' (the roster convention), so stepDoubleCrit uses this to send each physical crit to
+    // the rep port of the matching role. Empty for single-crit and multi-region entries.
+    std::vector<std::size_t> roleOfLabel;
 };
 
 const std::map<std::string, CritMatch>& registry() {
@@ -1166,10 +1195,16 @@ const std::map<std::string, CritMatch>& doubleCritRegistry() {
                     std::string(fam.repEncoding) + "'");
             for (const auto& g : fam.groups)
                 for (const std::string& e : g.elements) {
-                    const std::string key = leftSideKey(e);
-                    if (!m.emplace(key, CritMatch{g.offset, head, e}).second)
+                    const KeyPerm kp = regionKeyPerm(parseLeftSide(e));
+                    if (kp.perm.size() != 2)
+                        throw std::logic_error("collections doubleCritRegistry: element must have "
+                                               "exactly two crit ports: '" + e + "'");
+                    std::vector<std::size_t> roleOfLabel(kp.perm.size());
+                    for (std::size_t j = 0; j < kp.perm.size(); ++j)
+                        roleOfLabel[kp.perm[j]] = j;
+                    if (!m.emplace(kp.key, CritMatch{g.offset, head, e, std::move(roleOfLabel)}).second)
                         throw std::logic_error("collections doubleCritRegistry: duplicate left-side key '" +
-                                                key + "' (from element '" + e + "')");
+                                                kp.key + "' (from element '" + e + "')");
                 }
         }
         return m;
@@ -1193,10 +1228,10 @@ const std::map<std::string, CritMatch>& doubleCritRegistry() {
 // port letters (sorted ascending, mirroring regionKey's own ports-sorted-by-rank convention) --
 // NOT the slot's raw index in `slots` (arrival order from the crit-finder) and NOT the port's
 // absolute letter value, so this is correct regardless of which letters a repEncoding happens to
-// use. The two slots of a k=2 template are provably interchangeable (regionKey already minimizes
-// over both port permutations when MATCHING), so which physical slot lands on which template
-// letter cannot change the final canonical result -- only the pre-canonicalization intermediate,
-// which normalizeQuick immediately re-derives in consider().
+// use. For k=2 the caller must pass `slots` already ordered by ROLE (slot j fills the rep's port
+// of rank j): the two crits are NOT interchangeable for a family whose genome is asymmetric in
+// them (Z_2, Z_4), and a swap in arrival order put them on the wrong ports -- fixed 2026-10-22,
+// see stepDoubleCrit's role ordering via regionKeyPerm.
 //
 // The new occurrence recorded for `repoint` is the slot's rank among ONLY the non-special
 // (real-membrane) occurrences WITHIN ITS OWN BOUNDARY -- i.e. Component::pairIndex()'s per-
@@ -1788,9 +1823,15 @@ bool stepDoubleCrit(Position& cur, int& offset) {
                 continue;
             if (isExcludedRegistryEntry(it->second.display))
                 continue;
+            // Order the two physical crits by ROLE (rep port rank), not by arrival order: slot i
+            // carries canonical label slotPerm[i], which the element's roleOfLabel maps back to
+            // the authored port whose role it plays.
+            const CritSlot found[2] = {cand.slot1, cand.slot2};
+            std::vector<CritSlot> byRole(2);
+            for (std::size_t i = 0; i < 2; ++i)
+                byRole[it->second.roleOfLabel[cand.slotPerm[i]]] = found[i];
             cur.components[ci] = applyCritSwap(cur.components[ci], cand.region,
-                                                it->second.head.regions[0],
-                                                {cand.slot1, cand.slot2});
+                                                it->second.head.regions[0], byRole);
             offset ^= it->second.offset;
             recordQuickReduction("[" + it->second.display + "/");
             changed = true;
