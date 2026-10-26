@@ -31,6 +31,11 @@ export interface Tunables {
   curveRefineWindow: number;
   maxEdgePoints: number;
 
+  // --- src/model/moveRouter.ts: smoothPath clearance floor ---
+  keepClearRange: number;
+  keepClearShare: number;
+  keepClearMax: number;
+
   // --- src/main.ts: Recreate playback timing ---
   settleMs: number;
   extraSettleStableFrames: number;
@@ -71,6 +76,10 @@ export const DEFAULT_TUNABLES: Tunables = {
   curveRefineAngle: 0, // off: with it on, Recreate replays 14/40 games faithfully vs 37/40 without (2026-10-05 sweep); 0.7 is the value that was tried
   curveRefineWindow: 0.1,
   maxEdgePoints: 120,
+
+  keepClearRange: 0.3,
+  keepClearShare: 0.5,
+  keepClearMax: 0.1,
 
   settleMs: 1500,
   extraSettleStableFrames: 6,
@@ -125,6 +134,10 @@ export const TUNABLE_SPECS: TunableSpec[] = [
   { key: 'curveRefineAngle',    label: 'Curve refine: turn (rad, 0 = off)', group: 'Smoothing', min: 0,    max: 3,        step: 0.05 },
   { key: 'curveRefineWindow',   label: 'Curve refine: window (rad)',  group: 'Smoothing', min: 0.01, max: 0.5,      step: 0.01 },
   { key: 'maxEdgePoints',       label: 'Max interior points per edge', group: 'Smoothing', min: 10,  max: 400,      step: 10 },
+
+  { key: 'keepClearRange', label: 'Clearance range (rad)',          group: 'Routing', min: 0, max: 1,   step: 0.01 },
+  { key: 'keepClearShare', label: 'Clearance kept (share of raw)',  group: 'Routing', min: 0, max: 1,   step: 0.05 },
+  { key: 'keepClearMax',   label: 'Clearance kept cap (rad)',       group: 'Routing', min: 0, max: 0.3, step: 0.005 },
 
   { key: 'settleMs',                label: 'Settle dwell (ms)',           group: 'Recreate', min: 0, max: 5000,  step: 50 },
   { key: 'extraSettleStableFrames', label: 'Extra-settle stable frames',  group: 'Recreate', min: 1, max: 30,    step: 1 },

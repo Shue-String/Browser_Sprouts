@@ -540,12 +540,37 @@
       /* T-Tree dialog: header + search bar, same shape as Collect's own, above a scrollable SVG
          graph area sized to the dialog rather than the (possibly much larger) rendered tree. */
       #ttree-dialog {
-        width: 900px;
+        width: 1150px;
         max-width: 94vw;
         height: 78vh;
         max-height: 720px;
         display: flex;
         flex-direction: column;
+      }
+      #ttree-dialog .pb-header {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        justify-content: unset;
+      }
+      .ttree-header-left { gap: 8px; }
+      /* Root's non-T genome (R/D/L/Z) on the left, same width as Collect's old history list. */
+      .ttree-layout { display: flex; flex: 1; min-height: 0; gap: 14px; }
+      #ttree-genome-panel {
+        flex: none;
+        width: 240px;
+        overflow-y: auto;
+        color: #444;
+      }
+      #ttree-genome-panel .ttree-genome-enc {
+        font: 13px/1.4 monospace;
+        color: #333;
+        word-break: break-all;
+        margin-bottom: 4px;
+      }
+      #ttree-genome-panel .ttree-genome-name {
+        font: 12px/1.4 system-ui, sans-serif;
+        color: #666;
+        margin-bottom: 10px;
       }
       #ttree-search-input {
         flex: none;
@@ -568,6 +593,7 @@
       #ttree-graph-container {
         flex: 1;
         min-height: 0;
+        min-width: 0;
         overflow: auto;
         border: 1px solid #ddd;
         border-radius: 4px;
@@ -1422,7 +1448,7 @@
         </div>
       </div>
 
-      <button id="collect-btn" title="Browse genetic codes of single-crit left sides">Collect</button>
+      <button id="collect-btn" title="Browse genetic codes of single-crit left sides (deprecated; kept for reference, Debug mode only)" style="display:none;">Collect</button>
       <button id="ttree-btn" title="Render the T-move-only game tree below a known left side">T-Tree</button>
       <button id="genomes-btn" title="Table of every collection's genome, rep, element count, lives range and T-gene usage">Genomes</button>
       <button id="guide-btn" title="Open the guide">Guide</button>
@@ -1552,14 +1578,21 @@
     <div id="ttree-overlay">
       <div id="ttree-dialog">
         <div class="pb-header">
-          <button id="ttree-export-btn" title="Copy this tree as a TikZ figure to the clipboard.">Export</button>
-          <button id="ttree-tables-btn" title="Download a LaTeX file with a genome table for every non-bypassed node, plus the nimber tables for the root's R/D/L/Z moves.">Export Tables</button>
+          <div class="collect-header-left ttree-header-left">
+            <button id="ttree-export-btn" title="Copy this tree as a TikZ figure to the clipboard.">Export Tree</button>
+            <button id="ttree-tables-btn" title="Download a LaTeX file with a genome table for every non-bypassed node, plus the nimber tables for the root's R/D/L/Z moves. DisaPoints are compressed to 3 there.">Export Tables</button>
+          </div>
           <span class="collect-header-center">T-Tree</span>
-          <button id="ttree-close">Close</button>
+          <div class="collect-header-right">
+            <button id="ttree-close">Close</button>
+          </div>
         </div>
-        <input id="ttree-search-input" type="text" spellcheck="false" placeholder="Left-side encoding, same format as Collect's search bar" />
+        <input id="ttree-search-input" type="text" spellcheck="false" placeholder="Left-side encoding, e.g. [AB|ACD|BCE|2,DEa]" />
         <div id="ttree-status"></div>
-        <div id="ttree-graph-container"></div>
+        <div class="ttree-layout">
+          <div id="ttree-genome-panel"></div>
+          <div id="ttree-graph-container"></div>
+        </div>
       </div>
     </div>
 

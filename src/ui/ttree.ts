@@ -4,11 +4,13 @@
  * from the parent to the T-child that gets bypassed, then blue from that bypassed child on to the
  * grandchild that actually resolves back to the family (i.e. the one that allows the bypass); and
  * any unexplained "extra" T-child (shouldn't occur for a genuinely registered element) as a dashed
- * grey arrow. An Export button copies an equivalent TikZ figure to the clipboard. See
+ * grey arrow. An Export Tree button copies an equivalent TikZ figure to the clipboard, and a left
+ * panel shows the root's non-T genome (R/D/L/Z). See
  * src/model/ttree.ts for the tree-building and layout logic this only renders.
  */
 
 import { canonFullSync } from '../engine/stalks';
+import { fmtNimber } from '../model/collectAlpha';
 import {
   type TTreeGraph,
   type TTreeLayout,
@@ -570,6 +572,24 @@ function toLatexPt(p: Pt): { x: number; y: number } {
 }
 const fmt = (n: number): string => n.toFixed(3);
 
+// Lowercase stand-ins for the display encoding's non-alphanumeric characters, so a TikZ node name
+// spells out its own encoding: each maps to a distinct letter the encoding never uses itself
+// (lowercase there is only the crit markers a/b), keeping the name injective on the label.
+const TIKZ_NAME_CHAR: Record<string, string> = {
+  'α': 'a', 'β': 'b', '[': 'l', ']': 'r', '/': 's', '|': 'p', ',': 'c', '.': 'd', '~': 't', '+': 'x', '⊕': 'o', ' ': '',
+};
+
+/** A node's TikZ name: its first label line (the display encoding) with TIKZ_NAME_CHAR applied,
+ * any other non-alphanumeric dropped to 'u'. Two graph-distinct nodes can share a label (see
+ * nodeLabel's DisaPoint note), so a repeat gets an 'n2', 'n3', ... suffix -- 'n' never appears
+ * in the mapped encoding itself, so the suffix can't collide with another node's name. */
+function tikzNodeName(label: string, used: Map<string, number>): string {
+  const base = [...label].map(ch => TIKZ_NAME_CHAR[ch] ?? (/[A-Za-z0-9]/.test(ch) ? ch : 'u')).join('');
+  const count = (used.get(base) ?? 0) + 1;
+  used.set(base, count);
+  return count === 1 ? base : `${base}n${count}`;
+}
+
 /** TikZ export matching the SVG pane pixel-for-pixel in everything but literal unit size: same
  * `computeNodeRects` box positions/sizes, same `buildPlacedSegments` edge routing (dedup, bows,
  * crossing-minimization, shared-origin nudges), same required/bypassed/resolve/extra coloring
@@ -623,6 +643,7 @@ function buildTikzExport(graph: TTreeGraph, layout: TTreeLayout): string {
   }
   lines.push('');
 
+  const usedNames = new Map<string, number>();
   for (const node of graph.nodes.values()) {
     const rect = rects.get(node.id);
     if (!rect) continue;
@@ -631,14 +652,16 @@ function buildTikzExport(graph: TTreeGraph, layout: TTreeLayout): string {
     const h = fmt(rect.h * PX_TO_CM);
     const flagged = node.name === null && node.requiredByAny;
     const boxStyle = flagged ? 'ttreeboxflag' : 'ttreebox';
-    const label = nodeLabel(node)
+    const labelLines = nodeLabel(node);
+    const name = tikzNodeName(labelLines[0], usedNames);
+    const label = labelLines
       .map((line, i) => {
         const mathText = toLatexMath(line);
         return i === 0 ? `$${mathText}$` : `{\\footnotesize\\color{ttreeNameText}$${mathText}$}`;
       })
       .join(' \\\\ ');
     lines.push(
-      `  \\node[${boxStyle}, minimum width=${w}cm, minimum height=${h}cm] at (${fmt(center.x)},${fmt(center.y)}) {${label}};`,
+      `  \\node[${boxStyle}, minimum width=${w}cm, minimum height=${h}cm] (${name}) at (${fmt(center.x)},${fmt(center.y)}) {${label}};`,
     );
   }
 
@@ -646,7 +669,31 @@ function buildTikzExport(graph: TTreeGraph, layout: TTreeLayout): string {
   return lines.join('\n');
 }
 
+/** The root's non-T genome (R/D/L/Z) for the left panel -- the part of Collect's detail table
+ * that isn't already drawn as the tree itself. */
+function renderGenomePanel(): void {
+  const panel = document.getElementById('ttree-genome-panel') as HTMLDivElement;
+  const root = lastGraph?.nodes.get(lastGraph.rootId);
+  if (!root) {
+    panel.innerHTML = '';
+    return;
+  }
+  const g = root.genome;
+  const fmtSet = (vals: number[]): string => `{${vals.join(', ')}}`;
+  const rows: [string, string][] = [['R', fmtNimber(g.R)], ['D', fmtNimber(g.D)], ['L', fmtSet(g.L)], ['Z', fmtSet(g.Z)]];
+  panel.innerHTML = `
+    <div class="ttree-genome-enc">${escapeXml(nodeLabel(root)[0])}</div>
+    ${root.name ? `<div class="ttree-genome-name">${escapeXml(root.name)}</div>` : ''}
+    <table class="collect-code-table">
+      <colgroup><col style="width: 50px" /><col /></colgroup>
+      <tr><th>Move</th><th>Genome</th></tr>
+      ${rows.map(([mt, val]) => `<tr><td>${mt}</td><td class="nimset">${val}</td></tr>`).join('')}
+    </table>
+  `;
+}
+
 function render(): void {
+  renderGenomePanel();
   const statusEl = document.getElementById('ttree-status') as HTMLDivElement;
   statusEl.textContent = status;
   statusEl.className = 'ttree-status' + (statusIsError ? ' ttree-status-error' : '');

@@ -1407,7 +1407,7 @@ debugBtn.addEventListener('click', e => {
 });
 
 // ---------------------------------------------------------------------------
-// Debug mode unlock: the Debug menu and Recreate button are hidden until either the secret
+// Debug mode unlock: the Debug menu, Recreate button and (deprecated) Collect button are hidden until either the secret
 // move sequence below is played live (from a fresh 4-spot game) or the off-screen "AI Mode"
 // button is clicked. Once unlocked, stays unlocked for the rest of this browser session
 // (surviving New Game / Load) — there's no re-lock.
@@ -1428,6 +1428,7 @@ function unlockDebugMode(): void {
   debugUnlocked = true;
   debugMenuWrap.style.display = '';
   recreateBtn.style.display = '';
+  (document.getElementById('collect-btn') as HTMLButtonElement).style.display = '';
   updateMoveSeq();
 }
 

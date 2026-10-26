@@ -42,11 +42,12 @@
  * collectAlpha.ts's isSingleAlpha.
  */
 
-import { canon } from '../engine/stalks';
+import { canon, canonFullSync } from '../engine/stalks';
 import { display as bracketDisplay } from './positionBrowser';
 import {
   type AlphaGenome,
   type FourGeneGenome,
+  type MoveChildRef,
   type NamedFamily,
   type PositionRef,
   type ResolveChild,
@@ -314,16 +315,25 @@ const MAX_LOOKUP_FETCH_DEPTH = 4;
  * identically are the same gene, even if they're different positions) while still producing
  * depth-colored HTML for display. A T-child with no computed nested genome (over the lives cap --
  * see classifyByMovetype) falls back to its own quick-canon label instead of a tuple. */
-function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: string; html: string } {
+/** `latex` is the same rendering for the T-Tree tables export, written with the \genome/\gcore
+ * macros GENOME_LATEX_MACROS defines (names via genomeNameLatex). `foldSelf` false leaves this node
+ * itself unfolded (its T-children still fold) -- the export's closing row spells out the full genome. */
+function genomeParts(
+  g: AlphaGenome | FourGeneGenome,
+  depth: number,
+  foldSelf = true,
+): GenomeParts {
   const head = `(${fmtNimber(g.R)},${fmtNimber(g.D)},{${g.L.join(',')}},{${g.Z.join(',')}}`;
+  const latexArgs = `{${fmtNimber(g.R)}}{${fmtNimber(g.D)}}{${g.L.join(',')}}{${g.Z.join(',')}}`;
   const cls = depthClass(depth);
   if (!isFullGenome(g)) {
     const plain = head + ')';
-    return foldToName(g, plain, `<span class="${cls}">${escapeHtml(plain)}</span>`, cls, depth);
+    const parts = { plain, html: `<span class="${cls}">${escapeHtml(plain)}</span>`, latex: `\\gcore${latexArgs}` };
+    return foldSelf ? foldToName(g, parts, cls, depth) : parts;
   }
 
   const seen = new Set<string>();
-  const children: { plain: string; html: string }[] = [];
+  const children: GenomeParts[] = [];
   for (const t of g.T) {
     // Routed through lookupGenome (not a bare `t.genome ?? byEncGenome(t.enc)`, per a 2026-09-02
     // fix -- see lookupGenome's own doc comment) so a T-child whose only embedded `.genome` is a
@@ -337,7 +347,11 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
     const childGenome = lookupGenome(t.enc, t.genome, depth < MAX_LOOKUP_FETCH_DEPTH, t);
     const child = childGenome
       ? genomeParts(childGenome, depth + 1)
-      : { plain: quickLabel(t), html: `<span class="${depthClass(depth + 1)}">${escapeHtml(quickLabel(t))}</span>` };
+      : {
+          plain: quickLabel(t),
+          html: `<span class="${depthClass(depth + 1)}">${escapeHtml(quickLabel(t))}</span>`,
+          latex: tablesEncoding(t.quickEnc) + (t.quickOffset ? ' \\oplus 1' : ''),
+        };
     if (seen.has(child.plain)) continue;
     seen.add(child.plain);
     children.push(child);
@@ -355,8 +369,104 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
     `<span class="${cls}">${escapeHtml(head)},[</span>` +
     childHtmls.join(`<span class="${cls}">,</span>`) +
     `<span class="${cls}">])</span>`;
-  return foldToName(g, plain, html, cls, depth);
+  const latex = `\\genome${latexArgs}{${children.map(c => c.latex).join(',')}}`;
+  const parts = { plain, html, latex };
+  return foldSelf ? foldToName(g, parts, cls, depth) : parts;
 }
+
+interface GenomeParts { plain: string; html: string; latex: string }
+
+/** "S_12⊕1" -> { n: 12, offset: 1 }; null for anything not shaped like a genome name. */
+function parseGenomeName(name: string): { n: number; offset: number } | null {
+  const m = name.match(/^S_(\d+)(?:⊕(\d+))?$/);
+  return m ? { n: Number(m[1]), offset: Number(m[2] ?? 0) } : null;
+}
+
+/** A genome name the way the paper writes it, via the \gn macro: g_n, offset as a superscript. */
+function genomeNameLatex(name: string): string {
+  const parsed = parseGenomeName(name);
+  return parsed ? `\\gn{${parsed.n}}{${parsed.offset}}` : toLatexSymbols(name);
+}
+
+/** A registry genome text ("(0,3,{0,2},{},[S_1⊕1,S_2])", T-genes as names or nested tuples) in the
+ * same \genome/\gcore/\gn form genomeParts' `latex` uses. */
+function genomeTextLatex(text: string): string {
+  let i = 0;
+  const readUntil = (stops: string): string => {
+    const start = i;
+    while (i < text.length && !stops.includes(text[i])) i++;
+    return text.slice(start, i);
+  };
+  const expect = (s: string): void => {
+    if (!text.startsWith(s, i)) throw new Error(`bad genome text at ${i}: ${text}`);
+    i += s.length;
+  };
+  const item = (): string => {
+    if (text[i] !== '(') return genomeNameLatex(readUntil(',]'));
+    expect('(');
+    const r = readUntil(',');
+    expect(',');
+    const d = readUntil(',');
+    expect(',{');
+    const l = readUntil('}');
+    expect('},{');
+    const z = readUntil('}');
+    expect('}');
+    if (text[i] === ')') {
+      i++;
+      return `\\gcore{${r}}{${d}}{${l}}{${z}}`;
+    }
+    expect(',[');
+    const ts: string[] = [];
+    while (text[i] !== ']') {
+      ts.push(item());
+      if (text[i] === ',') i++;
+    }
+    expect('])');
+    return `\\genome{${r}}{${d}}{${l}}{${z}}{${ts.join(',')}}`;
+  };
+  return item();
+}
+
+/** \defgenome lines for the named genomes `names` (each "S_n" or "S_n⊕k" with registry text), in
+ * name order -- what \gtable's closing row looks up. */
+export function genomeDefinitionsLatex(names: Iterable<string>): string {
+  return [...new Set(names)]
+    .flatMap(name => {
+      const parsed = parseGenomeName(name);
+      const text = NAMED_FAMILY_GENOME_TEXT[name];
+      return parsed && text ? [{ name, ...parsed, text }] : [];
+    })
+    .sort((a, b) => a.n - b.n || a.offset - b.offset)
+    .map(d => `\\defgenome{${d.n}}{${d.offset}}{${genomeTextLatex(d.text)}}`)
+    .join('\n');
+}
+
+/** Preamble for the T-Tree tables export.
+ *  - \genome{R}{D}{L}{Z}{T} prints (R,D,\{L\},\{Z\},[T]); \gcore the same without [T]; an empty L/Z
+ *    set prints as \phi. \gn{n}{k} prints g_n^k (no superscript for k = 0).
+ *  - \defgenome{n}{k}{...} records g_n^k's full genome.
+ *  - \gtable{position}{n}{k}{rows} is one genome table: header row, then `rows`, then a closing row
+ *    filled in from \defgenome{n}{k}. An unnamed position leaves n/k empty and passes its own
+ *    closing row instead: \gtable[{\genome{...}}]{position}{}{}{rows}.
+ *  - \gr{move}{child}{nimber}{T-child}{relevancy} is one row; leave the first three or the last two
+ *    empty when that side has run out of entries. */
+export const GENOME_LATEX_MACROS = String.raw`\newcommand{\gtFirst}[2]{#1}
+\newcommand{\gtSecond}[2]{#2}
+\newcommand{\gtIfEmpty}[1]{\if\relax\detokenize{#1}\relax\expandafter\gtFirst\else\expandafter\gtSecond\fi}
+\newcommand{\gset}[1]{\gtIfEmpty{#1}{\phi}{\{#1\}}}
+\newcommand{\genome}[5]{(#1,#2,\gset{#3},\gset{#4},[#5])}
+\newcommand{\gcore}[4]{(#1,#2,\gset{#3},\gset{#4})}
+\newcommand{\gn}[2]{g_{#1}\ifnum#2>0 ^{#2}\fi}
+\newcommand{\defgenome}[3]{\expandafter\def\csname gdef-#1-#2\endcsname{#3}}
+\newcommand{\gtpad}{\multicolumn{1}{m{.75cm}|}{} & \multicolumn{1}{m{.75cm}|}{}}
+\newcommand{\gr}[5]{\hline \gtIfEmpty{#1}{& &}{$#1$ & $#2$ & $#3$} & \gtIfEmpty{#4}{\gtpad}{$#4$ & $#5$}\\[2pt]}
+\newcommand{\gtable}[5][]{\begin{center}\begin{tabular}{|c|c|c||c|c|}
+  \hline \multicolumn{3}{|l}{$#2$} & \multicolumn{2}{r|}{\gtIfEmpty{#3}{}{$\gn{#3}{#4}$}}\\[2pt]
+  #5
+  \hline \multicolumn{5}{|c|}{$\gtIfEmpty{#1}{\csname gdef-#3-#4\endcsname}{#1}$}\\
+  \hline
+\end{tabular}\end{center}}`;
 
 /** When the Quick-Genome toggle is on, fold a genome node whose exact plain-text tuple matches a
  * known shorthand (see GENOME_NAMES) down to its name, replacing the full tuple rendering -- or,
@@ -371,15 +481,14 @@ function genomeParts(g: AlphaGenome | FourGeneGenome, depth: number): { plain: s
  * T-child having no such bypass). */
 function foldToName(
   g: AlphaGenome | FourGeneGenome,
-  plain: string,
-  html: string,
+  parts: GenomeParts,
   cls: string,
   depth: number,
-): { plain: string; html: string } {
-  if (!quickGenome) return { plain, html };
-  const name = foldChain(g, plain, resolveChild, depth);
-  if (!name) return { plain, html };
-  return { plain: name, html: `<span class="${cls}">${escapeHtml(name)}</span>` };
+): GenomeParts {
+  if (!quickGenome) return parts;
+  const name = foldChain(g, parts.plain, resolveChild, depth);
+  if (!name) return parts;
+  return { plain: name, html: `<span class="${cls}">${escapeHtml(name)}</span>`, latex: genomeNameLatex(name) };
 }
 
 /** genomeParts(g, depth).plain, but forcing the fold as if the Quick-Genome toggle were on --
@@ -389,11 +498,15 @@ function foldToName(
  * end (genomeParts never awaits), so the save/restore always brackets cleanly even when called
  * from inside an async function like computeRelevancy. */
 function foldedPlainOf(g: AlphaGenome | FourGeneGenome, depth: number): string {
+  return foldedPartsOf(g, depth).plain;
+}
+
+function foldedPartsOf(g: AlphaGenome | FourGeneGenome, depth: number, foldSelf = true): GenomeParts {
   const wasQuick = quickGenome;
   quickGenome = true;
-  const plain = genomeParts(g, depth).plain;
+  const parts = genomeParts(g, depth, foldSelf);
   quickGenome = wasQuick;
-  return plain;
+  return parts;
 }
 
 /** True when a genome's own top-level plain-text rendering folds entirely to a name (see
@@ -990,11 +1103,24 @@ export function toLatexSymbols(text: string): string {
     .replace(/\^(\d+)/g, '^{$1}');
 }
 
-/** A real (non-quick-canon) structural encoding, formatted for the export table: membrane letters
- * shifted per the paper's own left/right pairing convention (see shiftMembraneLetters), alpha
- * marked, bracket-wrapped, and with ⊕/α converted to real LaTeX macros. */
+/** A real (non-quick-canon) structural encoding, formatted for the export table: DisaPoints
+ * compressed to '3' (canonFull -- both the [2,M] and [2M] region shapes; an α-only region like
+ * [2,α/ isn't a DisaPoint and stays), membrane letters shifted per the paper's own left/right
+ * pairing convention (see shiftMembraneLetters), alpha marked, bracket-wrapped, and with ⊕/α
+ * converted to real LaTeX macros. The T-Tree pane's own display and TikZ export keep their labels
+ * as they are -- only these tables compress. */
 export function exportEncoding(enc: string): string {
-  return toLatexSymbols(paperDisplay(enc));
+  return toLatexSymbols(paperDisplay(canonFullSync(enc) ?? enc));
+}
+
+/** exportEncoding for the T-Tree tables export: the dead position (no components but 'N') is the
+ * empty set, written \phi. `full` keeps membrane letters unshifted (starting at A) -- the paper's
+ * marker for a full position as opposed to a left side. */
+export function tablesEncoding(enc: string, full = false): string {
+  const pieces = enc.split('+').filter(p => p !== 'N' && p !== '');
+  if (!pieces.length) return '\\phi';
+  const compressed = canonFullSync(pieces.join('+')) ?? pieces.join('+');
+  return toLatexSymbols(full ? bracketDisplaySlash(markAlpha(compressed)) : paperDisplay(compressed));
 }
 
 /** A T-child/T-grandchild's own real (canon) structural encoding, formatted for export the same
@@ -1014,48 +1140,54 @@ function genomeNameSortKey(name: string): [number, string, number, number] {
   return m ? [0, m[1], Number(m[2]), Number(m[3] ?? 0)] : [1, name, 0, 0];
 }
 
-function formatRelevancyExport(v: RelevancyVerdict): string {
-  if (v.kind === 'name') return toLatexSymbols(v.name);
-  if (v.kind === 'position') return exportCanonLabel(v.ref);
-  return 'none';
+function formatRelevancyExport(v: RelevancyVerdict, tables: boolean): string {
+  if (v.kind === 'name') return tables ? genomeNameLatex(v.name) : toLatexSymbols(v.name);
+  if (v.kind === 'position') return tables ? tablesEncoding(v.ref.enc) : exportCanonLabel(v.ref);
+  return tables ? '\\text{none}' : 'none';
 }
 
 const EXPORT_PAD = '\\multicolumn{1}{m{.75cm}|}{} & \\multicolumn{1}{m{.75cm}|}{}';
 
-/** Builds the full \begin{tabular}...\end{tabular} block for the position `enc`, matching the paper's genome
- * sequencing table template (see the module header): left three columns are every raw R/D/L/Z
- * child (one row each, undeduped -- see MoveChildRef's doc comment), right two columns are every T
- * move's child + its Relevancy verdict (see computeRelevancy), and the two sides are padded to the
- * same row count with the template's own empty-cell placeholder. Always recomputes the genome fresh
- * (regardless of any Entry's genomeFresh) since only a live computeAlphaGenomeAt call populates the
- * raw Rc/Dc/Lc/Zc child data this needs -- GENOME_DB-loaded entries predate that field. Exported so
- * the T-Tree pane's bulk table export can emit one of these per node.
- *
- * `bypassTargets` (canonical T-child enc -> the canonical position it bypasses to) overrides that
- * T-child's Relevancy cell with the bypass destination itself -- the T-Tree export passes each node's
- * own bypass edges (via -> to) so the table agrees with the drawn tree. */
-export async function buildGenomeTableLatex(
+interface GenomeTableData {
+  position: string;
+  /** The position's genome name ("S_1⊕1"), or '' when unnamed. */
+  name: string;
+  genome: AlphaGenome;
+  left: { mt: string; child: string; nimber: number }[];
+  right: { child: string; relevancy: string }[];
+}
+
+/** Everything a genome table shows, LaTeX-formatted cell by cell (see buildGenomeTableLatex). Always
+ * recomputes the genome fresh (regardless of any Entry's genomeFresh) since only a live
+ * computeAlphaGenomeAt call populates the raw Rc/Dc/Lc/Zc child data this needs -- GENOME_DB-loaded
+ * entries predate that field. `tables` formats cells in the T-Tree tables export's paper notation
+ * (tablesEncoding positions, \gn names, \text{none}). */
+async function genomeTableData(
   enc: string,
-  bypassTargets?: ReadonlyMap<string, string>,
-): Promise<string> {
+  bypassTargets: ReadonlyMap<string, string> | undefined,
+  tables: boolean,
+): Promise<GenomeTableData> {
   const fresh = await computeAlphaGenome(enc);
   if (!fresh) throw new Error("couldn't re-analyze this position for export");
   const { position, genome } = fresh;
+  const posLatex = (e: string): string => (tables ? tablesEncoding(e) : exportEncoding(e));
 
   // Unnamed positions (no GENOME_NAMES/bypass-only match, see foldToName) leave the header label
-  // blank -- foldedTop itself (the raw genome tuple) still appears in the closing summary row
-  // below regardless, so there's no need to also repeat it here. The Collection fallback
-  // label this used to have (position isn't itself exactly named, but still qualifies for a
-  // family) was removed along with isInAdvancedCollection, and re-deriving that membership check
-  // is a much bigger, still-open question than this export label warrants.
+  // blank -- the raw genome tuple still appears in the closing summary row regardless. The
+  // Collection fallback label this used to have (position isn't itself exactly named, but still
+  // qualifies for a family) was removed along with isInAdvancedCollection, and re-deriving that
+  // membership check is a much bigger, still-open question than this export label warrants.
   const foldedTop = foldedPlainOf(genome, 0);
-  const label = foldedTop.startsWith('(') ? '' : foldedTop;
+  const name = foldedTop.startsWith('(') ? '' : foldedTop;
 
-  const leftRows: { mt: string; enc: string; nimber: number }[] = [];
-  if (genome.Rc) leftRows.push({ mt: 'R', enc: genome.Rc.enc, nimber: genome.Rc.nimber });
-  if (genome.Dc) leftRows.push({ mt: 'D', enc: genome.Dc.enc, nimber: genome.Dc.nimber });
-  for (const c of genome.Lc ?? []) leftRows.push({ mt: 'L', enc: c.enc, nimber: c.nimber });
-  for (const c of genome.Zc ?? []) leftRows.push({ mt: "Z", enc: c.enc, nimber: c.nimber });
+  const left: GenomeTableData['left'] = [];
+  const pushLeft = (mt: string, c: MoveChildRef | undefined): void => {
+    if (c) left.push({ mt, child: posLatex(c.enc), nimber: c.nimber });
+  };
+  pushLeft('R', genome.Rc);
+  pushLeft('D', genome.Dc);
+  for (const c of genome.Lc ?? []) pushLeft('L', c);
+  for (const c of genome.Zc ?? []) pushLeft('Z', c);
 
   // T rows, ordered: directly-named T-genes first by genome name (numeric subscript, then offset),
   // then bypassed ones (a bypass target, or a one-level "position" verdict) by their child's position
@@ -1063,15 +1195,15 @@ export async function buildGenomeTableLatex(
   interface TRow { child: string; childSort: string; relevancy: string; group: 0 | 1 | 2; name: string }
   const rightRows: TRow[] = [];
   for (const t of genome.T) {
-    const base = { child: exportCanonLabel(t), childSort: paperDisplay(t.enc) };
+    const base = { child: tables ? tablesEncoding(t.enc) : exportCanonLabel(t), childSort: paperDisplay(t.enc) };
     const bypassTarget = bypassTargets?.get((await canon(t.enc)) || t.enc);
     if (bypassTarget !== undefined) {
-      rightRows.push({ ...base, relevancy: exportEncoding(bypassTarget), group: 1, name: '' });
+      rightRows.push({ ...base, relevancy: posLatex(bypassTarget), group: 1, name: '' });
       continue;
     }
     const verdict = await computeRelevancy(genome, t);
     const group = verdict.kind === 'name' ? 0 : verdict.kind === 'position' ? 1 : 2;
-    rightRows.push({ ...base, relevancy: formatRelevancyExport(verdict), group, name: verdict.kind === 'name' ? verdict.name : '' });
+    rightRows.push({ ...base, relevancy: formatRelevancyExport(verdict, tables), group, name: verdict.kind === 'name' ? verdict.name : '' });
   }
   rightRows.sort((a, b) => {
     if (a.group !== b.group) return a.group - b.group;
@@ -1084,26 +1216,63 @@ export async function buildGenomeTableLatex(
     return a.childSort < b.childSort ? -1 : a.childSort > b.childSort ? 1 : 0;
   });
 
-  const rowCount = Math.max(leftRows.length, rightRows.length, 1);
+  return { position: posLatex(position.enc), name, genome, left, right: rightRows };
+}
+
+/** Builds the full \begin{tabular}...\end{tabular} block for the position `enc`, matching the paper's genome
+ * sequencing table template (see the module header): left three columns are every raw R/D/L/Z
+ * child (one row each, undeduped -- see MoveChildRef's doc comment), right two columns are every T
+ * move's child + its Relevancy verdict (see computeRelevancy), and the two sides are padded to the
+ * same row count with the template's own empty-cell placeholder. */
+export async function buildGenomeTableLatex(enc: string): Promise<string> {
+  const d = await genomeTableData(enc, undefined, false);
+  const rowCount = Math.max(d.left.length, d.right.length, 1);
   const lines: string[] = [];
   lines.push('\\begin{tabular}{|c|c|c||c|c|}');
   lines.push(
-    `\\hline \\multicolumn{3}{|l}{$${exportEncoding(position.enc)}$} & ` +
-      `\\multicolumn{2}{r|}{${label ? `$${toLatexSymbols(label)}$` : ''}}\\\\[2pt]`,
+    `\\hline \\multicolumn{3}{|l}{$${d.position}$} & ` +
+      `\\multicolumn{2}{r|}{${d.name ? `$${toLatexSymbols(d.name)}$` : ''}}\\\\[2pt]`,
   );
   for (let i = 0; i < rowCount; i++) {
-    const l = leftRows[i];
-    const r = rightRows[i];
-    const leftText = l ? `$${l.mt}$ & $${exportEncoding(l.enc)}$ & $${l.nimber}$` : ' & & ';
+    const l = d.left[i];
+    const r = d.right[i];
+    const leftText = l ? `$${l.mt}$ & $${l.child}$ & $${l.nimber}$` : ' & & ';
     const rightText = r
       ? `$${r.child}$ & ${r.relevancy === 'none' ? 'none' : `$${r.relevancy}$`}`
       : EXPORT_PAD;
     lines.push(`\\hline ${leftText} & ${rightText}\\\\[2pt]`);
   }
-  lines.push(`\\hline \\multicolumn{5}{|c|}{$${toLatexSymbols(foldedTop)}$} \\\\`);
+  lines.push(`\\hline \\multicolumn{5}{|c|}{$${toLatexSymbols(foldedPlainOf(d.genome, 0))}$} \\\\`);
   lines.push('\\hline');
   lines.push('\\end{tabular}');
   return lines.join('\n');
+}
+
+/** The same table for the T-Tree tables export, as one \gtable call (see GENOME_LATEX_MACROS): just
+ * the cell values, one \gr per row. A named position passes its genome number and offset, and
+ * \gtable fills the closing row from that genome's \defgenome -- `name` tells the caller which
+ * definitions the document needs (genomeDefinitionsLatex). An unnamed position (or a name with no
+ * registry text) passes its own full genome as the optional closing-row argument instead.
+ * `bypassTargets` (canonical T-child enc -> the canonical position it bypasses to) overrides that
+ * T-child's Relevancy cell with the bypass destination itself, so the table agrees with the drawn
+ * tree. */
+export async function buildPaperGenomeTable(
+  enc: string,
+  bypassTargets?: ReadonlyMap<string, string>,
+): Promise<{ latex: string; name: string }> {
+  const d = await genomeTableData(enc, bypassTargets, true);
+  const named = parseGenomeName(d.name);
+  const defined = named && NAMED_FAMILY_GENOME_TEXT[d.name] !== undefined;
+  const head = defined
+    ? `\\gtable{${d.position}}{${named.n}}{${named.offset}}{`
+    : `\\gtable[{${foldedPartsOf(d.genome, 0, false).latex}}]{${d.position}}{}{}{`;
+  const rows: string[] = [];
+  for (let i = 0; i < Math.max(d.left.length, d.right.length); i++) {
+    const l = d.left[i];
+    const r = d.right[i];
+    rows.push(`\\gr{${l?.mt ?? ''}}{${l?.child ?? ''}}{${l?.nimber ?? ''}}{${r?.child ?? ''}}{${r?.relevancy ?? ''}}`);
+  }
+  return { latex: [head, ...rows, '}'].join('\n'), name: defined ? d.name : '' };
 }
 
 async function runExport(): Promise<void> {

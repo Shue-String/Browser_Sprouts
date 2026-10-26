@@ -30,6 +30,7 @@ import { sphericalDelaunay } from '../math/sphereDelaunay';
 import { UnionFind } from '../math/unionFind';
 import { edgePtsForEntry, bearingFrom, pointAtBearing, boundarySphereLoop, loopsNearestFeature } from './moves';
 import { distanceToArc } from './smoothGeometry';
+import { tunables } from './tunables';
 import type { ResolvedMove } from './moveCodeParse';
 
 type V3 = SpherePoint;
@@ -760,14 +761,12 @@ function densify(path: V3[], maxStep = 0.02): V3[] {
  * the endpoint and the first point out of each endpoint's wedge) is resampled coarsely, so
  * relaxation acts at the scale of the wiggles rather than of the sample spacing; a point may only
  * move if neither new segment crosses a wall, the triangles it sweeps hold no wall point, and it
- * doesn't end up closer to a wall than it was (or than half its raw clearance capped at
- * KEEP_CLEAR_MAX, whichever is smaller).
+ * doesn't end up closer to a wall than it was (or than keepClearShare of its raw clearance capped
+ * at keepClearMax, whichever is smaller). Walls farther than keepClearRange don't constrain it; the
+ * cap keeps open space from holding the route off its walls. All three are Debug → Tuning knobs.
  */
-const KEEP_CLEAR_RANGE = 0.3; // walls farther than this don't constrain smoothPath
-const KEEP_CLEAR_SHARE = 0.5; // fraction of its raw clearance a smoothed point must keep
-const KEEP_CLEAR_MAX = 0.1;   // ...capped, so open space doesn't hold the route off its walls
-
 function smoothPath(walls: WallIndex, raw: V3[]): V3[] {
+  const { keepClearRange, keepClearShare, keepClearMax } = tunables;
   if (raw.length < 5) return raw;
   const inner = raw.slice(1, raw.length - 1);
   let L = 0;
@@ -777,8 +776,8 @@ function smoothPath(walls: WallIndex, raw: V3[]): V3[] {
   // Taut-string relaxation hugs any obstacle it wraps (a lone spot ended up half a pixel off the
   // stroke), so each point keeps a share of the room the route had there: the old fixed few-pixel
   // floor let a route running 0.2 rad clear of a spot be pulled to 0.01.
-  const clr = p.map(q => walls.clearance(q, KEEP_CLEAR_RANGE));
-  const floor = clr.map(c => Math.min(KEEP_CLEAR_SHARE * c, KEEP_CLEAR_MAX));
+  const clr = p.map(q => walls.clearance(q, keepClearRange));
+  const floor = clr.map(c => Math.min(keepClearShare * c, keepClearMax));
   for (let it = 0; it < 40; it++) {
     for (let i = 2; i < p.length - 2; i++) {
       const cand = normalize({
@@ -786,7 +785,7 @@ function smoothPath(walls: WallIndex, raw: V3[]): V3[] {
         y: p[i - 1].y + p[i + 1].y + 2 * p[i].y,
         z: p[i - 1].z + p[i + 1].z + 2 * p[i].z,
       });
-      const cc = walls.clearance(cand, KEEP_CLEAR_RANGE);
+      const cc = walls.clearance(cand, keepClearRange);
       if (cc < Math.min(clr[i], floor[i])) continue;
       if (walls.crosses(p[i - 1], cand) || walls.crosses(cand, p[i + 1])) continue;
       if (sweptHasPoint(walls, p[i - 1], p[i], cand) || sweptHasPoint(walls, p[i], p[i + 1], cand)) continue;

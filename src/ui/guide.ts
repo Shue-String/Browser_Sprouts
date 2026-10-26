@@ -106,7 +106,7 @@ const RAW_TOPICS: Array<{ id: string; title: string; html: string }> = [
       <table>
         <tr><td><code>Ctrl/Cmd + Z</code></td><td>Undo the last move (disabled while Recreate is playing back).</td></tr>
         <tr><td><code>Escape</code></td><td>Close whichever dialog is open (${jumpLink('position-browser', 'Position Browser')},
-          Guide, Collect). In the Position Browser, if a hovered preview is locked, the first
+          Guide, T-Tree, Genomes). In the Position Browser, if a hovered preview is locked, the first
           Escape unlocks it instead of closing the panel.</td></tr>
         <tr><td><code>Space</code></td><td>Pause/resume playback while Recreate is running a move sequence.</td></tr>
         <tr><td><code>Enter</code></td><td>Confirm the current step of a Recreate candidate preview, or force-commit a manually-drawn move that couldn't be auto-verified.</td></tr>
@@ -120,7 +120,7 @@ const RAW_TOPICS: Array<{ id: string; title: string; html: string }> = [
         <tr><td><b>Recreate</b></td><td>Replay a game from a Move Sequence string, one move at a time (only shown while a sequence is being replayed).</td></tr>
         <tr><td><b>Collapsing</b></td><td>When on (the default), dead regions — parts of the board that can no longer affect the outcome — automatically shrink and disappear as they're created. Turn it off to leave them visible in place instead.</td></tr>
         <tr><td><b>Browser</b></td><td>Opens the ${jumpLink('position-browser', 'Position Browser')} as a dialog (only shown on narrow windows; on wide windows it's docked as a side panel instead).</td></tr>
-        <tr><td><b>Collect</b></td><td>A research tool for browsing genetic codes / matched paper collections — mainly useful if you're cross-referencing the companion math paper.</td></tr>
+        <tr><td><b>T-Tree</b></td><td>A research tool: type a left side to draw the tree of its T-moves, with its R/D/L/Z genome alongside. Export Tree copies the tree as TikZ; Export Tables downloads its genome and nimber tables as LaTeX — mainly useful if you're cross-referencing the companion math paper.</td></tr>
         <tr><td><b>Guide</b></td><td>This window.</td></tr>
       </table>
     `,

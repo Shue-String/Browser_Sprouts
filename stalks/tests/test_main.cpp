@@ -1628,7 +1628,7 @@ void testRegistry() {
     // Only these collections may be rep-only (no elements at either offset) -- the set as it stood
     // before 5db4d1d's unjustified-element cleanup emptied 80 more.
     const std::set<std::string> repOnlyAllowed = {"S_2",  "S_16", "S_29", "S_33",
-                                                  "S_34", "S_39", "S_69", "S_70"};
+                                                  "S_34", "S_39", "S_69"};
     std::map<std::string, std::size_t> elementCount;
     for (const auto& r : rosters)
         elementCount[baseName(r.name)] += r.elements.size();
