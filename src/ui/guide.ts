@@ -120,7 +120,7 @@ const RAW_TOPICS: Array<{ id: string; title: string; html: string }> = [
         <tr><td><b>Recreate</b></td><td>Replay a game from a Move Sequence string, one move at a time (only shown while a sequence is being replayed).</td></tr>
         <tr><td><b>Collapsing</b></td><td>When on (the default), dead regions — parts of the board that can no longer affect the outcome — automatically shrink and disappear as they're created. Turn it off to leave them visible in place instead.</td></tr>
         <tr><td><b>Browser</b></td><td>Opens the ${jumpLink('position-browser', 'Position Browser')} as a dialog (only shown on narrow windows; on wide windows it's docked as a side panel instead).</td></tr>
-        <tr><td><b>T-Tree</b></td><td>A research tool: type a left side to draw the tree of its T-moves, with its R/D/L/Z genome alongside. Export Tree copies the tree as TikZ; Export Tables downloads its genome and nimber tables as LaTeX — mainly useful if you're cross-referencing the companion math paper.</td></tr>
+        <tr><td><b>T-Tree</b></td><td>A research tool: type a left side to draw the tree of its T-moves, with its R/D/L/Z genome alongside (several left sides separated by <code>;</code> draw as one merged tree, and both exports then cover all of them). Export Tree copies the tree as TikZ; Export Tables downloads its genome and nimber tables as LaTeX — mainly useful if you're cross-referencing the companion math paper.</td></tr>
         <tr><td><b>Guide</b></td><td>This window.</td></tr>
       </table>
     `,

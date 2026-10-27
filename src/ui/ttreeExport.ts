@@ -1,5 +1,7 @@
 /**
- * T-Tree "Export Tables" bulk dump: one self-contained LaTeX document with
+ * T-Tree "Export Tables" bulk dump: one self-contained LaTeX document with the two parts below.
+ * Everything is read off the graph, so a merged multi-root tree (several ';'-separated left sides)
+ * gets the union of its roots' tables, each position once.
  *
  *  1. a genome table (collect.ts's `buildPaperGenomeTable` -- Collect's Export table as one \gtable
  *     call, cell values only; the preamble's GENOME_LATEX_MACROS lay it out and \defgenome lines

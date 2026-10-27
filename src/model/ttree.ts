@@ -217,16 +217,52 @@ export interface TTreeEdge {
 }
 
 export interface TTreeGraph {
-  rootId: string;
+  /** One per typed left side, in typed order (duplicates dropped); the graph is their union. */
+  rootIds: string[];
   nodes: Map<string, TTreeNode>;
   edges: TTreeEdge[];
 }
 
 export type TTreeResult = { ok: true; graph: TTreeGraph } | { ok: false; error: string };
 
+/** The union of the T-Trees rooted at each of `rootEncsRaw` (blank entries ignored, so a trailing
+ * ';' is harmless). Each root's tree is built on its own exactly as a single search would build it,
+ * then merged: a node is one entry however many trees reach it (required if any tree requires it),
+ * and edges are deduped by identity. Merging the finished trees -- rather than running one shared
+ * worklist -- keeps the result exactly the union: the bypass-witness choice in buildSingleTTree is
+ * greedy on whatever is already in the tree, so a shared run can pick a witness that none of the
+ * individual trees would have drawn. */
+export async function buildTTree(rootEncsRaw: string[]): Promise<TTreeResult> {
+  const typedRoots = rootEncsRaw.map(r => r.trim()).filter(r => r !== '');
+  if (typedRoots.length === 0) return { ok: false, error: 'Enter a position encoding.' };
+
+  const rootIds: string[] = [];
+  const nodes = new Map<string, TTreeNode>();
+  const edges: TTreeEdge[] = [];
+  const edgeKeys = new Set<string>();
+  for (const raw of typedRoots) {
+    const result = await buildSingleTTree(raw);
+    if (!result.ok) return result;
+    const g = result.graph;
+    for (const id of g.rootIds) if (!rootIds.includes(id)) rootIds.push(id);
+    for (const node of g.nodes.values()) {
+      const existing = nodes.get(node.id);
+      if (existing) existing.requiredByAny ||= node.requiredByAny;
+      else nodes.set(node.id, { ...node });
+    }
+    for (const edge of g.edges) {
+      const key = `${edge.from} ${edge.to} ${edge.kind} ${edge.via ?? ''}`;
+      if (edgeKeys.has(key)) continue;
+      edgeKeys.add(key);
+      edges.push(edge);
+    }
+  }
+  return { ok: true, graph: { rootIds, nodes, edges } };
+}
+
 /** Builds the full T-Tree rooted at `rootEncRaw` (worklist/BFS -- see the module doc comment for
  * why a single top-down pass isn't enough). */
-export async function buildTTree(rootEncRaw: string): Promise<TTreeResult> {
+async function buildSingleTTree(rootEncRaw: string): Promise<TTreeResult> {
   // A left side is properly denoted with a trailing '/' rather than ']' (stalks/src/collections.hpp's
   // own convention -- see bracketDisplaySlash/leftSideDisplay), but the engine's own parser only
   // strips '[' and ']' as no-op grouping characters (see encoding.cpp's cleaned()) and has no idea
@@ -366,7 +402,7 @@ export async function buildTTree(rootEncRaw: string): Promise<TTreeResult> {
     }
   }
 
-  return { ok: true, graph: { rootId: rootEnc, nodes, edges } };
+  return { ok: true, graph: { rootIds: [rootEnc], nodes, edges } };
 }
 
 function markRequired(node: TTreeNode, queue: string[]): void {

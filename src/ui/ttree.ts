@@ -4,8 +4,9 @@
  * from the parent to the T-child that gets bypassed, then blue from that bypassed child on to the
  * grandchild that actually resolves back to the family (i.e. the one that allows the bypass); and
  * any unexplained "extra" T-child (shouldn't occur for a genuinely registered element) as a dashed
- * grey arrow. An Export Tree button copies an equivalent TikZ figure to the clipboard, and a left
- * panel shows the root's non-T genome (R/D/L/Z). See
+ * grey arrow. Several left sides separated by ';' draw as one merged tree, and both exports then
+ * cover all of them. An Export Tree button copies an equivalent TikZ figure to the clipboard, and a
+ * left panel shows each root's non-T genome (R/D/L/Z). See
  * src/model/ttree.ts for the tree-building and layout logic this only renders.
  */
 
@@ -363,11 +364,14 @@ function escapeXml(s: string): string {
  * edge looks like -- each renderer only picks its own `svgMarker` or `tikzStyle` field out of the
  * same table. */
 type EdgeStyleKind = 'required' | 'bypassed' | 'resolve' | 'extra';
-const EDGE_STYLE: Record<EdgeStyleKind, { stroke: string; svgMarker: string; tikzStyle: string; tikzColor: string }> = {
-  required: { stroke: '#1a1a1a', svgMarker: 'ttree-arrow-req', tikzStyle: 'edge', tikzColor: 'ttreeReq' },
-  bypassed: { stroke: '#DD1111', svgMarker: 'ttree-arrow-bypassed', tikzStyle: 'bypassed', tikzColor: 'ttreeBypass' },
-  resolve: { stroke: '#1565C0', svgMarker: 'ttree-arrow-resolve', tikzStyle: 'resolve', tikzColor: 'ttreeResolve' },
-  extra: { stroke: '#888', svgMarker: 'ttree-arrow-extra', tikzStyle: 'extra', tikzColor: 'ttreeExtra' },
+const EDGE_STYLE: Record<
+  EdgeStyleKind,
+  { stroke: string; svgMarker: string; tikzStyle: string; tikzColor: string; keyLabel: string }
+> = {
+  required: { stroke: '#1a1a1a', svgMarker: 'ttree-arrow-req', tikzStyle: 'edge', tikzColor: 'ttreeReq', keyLabel: 'Required T-child' },
+  bypassed: { stroke: '#DD1111', svgMarker: 'ttree-arrow-bypassed', tikzStyle: 'bypassed', tikzColor: 'ttreeBypass', keyLabel: 'Bypassed T-child' },
+  resolve: { stroke: '#1565C0', svgMarker: 'ttree-arrow-resolve', tikzStyle: 'resolve', tikzColor: 'ttreeResolve', keyLabel: 'T-grandchild that allows the bypass' },
+  extra: { stroke: '#888', svgMarker: 'ttree-arrow-extra', tikzStyle: 'extra', tikzColor: 'ttreeExtra', keyLabel: 'Unexplained extra T-child' },
 };
 
 /** '#rgb' or '#rrggbb' -> 'RRGGBB' (TikZ \definecolor's HTML form), so EDGE_STYLE.stroke can feed
@@ -665,23 +669,47 @@ function buildTikzExport(graph: TTreeGraph, layout: TTreeLayout): string {
     );
   }
 
+  // Key, below the tree's bottom-left corner: one entry per edge kind actually drawn (in
+  // EDGE_STYLE's order), plus the flagged box style if any node uses it.
+  const allRects = [...rects.values()];
+  if (allRects.length) {
+    const left = Math.min(...allRects.map(r => r.x)) * PX_TO_CM;
+    const top = -(Math.max(...allRects.map(r => r.y + r.h)) + 40) * PX_TO_CM;
+    const drawn = new Set(placed.map(seg => seg.styleKind));
+    const entries: string[] = [];
+    for (const [kind, style] of Object.entries(EDGE_STYLE) as [EdgeStyleKind, (typeof EDGE_STYLE)[EdgeStyleKind]][]) {
+      if (!drawn.has(kind)) continue;
+      const y = fmt(top - entries.length * 0.5);
+      entries.push(
+        `  \\draw[${style.tikzStyle}] (${fmt(left)},${y}) -- (${fmt(left + 1)},${y}) node[right, black, font=\\footnotesize] {${style.keyLabel}};`,
+      );
+    }
+    if ([...graph.nodes.values()].some(n => n.name === null && n.requiredByAny)) {
+      const y = fmt(top - entries.length * 0.5);
+      entries.push(
+        `  \\node[ttreeboxflag, minimum width=1cm, minimum height=0.35cm] at (${fmt(left + 0.5)},${y}) {};`,
+        `  \\node[right, font=\\footnotesize] at (${fmt(left + 1)},${y}) {Required position with no collection name};`,
+      );
+    }
+    if (entries.length) lines.push('', '  % Key', ...entries);
+  }
+
   lines.push('\\end{tikzpicture}');
   return lines.join('\n');
 }
 
-/** The root's non-T genome (R/D/L/Z) for the left panel -- the part of Collect's detail table
- * that isn't already drawn as the tree itself. */
+/** Each root's non-T genome (R/D/L/Z) for the left panel, in typed order -- the part of Collect's
+ * detail table that isn't already drawn as the tree itself. */
 function renderGenomePanel(): void {
   const panel = document.getElementById('ttree-genome-panel') as HTMLDivElement;
-  const root = lastGraph?.nodes.get(lastGraph.rootId);
-  if (!root) {
-    panel.innerHTML = '';
-    return;
-  }
-  const g = root.genome;
+  const graph = lastGraph;
+  const roots = graph ? graph.rootIds.map(id => graph.nodes.get(id)).filter((n): n is TTreeNode => !!n) : [];
   const fmtSet = (vals: number[]): string => `{${vals.join(', ')}}`;
-  const rows: [string, string][] = [['R', fmtNimber(g.R)], ['D', fmtNimber(g.D)], ['L', fmtSet(g.L)], ['Z', fmtSet(g.Z)]];
-  panel.innerHTML = `
+  panel.innerHTML = roots
+    .map(root => {
+      const g = root.genome;
+      const rows: [string, string][] = [['R', fmtNimber(g.R)], ['D', fmtNimber(g.D)], ['L', fmtSet(g.L)], ['Z', fmtSet(g.Z)]];
+      return `
     <div class="ttree-genome-enc">${escapeXml(nodeLabel(root)[0])}</div>
     ${root.name ? `<div class="ttree-genome-name">${escapeXml(root.name)}</div>` : ''}
     <table class="collect-code-table">
@@ -690,6 +718,8 @@ function renderGenomePanel(): void {
       ${rows.map(([mt, val]) => `<tr><td>${mt}</td><td class="nimset">${val}</td></tr>`).join('')}
     </table>
   `;
+    })
+    .join('<div class="ttree-genome-gap"></div>');
 }
 
 function render(): void {
@@ -713,7 +743,8 @@ async function runSearch(raw: string): Promise<void> {
   lastLayout = null;
   render();
 
-  const result = await buildTTree(raw);
+  // Several left sides, ';'-separated, render as one merged tree (see buildTTree).
+  const result = await buildTTree(raw.split(';'));
   if (myGen !== searchGen) return;
 
   if (!result.ok) {
