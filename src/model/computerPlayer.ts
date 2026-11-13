@@ -40,11 +40,18 @@ async function nimberOf(c: ChildInfo): Promise<number | null> {
   return result.nimber;
 }
 
+/** On-demand valuation counters, filled in by computerMoveOrder for the debug timing readout. */
+export interface ValuationStats {
+  valued: number;      // children valued with analyze() (not already known)
+  tooBig: number;      // of those, how many the engine declined (stay unknown)
+  ms: number;          // total time spent in those analyze() calls
+}
+
 /**
  * The children to try, best first. Lazy, so Smart values only as many unknown children as it
- * takes to reach one that draws.
+ * takes to reach one that draws. `stats`, when given, accumulates the on-demand valuation cost.
  */
-export async function* computerMoveOrder(children: ChildInfo[], strength: ComputerStrength): AsyncGenerator<ChildInfo> {
+export async function* computerMoveOrder(children: ChildInfo[], strength: ComputerStrength, stats?: ValuationStats): AsyncGenerator<ChildInfo> {
   const playable = children.filter(c => c.move);
   const offered = new Set<ChildInfo>();
   const offer = function* (tier: ChildInfo[]): Generator<ChildInfo> {
@@ -56,7 +63,14 @@ export async function* computerMoveOrder(children: ChildInfo[], strength: Comput
     // Known zeros first (no engine work), then the rest valued one at a time.
     yield* offer(shuffled(playable.filter(c => c.nimber === 0)));
     for (const c of shuffled(playable.filter(c => c.nimber === UNKNOWN_VALUE))) {
-      if ((await nimberOf(c)) === 0) yield* offer([c]);
+      const t0 = performance.now();
+      const nimber = await nimberOf(c);
+      if (stats) {
+        stats.valued++;
+        if (nimber === null) stats.tooBig++;
+        stats.ms += performance.now() - t0;
+      }
+      if (nimber === 0) yield* offer([c]);
     }
   }
   yield* offer(shuffled(playable));

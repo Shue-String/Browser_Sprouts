@@ -1,6 +1,7 @@
 // Genomes window: a sortable, filterable table of every collection/offset group (see
 // src/model/genomeCensus.ts for what each column means).
-import { genomeCensus, type GenomeCensusRow } from '../model/genomeCensus';
+import { genomeCensus, genomeElementRows, type GenomeCensusRow } from '../model/genomeCensus';
+import { csvBlob, pickSaveTarget } from './saveFile';
 
 type SortKey = 'group' | 'genome' | 'rep' | 'offset' | 'count' | 'lo' | 'hi' | 'tHolders' | 'tElements';
 const COLS: { k: SortKey; label: string; num?: boolean; title?: string }[] = [
@@ -71,6 +72,31 @@ function render(): void {
     'Click a column heading to sort; hover a heading for its definition.';
 }
 
+/** Saves one CSV (header row first); `what` names the data lines in the status message. */
+async function exportCsv(fileName: string, rows: string[][], what: string): Promise<void> {
+  const statusEl = document.getElementById('genomes-status') as HTMLDivElement;
+  try {
+    const target = await pickSaveTarget(fileName, 'CSV file', 'text/csv', '.csv');
+    if (!target) return;
+    await target.write(csvBlob(rows));
+    statusEl.textContent = `Saved ${target.name} (${rows.length - 1} ${what}).`;
+  } catch (err) {
+    statusEl.textContent = `Couldn't save the CSV: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+/** One line per collection, the table's genome text (blank for double-crit); ignores the filter. */
+function exportGenomes(): Promise<void> {
+  const rows = genomeCensus().filter(r => !r.offset).sort(byName).map(r => [r.name, r.genome ?? '']);
+  return exportCsv('genomes.csv', [['Name', 'Genome'], ...rows], 'genomes');
+}
+
+/** Every element of every group, reps included; ignores the filter. */
+function exportElements(): Promise<void> {
+  const rows = genomeElementRows().map(e => [e.genome, String(e.offset), e.element, e.minSpots?.toString() ?? '']);
+  return exportCsv('genome_elements.csv', [['Genome', 'Offset', 'Element', 'Min Spots'], ...rows], 'elements');
+}
+
 export function initGenomes(): void {
   if (wired) return;
   wired = true;
@@ -83,5 +109,7 @@ export function initGenomes(): void {
   });
   for (const id of ['genomes-filter', 'genomes-show-offsets', 'genomes-only-t'])
     document.getElementById(id)!.addEventListener('input', render);
+  document.getElementById('genomes-export-btn')!.addEventListener('click', () => void exportGenomes());
+  document.getElementById('genomes-elements-btn')!.addEventListener('click', () => void exportElements());
   render();
 }

@@ -67,7 +67,7 @@ const MAX_NESTED_GENOME_LIVES = 5;
  * rep's own child, NOT further quick-canon-reduced) and nimber. Unlike the deduped `L`/`Z`
  * nimber sets above, two entries here can share a nimber but have different encodings (the engine
  * can reach the same value via more than one distinct move) -- kept purely for the paper-format
- * export table (see collect.ts's buildGenomeTableLatex), which lists every raw move, not just the
+ * export table (see collect.ts's buildPaperGenomeTable), which lists every raw move, not just the
  * deduped value set. Optional because only a fresh computeAlphaGenomeAt call populates it --
  * GENOME_DB-loaded/byEncGenome-loaded genomes predate this field and don't carry it. */
 export interface MoveChildRef {
@@ -131,7 +131,7 @@ export interface AlphaGenome extends FourGeneGenome {
 /** Shift every uppercase membrane letter (A-Z, tokens.hpp's degree-2 shared-region symbol) forward
  * by 2, wrapping Y/Z back to A/B -- the paper's own left/right pairing-letter convention (starting
  * at C instead of A, to keep them visually distinct from the lowercase special-point tokens like
- * alpha/beta). Applied both to the LaTeX export (exportEncoding) and to the Collect pane's own
+ * alpha/beta). Applied both to the LaTeX export (collect.ts's tablesEncoding) and to the Collect pane's own
  * on-screen labels (collect.ts's quickLabel) so the two always agree. Never applied to `enc` itself
  * (the real, engine-native encoding used for re-analysis) -- only to display-only text. */
 export function shiftMembraneLetters(enc: string): string {
@@ -699,13 +699,15 @@ export interface CollectionRosterEntry {
   elements: string[];
   unhandled: string[];
   rep: string;
+  /** Each element's and unhandled member's JSON `minSpots` (null when unknown), by encoding. */
+  minSpots: ReadonlyMap<string, number | null>;
 }
 type RosterSection = 'single' | 'double' | 'multi' | 'unhandled';
 interface CollectionElementsFile {
   collections: {
     name: string;
     rep: string;
-    offsets: ({ offset: number } & Partial<Record<RosterSection, { elements: { encoding: string }[] }>>)[];
+    offsets: ({ offset: number } & Partial<Record<RosterSection, { elements: { encoding: string; minSpots?: number | null }[] }>>)[];
   }[];
 }
 export const COLLECTION_ROSTERS: CollectionRosterEntry[] = (collectionElementsJson as unknown as CollectionElementsFile).collections.flatMap(c =>
@@ -716,6 +718,10 @@ export const COLLECTION_ROSTERS: CollectionRosterEntry[] = (collectionElementsJs
     elements: (['single', 'double', 'multi'] as const).flatMap(s => o[s]?.elements.map(e => e.encoding) ?? []),
     unhandled: o.unhandled?.elements.map(e => e.encoding) ?? [],
     rep: o.offset === 0 ? c.rep : '',
+    minSpots: new Map(
+      (['single', 'double', 'multi', 'unhandled'] as const).flatMap(s =>
+        o[s]?.elements.map(e => [e.encoding, e.minSpots ?? null] as const) ?? []),
+    ),
   })),
 );
 

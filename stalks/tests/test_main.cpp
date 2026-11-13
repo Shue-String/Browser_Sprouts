@@ -1625,10 +1625,11 @@ void testRegistry() {
     }
     report(repsAgree, "every collection's rosters agree on one rep");
 
-    // Only these collections may be rep-only (no elements at either offset) -- the set as it stood
-    // before 5db4d1d's unjustified-element cleanup emptied 80 more.
-    const std::set<std::string> repOnlyAllowed = {"S_2",  "S_16", "S_29", "S_33",
-                                                  "S_34", "S_39", "S_69"};
+    // Only these collections may be rep-only (no elements at either offset) -- the set in
+    // collectionElements.json as of 2026-11-01, confirmed correct by the author.
+    const std::set<std::string> repOnlyAllowed = {
+        "S_2",  "S_16", "S_20", "S_21", "S_22", "S_26", "S_28", "S_29", "S_30", "S_31", "S_32",
+        "S_33", "S_34", "S_36", "S_37", "S_38", "S_39", "S_44", "S_54", "S_67", "S_69"};
     std::map<std::string, std::size_t> elementCount;
     for (const auto& r : rosters)
         elementCount[baseName(r.name)] += r.elements.size();

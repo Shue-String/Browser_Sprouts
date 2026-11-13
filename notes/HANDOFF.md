@@ -1,6 +1,6 @@
 # Sprouts — Active Notes
 
-Last swept for staleness 2026-09-21; FUNCTIONS.md updated for the 2026-10-12 review batch (previous sweep: 2026-07-23 — nearly two months of drift; see
+Last swept for staleness 2026-11-02 (code review covering c3356a7..698427d + the uncommitted T-Tree/Genomes export work); earlier sweeps 2026-09-21 and the 2026-10-12 review batch (previous sweep: 2026-07-23 — nearly two months of drift; see
 `FUNCTIONS.md`'s new native-tools/build-scripts catalogs and the ALPHA-genome section rewrite for
 what had gone stale). **Keep this pair current**: when a feature lands, update the relevant
 `FUNCTIONS.md` section and this file's architecture/TODO bullets in the same session, not later —
@@ -48,10 +48,26 @@ instead of Claude re-deriving it from memory files or grep each time.
   equal to a collection's own genome are stored by name (`scripts/collectionsJson.cjs`
   `nameKnownGenomes`). Membership discovery: `unregistered_left_sides` → `classify_candidates`
   (genome match is the trusted test; Yellow-only hits are not registered). The `derived` genome flag
-  was dropped 2026-10-10. Open: rebuild WASM.
-- Collect (`src/ui/collect.ts`) and T-Tree (`src/model/ttree.ts` / `src/ui/ttree.ts`) both classify
-  genomes through the shared `src/model/collectAlpha.ts` pipeline (engine movetype tags, not the
-  old retired DisaPoint-provenance approach). See `FUNCTIONS.md` for the current export list.
+  was dropped 2026-10-10. Collections were renumbered again 2026-10-23 (`notes/rename_2026-10-23.md`).
+  Double-crit collections (Z_2–Z_5, `double` section) swap role-preserving: the engine lines each
+  physical crit up with the rep port of the same role (`regionKeyPerm`/`roleOfLabel`, collections.cpp),
+  since a genome can be asymmetric in its two crits. A fourth, display-only `unhandled` section holds
+  real members the engine deliberately never reduces (e.g. Z_3's `[37β8α/`, which shares its rep's
+  left-side key, so registering it would make quickCanon swap back and forth forever); only the UI
+  reads it (Collections panel tag, Genomes counts/CSV).
+- Collect (`src/ui/collect.ts`, deprecated — its button shows only in Debug mode) and T-Tree
+  (`src/model/ttree.ts` / `src/ui/ttree.ts`) both classify genomes through the shared
+  `src/model/collectAlpha.ts` pipeline (engine movetype tags, not the old retired
+  DisaPoint-provenance approach). T-Tree takes several `;`-separated left sides as one merged tree,
+  shows each root's R/D/L/Z genome alongside, and exports TikZ (Export Tree), LaTeX genome + nimber
+  tables (Export Tables; one shared `buildPaperGenomeTable`, also behind Collect's Export) and the
+  nimber table as CSV. The Genomes pane exports genomes and elements as CSV. File saves go through
+  `src/ui/saveFile.ts` (native Save As where available). See `FUNCTIONS.md` for the current export list.
+- Live play (main.ts, see FUNCTIONS.md): automatic moves (Recreate, Position Browser double-click,
+  the computer) draw their edge in from `drawOriginVertex`'s end while every other animation holds
+  (`drawAndCommitStroke`; Debug "Instant Draw" commits at once). The New Game dialog's computer
+  player (None/Random/Smart, first or second) orders the engine's children (`computerPlayer.ts`)
+  and plays them through the same `playTargetMove` path as a Position Browser double-click.
 
 ## Terminology
 - **Loop move**: the player draws a stroke from a vertex back to itself (v1===v2 in `MoveInput`).

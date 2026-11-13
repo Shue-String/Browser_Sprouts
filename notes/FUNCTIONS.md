@@ -154,7 +154,7 @@ is `classifyVertexFull` in encoding.ts).
 
 | Function | Description |
 |---|---|
-| `computerMoveOrder(children, strength)` | Async generator over the engine's move-bearing children, best first; main.ts plays them in order until one draws. `random`: game-ending children (`maxMoves === 0` or all-`N` enc), then everything. `smart`: known nimber-0 children, then UNKNOWN children valued one at a time via `analyze()` (so only those under the engine's automatic gate, largest minimal subposition ≤ 10 lives, kAutoLives2; results `record`ed), yielding the zeros, then everything. Each tier shuffled; no child repeats. Lazy, so Smart stops valuing once a zero draws. |
+| `computerMoveOrder(children, strength, stats?)` | Async generator over the engine's move-bearing children, best first; main.ts plays them in order until one draws. `random`: game-ending children (`maxMoves === 0` or all-`N` enc), then everything. `smart`: known nimber-0 children, then UNKNOWN children valued one at a time via `analyze()` (so only those under the engine's automatic gate, largest minimal subposition ≤ 10 lives, kAutoLives2; results `record`ed), yielding the zeros, then everything. Each tier shuffled; no child repeats. Lazy, so Smart stops valuing once a zero draws. Optional `ValuationStats` accumulates on-demand valuation count/too-big/ms for the Computer Timing readout. |
 
 ---
 
@@ -238,6 +238,7 @@ Tuning constants live in `src/model/tunables.ts` (see below), not inline in this
 | `DEFAULT_TUNABLES` | Factory defaults |
 | `tunables` | The live, mutable tunable object smoothing/rendering code reads from |
 | `TunableSpec` / `TUNABLE_SPECS` | Metadata (label, min/max/step, optional panel `column`) driving the in-app tuning panel |
+| `keepClearRange` / `keepClearShare` / `keepClearMax` | Router `smoothPath` clearance floor (moveRouter.ts; were the `KEEP_CLEAR_*` constants): walls farther than the range don't constrain a smoothed point, which otherwise keeps `share` of its raw clearance capped at `max`. Panel group "Routing" |
 | `*Speed` keys (`deadShrinkSpeed`, `louseSpeed`, `parallelDeadSpeed`, `tripleParallelDeadSpeed`, `triangleDeadSpeed`, `quadDeadSpeed`, `enclosedTriangleSpeed`, `bigonTipSpeed`, `selfConnectedDeadSpeed`) | Per-collapse animation speed multiplier (1 = the original hard-coded pace, default 0.5), one per step function; panel column 2. Slerp steps go through `scaledStep` (`1-(1-s)^speed`), deflations advance `nextDeflateDepth`'s frame by `speed`, quad/enclosed-triangle scale their `t` delta |
 | `loadTunables()` | Load saved overrides from localStorage into `tunables` |
 | `saveTunables()` | Persist current `tunables` to localStorage |
@@ -352,6 +353,7 @@ smoothing. Joins (two different boundaries) are a clearance-weighted shortest pa
 | `faceMeshFor(state, region)` | Memoized `buildFaceMesh` (keyed by a whole-drawing fingerprint + the face's boundary walk) |
 | `buildFaceMesh(state, region)` | Build a face's `FaceMesh` (move-independent: every corner with free valence gets a full arc) |
 | `routeOnMesh(mesh, spec, diag?)` | Route one `RouteSpec` (`split` a→c with `withArc`, `a===c` for a self-loop; or `join`). `diag` gets labels/failure reason/partial trace |
+| `smoothPath(walls, raw)` (internal) | Coarse taut-string relaxation of a traced route; a point may not end up closer to a wall than its clearance floor (the `keepClear*` tunables) |
 | `meshPieceOf(mesh, corner)` | The connected mesh piece holding the most of a corner's seeds. `routeSplit` labels only that piece: a thin wedge at a junction (~20-35°) can leave its corner seeds as an island (every linking triangle crosses a wall), which as a "stray piece" used to fail every split in the face |
 
 ---
@@ -473,6 +475,7 @@ every genome whose T-genes are all collection names; a genome still holding a ne
 | `registryFoldName(g)` | Resolve a `{quickEnc, quickOffset}` pair to its registered family name, if any |
 | `COLLECTION_ROSTERS` | One `CollectionRosterEntry` per (collection, offset) group of `collectionElements.json` — the single in-memory read of that file; genomeCensus.ts and the lists below derive from it |
 | `KNOWN_COLLECTION_MEMBERS` / `KNOWN_COLLECTION_REP` | Per-family member lists / representative encodings, derived from `COLLECTION_ROSTERS` (`KNOWN_COLLECTION_REP_RAW` was removed 2026-10-12) |
+| `KNOWN_COLLECTION_UNHANDLED` | Same keying, for each group's display-only "unhandled" members (real members quickCanon deliberately never reduces, e.g. Z_3's `[37β8α/`). A roster entry keeps them in `unhandled`, apart from `elements`, so nothing assuming an element quick-canons to its rep (`buildRegistryIndex`) sees them; `CollectionRosterEntry.minSpots` maps both kinds to their JSON `minSpots` |
 | `GENOME_NAMES` / `NAMED_FAMILY_GENOME_TEXT` / `NAMED_FAMILIES` / `COLLECTION_GENOME_TEXT` | The resolved family registry (name → genome text, full family records; `COLLECTION_GENOME_TEXT` covers every collection incl. display-only ones) |
 | `familyForCore(g)` | Look up a family by its `(R,D,{L},{T'})` core key alone (ignores `[T]`) — see `reference_family_core_collision_bug.md` for a 2026-09-03 bug in an earlier version of this lookup |
 | `bypassOnlyFoldName(g, resolveChild, depth)` / `resolvedFoldName(...)` | Resolve a genome's display name allowing one level of "bypass" (fold through an unnamed intermediate T-child to a named grandchild) |
@@ -496,6 +499,7 @@ pass exposed S_33+ folds that Collect's own per-row path hadn't been exercising)
 
 | Export | Description |
 |---|---|
+| `buildTTree(rootEncs)` | The union of the T-Trees rooted at each typed left side (blank entries ignored): each built on its own (`buildSingleTTree`, internal) exactly as a single search would, then merged — a node once however many trees reach it (required if any tree requires it), edges deduped. Merging finished trees, not one shared worklist, keeps it exactly the union (the bypass-witness choice is greedy on what's already in the tree). `TTreeGraph.rootIds` lists the roots in typed order |
 | `adjustedLivesOf(fullEnc)` | Life count of a full encoding, adjusted the way the T-Tree pane displays it |
 | `buildTTreeNeighbors(graph)` | Adjacency map (`nodeId → neighbor nodeIds`) over a built `TTreeGraph` |
 | `layoutTTree(graph)` | Compute 2D layout positions (`TTreeLayout`) for every node in the graph |
@@ -515,31 +519,61 @@ hand-maintained.
 |---|---|
 | `initTTree()` | Wire up the T-Tree panel (search input, canvas layout, node click/hover) once; safe to call multiple times |
 
-Everything else is internal: builds a `TTreeGraph` via `ttree.ts`/`collectAlpha.ts` from a typed
-encoding, lays it out (`layoutTTree`), and renders it as a clickable node graph with edges styled
-by `TTreeEdgeKind` (solid = required, dashed = bypass, dashed grey = extra — an "extra" edge is the
-signal a candidate does NOT cleanly fold to the searched family). Includes the paper/LaTeX export
-path (`toLatexMath`) and the dotted-line move-preview demo referenced in
-`project_move_preview_hover.md`.
+Everything else is internal: builds a `TTreeGraph` via `buildTTree` from the typed encoding
+(several left sides separated by `;` draw as one merged tree), lays it out (`layoutTTree`), and
+renders it as a node graph with edges styled from one `EDGE_STYLE` table (black = required T-child,
+red = bypassed T-child, blue = the T-grandchild that allows the bypass, dashed grey = unexplained
+extra — the signal a candidate does NOT cleanly fold to the searched family). `renderGenomePanel`
+shows each root's non-T genome (R/D/L/Z) in a left panel. Three exports:
+- **Export Tree** (`buildTikzExport`): TikZ to the clipboard, same layout as the SVG; each node is
+  named after its own encoding (`tikzNodeName`, injective via `TIKZ_NAME_CHAR`, repeats suffixed
+  `n2`, `n3`, …), and a key below the tree lists each edge kind drawn (+ the flagged-box style).
+- **Export Tables** / **Export CSV** (`runExportTables('latex' | 'csv')`): `ttreeExport.ts`'s
+  builders, saved through `pickSaveTarget` (asked first, while the click's user activation is still
+  live). Failed nimber re-checks set an error status and an alert.
 
-## `src/ui/ttreeExport.ts` — T-Tree "Export Tables" bulk LaTeX dump
+## `src/ui/ttreeExport.ts` — T-Tree "Export Tables" / "Export CSV"
+
+Everything is read off the graph, so a merged multi-root tree gets the union of its roots' tables,
+each position once.
 
 | Function | Description |
 |---|---|
-| `buildTTreeTablesLatex(graph, onProgress?)` | One compilable LaTeX document: a genome table (`collect.ts`'s `buildGenomeTableLatex`, with each bypassed T-child's last column showing the position it bypasses to) for every `requiredByAny` (i.e. non-bypassed) node, fewest lives first, then ONE nimber table: the full game tree (every single subposition, via `analyze`) below every R/D/L/Z child those tables quote, smallest-lives parent first, each parent's distinct children + their nimbers (just the child's nimber, no written-out nim-sum). Sum XORs and per-parent mex are re-checked against the engine, mismatches flagged `(!)`. Each parent is one unbreakable longtable row with a nested children table; fixed column widths so one compile pass aligns the header |
-| `downloadText(filename, text)` | Blob-download helper (the dump is too big to paste) |
+| `buildTTreeTablesLatex(graph, onProgress?)` → `TTreeExport` | One compilable LaTeX document. Preamble: `GENOME_LATEX_MACROS` + `genomeDefinitionsLatex` for every named genome used. Then a genome table (`collect.ts`'s `buildPaperGenomeTable`, one `\gtable` call, with each bypassed T-child's last column showing the position it bypasses to) for every `requiredByAny` (non-bypassed) node, fewest lives first (`genomeTableNodes`); then ONE nimber table (`nimberTableLatex`): the full game tree (every single subposition, via `analyze`) below every R/D/L/Z child those tables quote (`nimberTableSeeds`). Each parent is one unbreakable longtable row with a nested children table; fixed column widths so one compile pass aligns the header |
+| `buildTTreeNimberCsv(graph, onProgress?)` → `TTreeExport` | Just the nimber table as CSV (`nimberTableCsv`): one line per (parent, child) pair, a childless parent once with empty child columns; a "Check" / "Child check" column (`!` on failure) appears only when something in it failed |
+| `TTreeExport` | `{ blob, failedChecks }` — the file and how many cells failed a re-check (`failedCheckCount`) |
+
+Nimber table rows (`buildNimberRows`, format-independent): positions print in full form (membrane
+letters from A, DisaPoints compressed, `fullEncoding` = `tablesEncodingText(enc, true)`), and
+distinct engine positions that print identically share ONE row whose children are the union. Rows
+sort by max remaining moves, then printed tuple order (`compareRows` / `compareTuples`: fewer
+subpositions, regions, boundaries first, boundaries by numeric value in base-36 digits); children
+by nimber, then tuple order. Sum XORs and per-parent mex are re-checked against the engine, and
+printed-alike members or children disagreeing on a nimber also flag the cell (`(!)` in LaTeX).
+
+## `src/ui/saveFile.ts` — Save-as dialog and CSV helper
+
+| Function | Description |
+|---|---|
+| `pickSaveTarget(suggestedName, description, mime, ext)` → `SaveTarget \| null` | The native Save As dialog (Chromium's File System Access API), falling back to a plain download where it's missing; null if the user cancels. Call it synchronously from the click handler, before any slow work — the dialog only opens while the click's user activation is live. Used by Save game, the T-Tree exports and the Genomes CSVs |
+| `csvBlob(rows)` | CSV text (quoted where needed, CRLF line ends) with a leading BOM so Excel reads ⊕/α/φ as UTF-8 |
 
 ## `src/model/genomeCensus.ts` — Genomes pane data
 
 | Function | Description |
 |---|---|
-| `genomeCensus()` | One `GenomeCensusRow` per (collection, offset) group of `collectionElements.json` (plus any offset used as a T-gene with no elements of its own, e.g. `S_2⊕1`): genome text, rep, element count (offset 0 counts the rep), min/max extra-adjusted lives with the crit counted as one life (`CRIT_LIVES`, via `ttree.ts`'s `adjustedLivesOf`), number of collections using the group as a direct T-gene, and the sum of those collections' offset-0 counts. Computed once, cached |
+| `genomeCensus()` | One `GenomeCensusRow` per (collection, offset) group of `collectionElements.json` (plus any offset used as a T-gene with no elements of its own, e.g. `S_2⊕1`): genome text, rep, element count (offset 0 counts the rep), min/max extra-adjusted lives with the crit counted as one life (`CRIT_LIVES`, via `ttree.ts`'s `adjustedLivesOf`), number of collections using the group as a direct T-gene, and the sum of those collections' offset-0 counts. Computed once, cached. Unhandled members count toward a group's elements |
+| `genomeElementRows()` | Every element of every group (`GenomeElementRow`: genome, offset, element, minSpots), unhandled members included, in roster order; each collection's rep first in its offset-0 group with minSpots null |
 
 ## `src/ui/genomes.ts` — Genomes window (top-bar "Genomes" button)
 
 | Function | Description |
 |---|---|
 | `initGenomes()` | Wire the sortable/filterable `genomeCensus()` table once; safe to call multiple times |
+
+Two CSV exports, both ignoring the filter and saved via `pickSaveTarget`: **Export Genomes**
+(`exportGenomes`: Name, Genome — one line per collection, offset 0 only) and **Export Elements**
+(`exportElements`: Genome, Offset, Element, Min Spots from `genomeElementRows`).
 
 ---
 
@@ -550,6 +584,13 @@ path (`toLatexMath`) and the dotted-line move-preview demo referenced in
 | `markAlpha(enc)` | Substitute the display ALPHA glyph for the internal alpha token in an encoding string |
 | `bracketDisplaySlash(enc)` / `paperDisplay(enc)` | Display-formatting helpers for bracketed left-side text (UI form vs. paper/LaTeX form) |
 | `initCollect()` | Wire the search input + Collections panel once; safe to call multiple times (each open just re-renders) |
+| `buildPaperGenomeTable(enc, bypassTargets?)` → `{ latex, name }` | THE genome sequencing table, as one `\gtable` call (cell values only, one `\gr` per row): raw R/D/L/Z children left, T-children + Relevancy verdict (`computeRelevancy`) right. A named position's closing row is filled from its `\defgenome` (`name` says which one the document needs); an unnamed one passes its full genome. Used by the T-Tree tables export and Collect's own Export (which copies it with the macros and definition prepended). Replaced `buildGenomeTableLatex` / `exportEncoding` (2026-11-02) |
+| `GENOME_LATEX_MACROS` / `genomeDefinitionsLatex(names)` | The preamble (`\genome`, `\gcore`, `\gn`, `\defgenome`, `\gtable`, `\gr`; doc comment lists their arguments) / the `\defgenome` lines for the named genomes used |
+| `tablesEncoding(enc, full?)` / `tablesEncodingText(enc, full?)` | A position for the tables: DisaPoints compressed (canonFull), alpha marked, bracketed, dead position → φ; membrane letters shifted per the paper unless `full` (start at A). LaTeX form / plain-text form (for CSV) |
+| `toLatexSymbols(text)` | ⊕/α/braces/sub- and superscripts → LaTeX math |
+
+Collect itself is deprecated: its top-bar button is hidden until Debug mode unlocks. The
+Collections panel lists each group's "unhandled" members last, tagged `unhandled`.
 
 Everything else is internal (this file has grown substantially since the DisaPoint→ALPHA rework —
 1500+ lines as of 2026-09-21). Two main flows:
@@ -841,10 +882,12 @@ Key internal functions (selected):
 - `promptManual(parsed, moveNum)` / `promptCandidates(parsed, moveNum)` / `verifyManualMove(v1, v2)` — manual (user-drawn) Recreate flow; `promptCandidates`' no-pause path is recreate.ts `synthesizeMove`, the same call the route scripts replay through
 - `firstLegalCandidate(parsed)` — the manual-pause blue hint arc (`proposedArc`): first candidate that crosses nothing. Enter force-commits it without token verification, and re-checks crossings first (the board may have moved)
 - `undoLast(recordRedo?)` / `redoLast()` / `pushHistorySnapshot()` — undo/redo stack
+- Save game: serializes, then `pickSaveTarget` (native Save As where available)
 - `commitStroke(v1, v2, stroke)` — commit a programmatic stroke exactly as live input does (snapshot, applyMove, warn if a new edge crosses, afterMoveCommitted); used by Enter force-commit and `__sprouts.commitMove` directly, and by Recreate and the Position Browser's double-click via `drawAndCommitStroke`
 - `drawAndCommitStroke(v1, v2, stroke, stillWanted?)` → `Promise<boolean>` — the drawn commit: the edge grows from `drawOriginVertex`'s end (350–1100 ms by arc length, eased) while all other animation holds (physics, collapses, pop bursts, drags; `edgeDraw` non-null), then commits via `commitStroke`. Red `pop` at the source as it starts, `unpop` at the destination (tracks the vertex) once it lands; neither blocks anything (`drawFx`, never frozen). Resolves false if another draw is running, `stillWanted()` goes false, `history.length` changed, or the stroke now crosses. Debug "Instant Draw" (`instantDraw`) commits immediately. Helpers: `stepEdgeDraw` (frame loop, dt clamped to 50 ms), `partialPath`, `cancelEdgeDraw` (undoLast / resetGame / loadGameState). `__sprouts.edgeDraw` exposes the in-flight draw.
-- `playTargetMove(target, stillWanted, walk?)` → `Promise<boolean>` — plays an engine child drawn in; shared by the PB double-click (`onConfirm`) and the computer player. Optional `RoutedWalk` (`routedWalk()` / `routedStrokeFor`) is the last resort: the background pass's allRoutedMoves phase run on demand and resumable across one position's children — covers moves `resolveMoveVertices` can't translate (e.g. InteriorPseudo joins like `[AB|AB]` → `N`) when no PB background pass ran.
+- `playTargetMove(target, stillWanted, walk?, timer?)` → `Promise<boolean>` — plays an engine child drawn in; shared by the PB double-click (`onConfirm`) and the computer player. Optional `RoutedWalk` (`routedWalk()` / `routedStrokeFor`) is the last resort: the background pass's allRoutedMoves phase run on demand and resumable across one position's children — covers moves `resolveMoveVertices` can't translate (e.g. InteriorPseudo joins like `[AB|AB]` → `N`) when no PB background pass ran.
 - Computer player (New Game dialog: None/Random/Smart, moves first/second; `computerMode`/`computerSide`): `turnChanged()` (replaces the bare `updateTurnIndicator()` at undo/redo/commit/load/reset) bumps `computerGen` and starts `runComputerTurn` when `computerToMove()`: settle `COMPUTER_SETTLE_MS` (2 s), wait out collapses/strokes/draws, `childrenWithMoves` → `computerMoveOrder` → `playTargetMove` until one commits; nothing draws → `computerStuck` (indicator says so, the human may draw it). `humanMayMove()` gates hand drawing (InputHandler `canDraw`) and PB confirm on the computer's turn. `userUndo`/`userRedo` step over the computer's move so the human lands on their own turn. Load and Recreate set the computer off (saves don't record it).
+- Computer Timing (Debug toggle `#computer-timing-checkbox`, readout `#computer-timing` bottom-right, clear of the wide PB panel and bottom bars): `runComputerTurn` always records a `PhaseTimer` (settle, wait, children, per tried child: choose incl. valuation, fresh/cached stroke search, routed walk, edge draw; valuation total); `timed(timer, label, fn, note?)` wraps one phase and counts the computer's own stroke trials. `strokeTrials` (every `tryStroke`) minus `backgroundTrials` (the PB background pass's) separates the two, since they interleave on the main thread. Shown + console-logged after each computer move (or when stuck) while the toggle is on. Note: a hidden preview pane stalls rAF, inflating `edge draw`.
 - Position Browser `onConfirm`: sets `confirmHold` (board frozen like a draw) and re-synthesizes with `synthesizeVerifiedMove(target, fresh=true)` (skips the background cache) so the line is routed against the points at click time, not hover time; falls back to the hover stroke, then the cache, only if nothing fresh verifies. Ignores clicks while a confirm/draw is in flight.
 - `updateMoveSeq()` / `moveSeqCopyText()` — Move Sequence bar (see memory `project_pb_panel_move_seq_bar.md`)
 - `loadGameState(save)` / `resetGame(spots)` — load a save / start a fresh game
@@ -885,6 +928,11 @@ Native data loading: `stalks/src/json.hpp`/`.cpp` is a minimal JSON parser; `col
 by `CMakeLists.txt`'s `STALKS_COLLECTION_ELEMENTS_JSON`, set on `stalks_core` only) and builds the
 single/double/multi registries from it, so a JSON edit needs no native rebuild. Without that macro
 (the WASM build) `collections.cpp` compiles the registry from `collection_elements.generated.hpp`.
+The display-only `unhandled` section is never loaded. Double-crit matching (`regionKeyPerm`, which
+`regionKey` wraps) also reports WHICH crit labelling won the minimal key; each registry entry stores
+`roleOfLabel`, and `stepDoubleCrit` uses both to send each physical crit to the rep port playing
+the same role (2026-10-22: arrival order put them on the wrong ports for crit-asymmetric genomes
+like Z_2/Z_4).
 
 ## Advanced Collections registry: discovery (find new candidate families)
 
@@ -960,10 +1008,10 @@ never hand-edit a `.generated.hpp` or JSON marked generated.
 
 | Script | Purpose |
 |---|---|
-| `collectionsJson.cjs` | Shared reader/writer + schema doc for `src/data/collectionElements.json` (collections → shared `rep` + `genome` → `offsets` → `single`/`double`/`multi` element lists) |
+| `collectionsJson.cjs` | Shared reader/writer + schema doc for `src/data/collectionElements.json` (collections → shared `rep` + `genome` → `offsets` → `single`/`double`/`multi` element lists, plus a display-only `unhandled` list: real members the engine deliberately doesn't reduce, never read by the engine or the generated header) |
 | `genCollectionElementsHeader.cjs` | `src/data/collectionElements.json` → `stalks/src/collection_elements.generated.hpp` (flattened to per-section families; WASM build only — native builds read the JSON at runtime via `collections.cpp`'s `collectionElementsJson()`) |
 | `genCollectionGenomesJson.cjs` | `src/data/collectionElements.json` → `src/data/collectionGenomes.generated.json` (genomes only, for the front end) |
-| `exportCollectionsLatex.cjs` | Registry (Collections panel data) → standalone LaTeX: one section per collection S_n over a range (default S_2–S_10), base collection left / its ⊕1 offset right, rep first, membrane letters shifted to start at C; `--from/--to/--out/--pdf` |
+| `exportCollectionsLatex.cjs` | Registry (Collections panel data) → standalone LaTeX: one section per collection S_n over a range (default S_2–S_10), base collection left / its ⊕1 offset right, rep first, membrane letters shifted to start at C, T-genes in the genome text printed as `g_n` (the paper's gene notation); `--from/--to/--out/--pdf` |
 | `checkGeneratedHeaders.cjs` | CI-style check: fails if any generated file above is stale relative to its JSON source; wired into `npm run build` |
 | `refreshGenomes.cjs` | Recompute every collection's genome from its rep via `stalks/build/genome_for_reps.exe` and rewrite it in `collectionElements.json` (`node scripts/refreshGenomes.cjs [exe] [--check]`; `--check` only reports differences). Rebuild the native tools first after any registry change, then `npm run gen:headers` |
 | `renameGenomes.cjs` | Rename Advanced Collections/genome families across both JSON sources and regenerate everything derived from them in one pass (`node scripts/renameGenomes.cjs <mapping.json> [--dry-run] [--skip-native]`) — built as a standing tool since family renames have happened multiple times (see `project_advanced_collections.md`, `project_genome_renaming_tool.md`) |

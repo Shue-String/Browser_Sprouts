@@ -5,17 +5,16 @@ import type { ResolvedMoveVertices } from './model/encoding';
 import { VertexType } from './model/types';
 import type { EncodingResult } from './model/encoding';
 import { computeMoveCode, computeEnclosureSideColoring, computeEnclosureCoverage } from './model/moveCode';
-import { recomputeSpotLabels, initialSpotLabels, labelledMoveCode, formatSpotLabel } from './model/vertexLabels';
+import { recomputeSpotLabels, initialSpotLabels, labelledMoveCode, formatSpotLabel, resolveLabelledMove } from './model/vertexLabels';
 import { parseMoveSequence, rawResolvedMove } from './model/moveCodeParse';
 import type { ResolvedMove } from './model/moveCodeParse';
 import { synthesizeMove, appliedMoveMatches, computeRecreateHints, strokeReproduces, applyTrial } from './model/recreate';
 import type { RecreateHints } from './model/recreate';
-import { resolveLabelledMove } from './model/vertexLabels';
 import { rawRouteOf } from './model/moveRouter';
 import { strokeCrossesEdges, candidateStrokes, candidateStrokeStream } from './model/strokeSynthesis';
 import { drawOriginVertex } from './model/drawOrigin';
 import { computerMoveOrder } from './model/computerPlayer';
-import type { ComputerStrength } from './model/computerPlayer';
+import type { ComputerStrength, ValuationStats } from './model/computerPlayer';
 import { allRoutedMoves } from './model/moveRouter';
 import { moveLog } from './debug/moveLog';
 import { DEBUG } from './debug/flags';
@@ -41,7 +40,8 @@ import { openGuide, closeGuide, isGuideOpen } from './ui/guide';
 import { initCollect } from './ui/collect';
 import { initTTree } from './ui/ttree';
 import { initGenomes } from './ui/genomes';
-import { canon as canonEncoding, preloadModule, canonSync } from './engine/stalks';
+import { pickSaveTarget } from './ui/saveFile';
+import { canon as canonEncoding, preloadModule, canonSync, UNKNOWN_VALUE } from './engine/stalks';
 import { recordEdge, loadMasterSeed, loadQuickMasterSeed } from './model/positionCache';
 
 // Kick off the WASM module load immediately (independent of the Tracked Encoding toggle) so
@@ -245,15 +245,22 @@ async function precomputeChildrenMoves(targets: MovePreviewTarget[]): Promise<vo
     if (results.has(target)) continue;
     for (const stroke of candidateStrokeStream(state, parsedFromResolved(resolved))) {
       if (!(await yieldOk())) return;
+      backgroundTrials++;
       if ((await tryStroke(resolved.v1, resolved.v2, stroke, results)) === target) break;
     }
   }
   const covered = (): boolean => [...wanted].every(c => results.has(c));
   for (const mv of allRoutedMoves(state)) {
     if (covered() || !(await yieldOk())) return;
+    backgroundTrials++;
     await tryStroke(mv.v1, mv.v2, mv.stroke, results);
   }
 }
+
+/** Stroke trials run (tryStroke calls), all callers; and the subset run by the background pass
+ *  above. Read as deltas by the Computer Timing readout — the difference is the computer's own. */
+let strokeTrials = 0;
+let backgroundTrials = 0;
 
 /**
  * Try one stroke on the live board (applyTrial: legal and applied on a clone) and return the canon
@@ -261,6 +268,7 @@ async function precomputeChildrenMoves(targets: MovePreviewTarget[]): Promise<vo
  * stroke is illegal. Shared by the background children pass and hover verification.
  */
 async function tryStroke(v1: number, v2: number, stroke: SpherePoint[], cache: Map<string, { v1: number; v2: number; stroke: SpherePoint[] }>): Promise<string | null> {
+  strokeTrials++;
   const trial = applyTrial(state, v1, v2, stroke);
   if (!trial) return null;
   const reached = await trialCanonOf(trial);
@@ -316,10 +324,11 @@ setMoveCallbacks({
  * way, or `stillWanted` went false / the board changed before the commit. `walk`, when given, is
  * the last resort for a child the move's own candidates can't reach (see RoutedWalk).
  */
-async function playTargetMove(target: MovePreviewTarget, stillWanted: () => boolean, walk?: RoutedWalk): Promise<boolean> {
-  if (confirmHold || edgeDraw) return false;
+async function playTargetMove(target: MovePreviewTarget, stillWanted: () => boolean, walk?: RoutedWalk, timer?: PhaseTimer): Promise<boolean> {
+  if (confirmHold || edgeDraw) { timer?.note('skipped: another draw under way'); return false; }
   const historyAtClick = history.length;
   const legalNow = (s: { stroke: SpherePoint[] }): boolean => !strokeCrossesEdges(state, s.stroke);
+  const found = (r: { v1: number; v2: number; stroke: SpherePoint[] } | null): string => r ? 'found' : 'miss';
   // Hold the board from the click until the draw starts, and route the stroke against the points
   // as they stand now — the hover's stroke (and the background cache's) were routed against
   // wherever the points were back then. Those stand in only if no fresh stroke verifies.
@@ -327,24 +336,29 @@ async function playTargetMove(target: MovePreviewTarget, stillWanted: () => bool
   wake();
   let drawn: Promise<boolean> | null = null;
   try {
-    let resolved: { v1: number; v2: number; stroke: SpherePoint[] } | null = await synthesizeVerifiedMove(target, true).then(r => r.kind === 'found' ? r : null);
+    let resolved: { v1: number; v2: number; stroke: SpherePoint[] } | null = await timed(timer, '  stroke search (fresh)',
+      () => synthesizeVerifiedMove(target, true).then(r => r.kind === 'found' ? r : null), found);
     if (!resolved) {
       const hovered = movePreview?.targetEnc === target.targetEnc ? movePreview.found : null;
       resolved = hovered && legalNow(hovered)
         ? hovered
-        : await synthesizeVerifiedMove(target).then(r => r.kind === 'found' ? r : null);
+        : await timed(timer, '  stroke search (cached)',
+          () => synthesizeVerifiedMove(target).then(r => r.kind === 'found' ? r : null), found);
     }
-    if (!resolved && walk) resolved = await routedStrokeFor(walk, target.targetEnc);
+    if (!resolved && walk) resolved = await timed(timer, '  routed walk', () => routedStrokeFor(walk, target.targetEnc), found);
     // Synthesis awaits the WASM canon, so a move can land (or the panel leave live) before we
     // get here: re-check right before committing, synchronously with it.
-    if (!resolved || history.length !== historyAtClick || !stillWanted() || !legalNow(resolved)) return false;
+    if (!resolved || history.length !== historyAtClick || !stillWanted() || !legalNow(resolved)) {
+      timer?.note(!resolved ? 'no stroke reaches it' : 'dropped: board changed or stroke now crosses');
+      return false;
+    }
     movePreview = null;
     drawn = drawAndCommitStroke(resolved.v1, resolved.v2, resolved.stroke, stillWanted);
   } finally {
     confirmHold = false; // the draw (if any) has taken over the hold
     wake();
   }
-  const committed = await drawn;
+  const committed = await timed(timer, '  edge draw', () => drawn!, c => c ? '' : 'dropped');
   movePreview = null;
   wake();
   return committed;
@@ -597,27 +611,122 @@ function turnChanged(): void {
 
 async function runComputerTurn(gen: number): Promise<void> {
   const current = (): boolean => gen === computerGen && computerToMove();
+  const timer = new PhaseTimer();
+  const moveNo = state.moveCount + 1;
+  const settleStart = performance.now();
   await settle(COMPUTER_SETTLE_MS);
+  timer.add('settle (fixed)', performance.now() - settleStart);
   // A long collapse chain can outlast the settle; and never start over a hand stroke in progress
   // or another automatic move.
+  const waitStart = performance.now();
   while (collapseActive() || input.isDrawing() || confirmHold || edgeDraw) {
     if (!current()) return;
     await settle(100);
   }
+  timer.add('wait (collapses etc.)', performance.now() - waitStart);
   if (!current()) return;
-  const children = await childrenWithMoves(liveAnalysisText(state));
+  const children = await timed(timer, 'children (engine)', () => childrenWithMoves(liveAnalysisText(state)),
+    cs => cs ? `${cs.length} children, ${cs.filter(c => c.nimber === UNKNOWN_VALUE).length} unvalued` : 'none');
+  const valuation: ValuationStats = { valued: 0, tooBig: 0, ms: 0 };
+  const finish = (outcome: string): void => {
+    timer.add(`valuation total`, valuation.ms, `${valuation.valued} valued${valuation.tooBig ? `, ${valuation.tooBig} too big` : ''}`);
+    showComputerTiming(`Computer move ${moveNo} (${computerMode}) — ${outcome}`, timer);
+  };
   if (children) {
     const walk = routedWalk();
-    for await (const child of computerMoveOrder(children, computerMode as ComputerStrength)) {
+    let tried = 0;
+    let chooseStart = performance.now();
+    for await (const child of computerMoveOrder(children, computerMode as ComputerStrength, valuation)) {
       if (!current()) return;
-      if (await playTargetMove({ move: child.move!, targetEnc: child.enc }, current, walk)) return;
+      tried++;
+      timer.add(`child ${tried}: ${child.enc}${child.nimber === UNKNOWN_VALUE ? '' : ` (*${child.nimber})`}`, null);
+      timer.add('  choose (incl. valuation)', performance.now() - chooseStart);
+      if (await playTargetMove({ move: child.move!, targetEnc: child.enc }, current, walk, timer)) {
+        finish(`played child ${tried}`);
+        return;
+      }
+      chooseStart = performance.now();
     }
   }
   if (!current()) return;
   console.warn('[Computer] no child of the live position could be drawn');
+  finish('stuck, no child drawable');
   computerStuck = true;
   updateTurnIndicator();
 }
+
+// ---------------------------------------------------------------------------
+// Computer Timing (Debug): per-phase timing of the computer's turn, bottom-right
+// ---------------------------------------------------------------------------
+//
+// Always recorded (it's a handful of performance.now() calls); only shown when the toggle is on.
+// Stroke-trial counts are split into the computer's own and the Position Browser background pass's
+// (strokeTrials / backgroundTrials deltas), since the two interleave on the main thread.
+
+class PhaseTimer {
+  private readonly rows: { label: string; ms: number | null; note: string }[] = [];
+  private readonly start = performance.now();
+  private readonly trials0 = strokeTrials;
+  private readonly bg0 = backgroundTrials;
+  /** A row; `ms` null for a heading row. */
+  add(label: string, ms: number | null, note = ''): void { this.rows.push({ label, ms, note }); }
+  /** Append a note to the last row. */
+  note(text: string): void {
+    const last = this.rows[this.rows.length - 1];
+    if (last) last.note = last.note ? `${last.note}; ${text}` : text;
+  }
+  format(title: string): string {
+    const fmt = (ms: number): string => `${ms.toFixed(0)} ms`.padStart(9);
+    const width = Math.max(...this.rows.map(r => r.label.length), 22);
+    const total = performance.now() - this.start;
+    const bg = backgroundTrials - this.bg0;
+    const own = strokeTrials - this.trials0 - bg;
+    return [
+      `${title}`,
+      `${'total'.padEnd(width)} ${fmt(total)}`,
+      ...this.rows.map(r => `${r.label.padEnd(width)} ${r.ms === null ? ''.padStart(9) : fmt(r.ms)}${r.note ? `  ${r.note}` : ''}`),
+      `stroke trials: ${own} computer, ${bg} PB background`,
+    ].join('\n');
+  }
+}
+
+/** Run `fn`, recording its time (and the computer's own stroke trials) as a row on `timer`. */
+async function timed<T>(timer: PhaseTimer | undefined, label: string, fn: () => Promise<T>, note?: (r: T) => string): Promise<T> {
+  if (!timer) return fn();
+  const t0 = performance.now(), tr0 = strokeTrials, bg0 = backgroundTrials;
+  const r = await fn();
+  const trials = (strokeTrials - tr0) - (backgroundTrials - bg0);
+  const parts = [note?.(r) ?? '', trials ? `${trials} trials` : ''].filter(Boolean);
+  timer.add(label, performance.now() - t0, parts.join(', '));
+  return r;
+}
+
+const computerTimingEl = document.getElementById('computer-timing') as HTMLDivElement;
+const computerTimingCheckbox = document.getElementById('computer-timing-checkbox') as HTMLInputElement;
+let lastComputerTiming = '';
+
+/** Keep the readout clear of the wide Position Browser panel and the bottom bars. */
+function placeComputerTiming(): void {
+  computerTimingEl.style.right = `${(isWide ? PANEL_WIDTH : 0) + 8}px`;
+  computerTimingEl.style.bottom = `${(document.getElementById('bottom-stack')?.offsetHeight ?? 0) + 8}px`;
+}
+
+function refreshComputerTiming(): void {
+  const show = computerTimingCheckbox.checked && lastComputerTiming !== '';
+  computerTimingEl.classList.toggle('visible', show);
+  if (!show) return;
+  computerTimingEl.textContent = lastComputerTiming;
+  placeComputerTiming();
+}
+
+function showComputerTiming(title: string, timer: PhaseTimer): void {
+  lastComputerTiming = timer.format(title);
+  if (computerTimingCheckbox.checked) console.log(`[Computer timing]\n${lastComputerTiming}`);
+  refreshComputerTiming();
+}
+
+computerTimingCheckbox.addEventListener('change', refreshComputerTiming);
+window.addEventListener('resize', () => { if (computerTimingEl.classList.contains('visible')) placeComputerTiming(); });
 updateTurnIndicator();
 
 // ---------------------------------------------------------------------------
@@ -677,10 +786,8 @@ const history: HistoryEntry[] = [];
 // retroactive recompute. `*Tagged` are the sequence-verifier-on variants (same tokens, always with
 // the {encoding} suffix, regardless of the current Move Check toggle) kept so the Copy button can
 // hand out a verifiable sequence even when the toggle is off (see updateMoveSeq / moveSeqCopyText).
-// Kept as its OWN array (not folded into HistoryEntry) because it does NOT stay 1:1 with `history`:
-// loadGameState only has a save's final geometry, not its intermediate per-move states, so it
-// rebuilds moveSeqLog straight from the save's recorded tokens while leaving `history` empty
-// (Undo is correctly unavailable for a loaded game; the move-sequence display/Recreate log is not).
+// One entry per committed move, in step with `history` (Load rebuilds both from the save's per-move
+// history); undo/redo carry the matching entry to and from RedoEntry.
 interface MoveSeqEntry {
   moveSeq: string;
   moveSeqRaw: string;
@@ -1504,11 +1611,10 @@ saveGameBtn.addEventListener('click', e => {
   const save = serializeGameState(state, camera, currentSpotCount, moveSeqLog.map(m => moveCheckMode ? m.moveSeqTagged : m.moveSeq), manualAwait?.parsed.token ?? null, history);
   const json = JSON.stringify(save, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = `sprouts-save-${Date.now()}.json`; a.click();
-  URL.revokeObjectURL(url);
   debugPanel.classList.remove('open');
+  pickSaveTarget(`sprouts-save-${Date.now()}.json`, 'Sprouts save', 'application/json', '.json')
+    .then(target => target?.write(blob))
+    .catch(err => console.error('Save failed:', err));
 });
 
 loadGameBtn.addEventListener('click', e => {

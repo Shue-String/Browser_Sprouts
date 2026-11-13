@@ -394,12 +394,14 @@ export function findEnclosedSideRegion(
     // When BOTH faces hold nameable boundaries, "first in region order" is a drawing artifact, and
     // the side picked also decides which interchangeable spots take the best labels (vertexLabels.ts
     // findEnclosedSpots), so a replay drawing the same loop could record a different labelled
-    // token. Pick by name instead: the face whose boundaries' bracket names read smaller by `key`.
+    // token. Pick by name instead (see bareSpotSideByName: fewer bracketed boundaries, then names
+    // reading higher by `key`).
     const byName = bareSpotSideByName(newRegsWithW, subBounds, before, key);
     if (byName) loToHiReg = byName;
     if (loToHiReg === null) loToHiReg = newRegsWithW[0] ?? null;
-    // "First in region order" depends on stroke direction, so a bare-spot loop can record either
-    // side's bracket; Recreate's matcher asks for the other one when the first doesn't match.
+    // When the names can't decide, "first in region order" depends on stroke direction, so a
+    // bare-spot loop can record either side's bracket; Recreate's matcher asks for the other one
+    // when the first doesn't match.
     if (selfLoopOtherSide && newRegsWithW.length === 2) loToHiReg = newRegsWithW.find(r => r !== loToHiReg) ?? loToHiReg;
   } else {
     loToHiReg = bracketSideByName(newRegsWithW, w, lo, hi, after, key);

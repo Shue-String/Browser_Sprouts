@@ -2147,14 +2147,18 @@ export function bigonTipStep(
     const eExt = state.edges.get(collapse.eExt);
     if (!e1 || !e2 || !eExt) return { done: true, popAt: null };
 
-    // Self-loop on W: w→(via e1)→A→(via e2 reversed)→w
-    const wToA = pointsFrom(e1, collapse.w);
-    const aToW = pointsFrom(e2, collapse.a);
-    const loopPoints: SpherePoint[] = [...wToA, ...aToW.slice(1)];
-
     // Re-root A's external edge: replace A's endpoint with W's position.
     const aToX = pointsFrom(eExt, collapse.a);
     aToX[0] = { ...target };
+
+    // Self-loop on W: a real small circle on the side away from the external edge. Never the two
+    // bigon edges concatenated: squeezed onto A they pass back through A mid-loop, and with W now
+    // sitting on A that pinched sliver can read as enclosing the far side of the sphere (testSave-20
+    // + 9→-4 put a bare spot inside it and the gate refused every pop). Pointing the circle along the
+    // old bigon instead overlaps the external edge's first segment. Opposite it is the bigon's outer
+    // face, which lies on both sides of the external edge at A.
+    const awayFromX = { x: 2 * target.x - aToX[1].x, y: 2 * target.y - aToX[1].y, z: 2 * target.z - aToX[1].z };
+    const loopPoints = smallCircleSelfLoop(target, awayFromX, SELF_LOOP_SYNTH_RADIUS);
 
     const ok = commitIfEncodingPreserved(state, () => {
       deleteVertices(state, [collapse.a]);
@@ -2296,10 +2300,11 @@ export function detectSelfConnectedDead(state: GameState): SelfConnectedDeadColl
       };
     }
 
-    // Case A: T has two external edges to distinct neighbours.
+    // Case A: T has two external edges. When both go to the same neighbour (T is one end of a bigon,
+    // testSave-19's 5 hanging inside the -6/8 bigon) the joined X-Y edge is a self-loop on it: the
+    // bigon's own outline, so it keeps the bigon's area rather than pinching like a squeezed loop.
     if (tExternals.length !== 2) continue;
     const [ext1, ext2] = tExternals;
-    if (ext1.nbr === ext2.nbr) continue; // surgery would create a self-loop on the shared neighbour
 
     return {
       kind: 'self-connected-dead',

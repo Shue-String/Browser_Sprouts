@@ -115,3 +115,23 @@ let cache: GenomeCensusRow[] | null = null;
 export function genomeCensus(): GenomeCensusRow[] {
   return (cache ??= buildRows());
 }
+
+export interface GenomeElementRow {
+  /** Collection name, e.g. "S_1". */
+  genome: string;
+  offset: number;
+  element: string;
+  /** Minimum starting-spot count at which the element occurs; null when unknown (always, for the rep). */
+  minSpots: number | null;
+}
+
+/** Every element of every collection group, unhandled members included, in roster order; each
+ * collection's rep comes first in its offset-0 group (the pane's counts include it too). */
+export function genomeElementRows(): GenomeElementRow[] {
+  return COLLECTION_ROSTERS.flatMap(g => [
+    ...(g.offset === 0 && g.rep ? [{ genome: g.collection, offset: 0, element: g.rep, minSpots: null }] : []),
+    ...[...g.elements, ...g.unhandled].map(element => ({
+      genome: g.collection, offset: g.offset, element, minSpots: g.minSpots.get(element) ?? null,
+    })),
+  ]);
+}

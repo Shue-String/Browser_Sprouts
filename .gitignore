@@ -48,3 +48,7 @@ scripts/route/_tmp*.ts
 
 # Local commit/push helper (runs npm run build before committing)
 scripts/commit.sh
+
+# Chat-only reference files (not part of the project)
+integers.sty
+erdos1.pdf

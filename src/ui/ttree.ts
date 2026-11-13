@@ -23,7 +23,8 @@ import {
   toLatexMath,
 } from '../model/ttree';
 import { paperDisplay } from './collect';
-import { buildTTreeTablesLatex, downloadText } from './ttreeExport';
+import { buildTTreeNimberCsv, buildTTreeTablesLatex } from './ttreeExport';
+import { pickSaveTarget } from './saveFile';
 
 let wired = false;
 let lastGraph: TTreeGraph | null = null;
@@ -775,17 +776,43 @@ async function runExport(): Promise<void> {
   render();
 }
 
-async function runExportTables(): Promise<void> {
+async function runExportTables(format: 'latex' | 'csv'): Promise<void> {
   if (!lastGraph) return;
   const graph = lastGraph;
   statusIsError = false;
+  const onProgress = (message: string): void => {
+    status = message;
+    render();
+  };
   try {
-    const latex = await buildTTreeTablesLatex(graph, message => {
-      status = message;
+    // Ask where to save first: the dialog needs the click's user activation,
+    // which the table build would outlast.
+    let failedChecks: number;
+    if (format === 'latex') {
+      const target = await pickSaveTarget('ttree-tables.tex', 'LaTeX document', 'application/x-tex', '.tex');
+      if (!target) return;
+      const latex = await buildTTreeTablesLatex(graph, onProgress);
+      await target.write(latex.blob);
+      failedChecks = latex.failedChecks;
+      status = `Tables saved as ${target.name}.`;
+    } else {
+      const target = await pickSaveTarget('ttree-nimbers.csv', 'CSV file', 'text/csv', '.csv');
+      if (!target) return;
+      const csv = await buildTTreeNimberCsv(graph, onProgress);
+      await target.write(csv.blob);
+      failedChecks = csv.failedChecks;
+      status = `Nimber table saved as ${target.name}.`;
+    }
+    if (failedChecks) {
+      const mark = format === 'latex' ? '(!)' : '"!" in a Check column';
+      status += ` ${failedChecks} failed nimber check${failedChecks === 1 ? '' : 's'}.`;
+      statusIsError = true;
       render();
-    });
-    downloadText('ttree-tables.tex', latex);
-    status = 'Tables downloaded as ttree-tables.tex.';
+      alert(
+        `${failedChecks} nimber check${failedChecks === 1 ? '' : 's'} failed: a mex or XOR re-check ` +
+          `disagreed with the engine's own nimber. Those cells are marked ${mark} in the saved file.`,
+      );
+    }
   } catch (err) {
     status = `Couldn't build the tables: ${err instanceof Error ? err.message : String(err)}`;
     statusIsError = true;
@@ -809,7 +836,9 @@ export function initTTree(): void {
   const exportBtn = document.getElementById('ttree-export-btn') as HTMLButtonElement;
   exportBtn.addEventListener('click', () => void runExport());
   const tablesBtn = document.getElementById('ttree-tables-btn') as HTMLButtonElement;
-  tablesBtn.addEventListener('click', () => void runExportTables());
+  tablesBtn.addEventListener('click', () => void runExportTables('latex'));
+  const csvBtn = document.getElementById('ttree-csv-btn') as HTMLButtonElement;
+  csvBtn.addEventListener('click', () => void runExportTables('csv'));
 
   void runSearch(DEFAULT_ENCODING);
 }

@@ -27,8 +27,15 @@
 
 import { analyze, canonFullSync } from '../engine/stalks';
 import { type MoveChildRef } from '../model/collectAlpha';
-import { type TTreeGraph } from '../model/ttree';
-import { buildPaperGenomeTable, GENOME_LATEX_MACROS, genomeDefinitionsLatex, tablesEncoding } from './collect';
+import { type TTreeGraph, type TTreeNode } from '../model/ttree';
+import {
+  buildPaperGenomeTable,
+  GENOME_LATEX_MACROS,
+  genomeDefinitionsLatex,
+  tablesEncodingText,
+  toLatexSymbols,
+} from './collect';
+import { csvBlob } from './saveFile';
 
 interface ChildEntry {
   enc: string;
@@ -139,17 +146,75 @@ async function collectGameTree(
   return positions;
 }
 
-/** Full positions here, not left sides: membrane letters start at A (tablesEncoding's `full`). */
-const fullEncoding = (enc: string): string => tablesEncoding(enc, true);
+/** Full positions here, not left sides: membrane letters start at A (tablesEncoding's `full`).
+ * Plain text (⊕/α as Unicode); the LaTeX table converts it with toLatexSymbols. */
+const fullEncoding = (enc: string): string => tablesEncodingText(enc, true);
 
-/** The single nimber table (see the module header). */
-function buildNimberTable(positions: Map<string, GamePosition>): string {
-  const label = (comps: string[]): string =>
-    comps.length ? comps.map(fullEncoding).join(' \\oplus ') : '\\phi';
+/** A nimber-table cell value: the printed position (or sum), its nimber, and whether a re-check
+ * against the engine disagreed. */
+interface NimberCell {
+  printed: string;
+  nimber: number | null;
+  bad: boolean;
+}
+
+/** One nimber-table row: a parent and its distinct children, in table order. */
+interface NimberRow extends NimberCell {
+  children: NimberCell[];
+}
+
+/** The single nimber table's rows (see the module header), format-independent. */
+function buildNimberRows(positions: Map<string, GamePosition>): NimberRow[] {
+  const label = (comps: string[]): string => (comps.length ? comps.map(fullEncoding).join(' ⊕ ') : 'φ');
 
   const ordered = [...positions.values()].sort((a, b) =>
     compareRows({ maxMoves: a.maxMoves, comps: [a.enc] }, { maxMoves: b.maxMoves, comps: [b.enc] }),
   );
+
+  // Distinct engine positions can print identically (fullEncoding's DisaPoint compression), and each
+  // printed form gets ONE row: its children are the union of every such position's children, again
+  // one per printed form. A row sits where its first position sorts. Every member still gets its own
+  // mex check, and members (or same-printed children) disagreeing on a nimber flag the row.
+  const groups = new Map<string, GamePosition[]>();
+  for (const pos of ordered) {
+    const key = fullEncoding(pos.enc);
+    groups.set(key, [...(groups.get(key) ?? []), pos]);
+  }
+  const rows: NimberRow[] = [];
+  for (const [printed, members] of groups) {
+    const nimber = members[0].nimber;
+    const mexBad = members.some(pos => {
+      const known = pos.children.every(c => c.nimber !== null);
+      return known && pos.nimber !== null && mexOf(pos.children.map(c => c.nimber as number)) !== pos.nimber;
+    });
+
+    const children = members
+      .flatMap(pos => pos.children)
+      .sort((a, b) => (a.nimber ?? -1) - (b.nimber ?? -1) || compareTuples(printedTuple(a.comps), printedTuple(b.comps)));
+    const childCells = new Map<string, NimberCell>();
+    for (const child of children) {
+      const xor = child.comps.reduce((acc, c) => acc ^ (positions.get(c)?.nimber ?? 0), 0);
+      const compsKnown = child.comps.every(c => positions.get(c)?.nimber != null);
+      // The cell is just the nimber; the component XOR is still re-checked and only surfaces on a mismatch.
+      const xorBad = child.comps.length > 1 && compsKnown && child.nimber !== null && child.nimber !== xor;
+      const key = label(child.comps);
+      const prev = childCells.get(key);
+      if (prev) prev.bad ||= xorBad || prev.nimber !== child.nimber;
+      else childCells.set(key, { printed: key, nimber: child.nimber, bad: xorBad });
+    }
+    rows.push({
+      printed,
+      nimber,
+      bad: mexBad || members.some(pos => pos.nimber !== nimber),
+      children: [...childCells.values()],
+    });
+  }
+  return rows;
+}
+
+/** The nimber table as LaTeX. */
+function nimberTableLatex(rows: NimberRow[]): string {
+  const tex = (text: string): string => (text === 'φ' ? '\\phi' : toLatexSymbols(text));
 
   // Fixed-width columns: longtable otherwise sizes its columns from the previous LaTeX pass, so a
   // single compile draws the header row offset from the body.
@@ -166,57 +231,88 @@ function buildNimberTable(positions: Map<string, GamePosition>): string {
     const longest = Math.max(header.length, ...cells.map(visibleChars));
     return `${Math.min(cap, longest * 0.2 + 0.3).toFixed(1)}cm`;
   };
+  const allChildren = rows.flatMap(r => r.children);
   const widths = {
-    pos: widthCm(ordered.map(p => fullEncoding(p.enc)), 'Position', 8),
-    nim: widthCm(ordered.map(p => fmtNim(p.nimber)), 'Nimber', 2),
-    child: widthCm(ordered.flatMap(p => p.children.map(c => label(c.comps))), 'Child', 12),
-    childNim: widthCm(ordered.flatMap(p => p.children.map(c => fmtNim(c.nimber))), 'Child nimber', 4),
+    pos: widthCm(rows.map(r => tex(r.printed)), 'Position', 8),
+    nim: widthCm(rows.map(r => fmtNim(r.nimber)), 'Nimber', 2),
+    child: widthCm(allChildren.map(c => tex(c.printed)), 'Child', 12),
+    childNim: widthCm(allChildren.map(c => fmtNim(c.nimber)), 'Child nimber', 4),
   };
-  const nested = (rows: string[]): string =>
-    `\\begin{tabular}[c]{@{}${centered}p{${widths.child}}|${centered}p{${widths.childNim}}@{}}${rows.join(' \\\\ \\hline ')}\\end{tabular}`;
+  const nested = (cells: string[]): string =>
+    `\\begin{tabular}[c]{@{}${centered}p{${widths.child}}|${centered}p{${widths.childNim}}@{}}${cells.join(' \\\\ \\hline ')}\\end{tabular}`;
+  const flag = (bad: boolean): string => (bad ? ' \\ \\mathbf{(!)}' : '');
 
   const lines: string[] = [];
   lines.push(`\\begin{longtable}{|${centered}m{${widths.pos}}|${centered}m{${widths.nim}}|@{}c@{}|}`);
   lines.push(`\\hline Position & Nimber & ${nested(['Child & Child nimber'])} \\\\ \\hline \\endhead`);
-  // Distinct engine positions can print identically (fullEncoding's DisaPoint compression), and each
-  // printed form gets ONE row: its children are the union of every such position's children, again
-  // one per printed form. A row sits where its first position sorts. Every member still gets its own
-  // mex check, and members (or same-printed children) disagreeing on a nimber flag the row.
-  const flag = ' \\ \\mathbf{(!)}';
-  const rows = new Map<string, GamePosition[]>();
-  for (const pos of ordered) {
-    const key = fullEncoding(pos.enc);
-    rows.set(key, [...(rows.get(key) ?? []), pos]);
-  }
-  for (const [printed, members] of rows) {
-    const nimber = members[0].nimber;
-    const mexBad = members.some(pos => {
-      const known = pos.children.every(c => c.nimber !== null);
-      return known && pos.nimber !== null && mexOf(pos.children.map(c => c.nimber as number)) !== pos.nimber;
-    });
-    const rowFlag = mexBad || members.some(pos => pos.nimber !== nimber) ? flag : '';
-
-    const children = members
-      .flatMap(pos => pos.children)
-      .sort((a, b) => (a.nimber ?? -1) - (b.nimber ?? -1) || compareTuples(printedTuple(a.comps), printedTuple(b.comps)));
-    const childCells = new Map<string, { nimber: number | null; bad: boolean }>();
-    for (const child of children) {
-      const xor = child.comps.reduce((acc, c) => acc ^ (positions.get(c)?.nimber ?? 0), 0);
-      const compsKnown = child.comps.every(c => positions.get(c)?.nimber != null);
-      // The cell is just the nimber; the component XOR is still re-checked and only surfaces on a mismatch.
-      const xorBad = child.comps.length > 1 && compsKnown && child.nimber !== null && child.nimber !== xor;
-      const key = label(child.comps);
-      const prev = childCells.get(key);
-      if (prev) prev.bad ||= xorBad || prev.nimber !== child.nimber;
-      else childCells.set(key, { nimber: child.nimber, bad: xorBad });
-    }
-    const childRows = [...childCells].map(
-      ([childLabel, c]) => `$${childLabel}$ & $${fmtNim(c.nimber)}${c.bad ? flag : ''}$`,
-    );
-    lines.push(`$${printed}$ & $${fmtNim(nimber)}${rowFlag}$ & ${nested(childRows)} \\\\ \\hline`);
+  for (const row of rows) {
+    const childRows = row.children.map(c => `$${tex(c.printed)}$ & $${fmtNim(c.nimber)}${flag(c.bad)}$`);
+    lines.push(`$${tex(row.printed)}$ & $${fmtNim(row.nimber)}${flag(row.bad)}$ & ${nested(childRows)} \\\\ \\hline`);
   }
   lines.push('\\end{longtable}');
   return lines.join('\n');
+}
+
+/** How many cells (parents and children) failed a re-check against the engine. */
+function failedCheckCount(rows: NimberRow[]): number {
+  return rows.reduce((n, r) => n + Number(r.bad) + r.children.filter(c => c.bad).length, 0);
+}
+
+/** The nimber table as CSV: one line per (parent, child) pair, the parent repeated on each (a
+ * childless parent gets one line with the child columns empty). A failed re-check shows as "!" in
+ * that cell's Check column; each Check column is left out when nothing in it failed. */
+function nimberTableCsv(rows: NimberRow[]): Blob {
+  const check = (bad: boolean): string => (bad ? '!' : '');
+  const parentChecks = rows.some(r => r.bad);
+  const childChecks = rows.some(r => r.children.some(c => c.bad));
+  const header = ['Position', 'Nimber', ...(parentChecks ? ['Check'] : []), 'Child', 'Child nimber'];
+  if (childChecks) header.push('Child check');
+  const lines = [header];
+  for (const row of rows) {
+    const parent = [row.printed, fmtNim(row.nimber)];
+    if (parentChecks) parent.push(check(row.bad));
+    const children = row.children.length ? row.children : [null];
+    for (const c of children) {
+      const child = c ? [c.printed, fmtNim(c.nimber)] : ['', ''];
+      if (childChecks) child.push(c ? check(c.bad) : '');
+      lines.push([...parent, ...child]);
+    }
+  }
+  return csvBlob(lines);
+}
+
+/** An export's file contents plus how many of its nimber-table re-checks failed (see failedCheckCount). */
+export interface TTreeExport {
+  blob: Blob;
+  failedChecks: number;
+}
+
+/** The nodes that get a genome table (every non-bypassed one), smallest (fewest lives) first. */
+function genomeTableNodes(graph: TTreeGraph): TTreeNode[] {
+  return [...graph.nodes.values()]
+    .filter(n => n.requiredByAny)
+    .sort((a, b) => a.lives - b.lives || (a.id < b.id ? -1 : 1));
+}
+
+/** The nimber table's seeds: the single subpositions of every R/D/L/Z child the genome tables quote. */
+function nimberTableSeeds(nodes: TTreeNode[]): string[] {
+  const seeds = new Set<string>();
+  for (const node of nodes) {
+    const g = node.genome;
+    const moveChildren: (MoveChildRef | undefined)[] = [g.Rc, g.Dc, ...(g.Lc ?? []), ...(g.Zc ?? [])];
+    for (const c of moveChildren) if (c) for (const p of piecesOf(c.enc)) seeds.add(p);
+  }
+  return [...seeds];
+}
+
+/** Just the nimber table, as CSV (no genome tables). */
+export async function buildTTreeNimberCsv(
+  graph: TTreeGraph,
+  onProgress?: (message: string) => void,
+): Promise<TTreeExport> {
+  const positions = await collectGameTree(nimberTableSeeds(genomeTableNodes(graph)), onProgress);
+  const rows = buildNimberRows(positions);
+  return { blob: nimberTableCsv(rows), failedChecks: failedCheckCount(rows) };
 }
 
 /** The whole dump as one compilable LaTeX document (see the module header). `onProgress` gets a
@@ -224,15 +320,11 @@ function buildNimberTable(positions: Map<string, GamePosition>): string {
 export async function buildTTreeTablesLatex(
   graph: TTreeGraph,
   onProgress?: (message: string) => void,
-): Promise<string> {
-  // Smallest (fewest lives) first.
-  const nodes = [...graph.nodes.values()]
-    .filter(n => n.requiredByAny)
-    .sort((a, b) => a.lives - b.lives || (a.id < b.id ? -1 : 1));
+): Promise<TTreeExport> {
+  const nodes = genomeTableNodes(graph);
 
   const tables: string[] = [];
   const names: string[] = [];
-  const seeds = new Set<string>();
   let done = 0;
   for (const node of nodes) {
     // bypassed T-child -> the position it bypasses to, for this node's own red-then-blue edge
@@ -243,10 +335,6 @@ export async function buildTTreeTablesLatex(
     const table = await buildPaperGenomeTable(node.id, bypassTargets);
     if (table.name) names.push(table.name);
     tables.push(`% node: ${node.id}`, table.latex, '');
-
-    const g = node.genome;
-    const moveChildren: (MoveChildRef | undefined)[] = [g.Rc, g.Dc, ...(g.Lc ?? []), ...(g.Zc ?? [])];
-    for (const c of moveChildren) if (c) for (const p of piecesOf(c.enc)) seeds.add(p);
     onProgress?.(`Genome tables… ${++done}/${nodes.length}`);
   }
 
@@ -261,20 +349,12 @@ export async function buildTTreeTablesLatex(
   lines.push(...tables);
   lines.push('\\clearpage');
   lines.push('\\section*{Nimber table}');
-  const positions = await collectGameTree([...seeds], onProgress);
-  lines.push(buildNimberTable(positions));
+  const positions = await collectGameTree(nimberTableSeeds(nodes), onProgress);
+  const rows = buildNimberRows(positions);
+  lines.push(nimberTableLatex(rows));
   lines.push('\\end{document}');
-  return lines.join('\n');
-}
-
-/** Hands `text` to the browser as a file download (a sizable dump isn't practical to paste). */
-export function downloadText(filename: string, text: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type: 'application/x-tex' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  return {
+    blob: new Blob([lines.join('\n')], { type: 'application/x-tex' }),
+    failedChecks: failedCheckCount(rows),
+  };
 }

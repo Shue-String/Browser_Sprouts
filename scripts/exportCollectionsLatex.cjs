@@ -52,7 +52,13 @@ const math = (s, bold = false) => {
 };
 // A collection's elements, printed as authored (the registry letters membranes from C already).
 const element = (s, bold = false) => math(s, bold);
-const genomeOf = (name) => m.NAMED_FAMILY_GENOME_TEXT[name] ?? m.COLLECTION_GENOME_TEXT[name];
+// T-genes are printed as g_n (the paper's gene notation) rather than the collection name S_n; only
+// the [T] list (from the text's first '[' on, so nested T-tuples are covered too) is touched.
+const genomeOf = (name) => {
+  const text = m.NAMED_FAMILY_GENOME_TEXT[name] ?? m.COLLECTION_GENOME_TEXT[name];
+  const t = text.indexOf('[');
+  return t < 0 ? text : text.slice(0, t) + text.slice(t).replace(/S_/g, 'g_');
+};
 
 const header = (name) => `${math(name, true)}${BS}quad ${math(genomeOf(name))}`;
 
